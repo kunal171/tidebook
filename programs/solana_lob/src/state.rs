@@ -11,5 +11,5 @@ pub struct Market {
     pub next_order_id: i64,
     pub best_bid: Option<u64>,
     pub best_ask: Option<u64>,
-    pub bump: u8
+    pub bump: u8,
 }

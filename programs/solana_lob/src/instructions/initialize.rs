@@ -29,9 +29,7 @@ pub struct InitializeMarket<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn handle_initialize_market(
-    ctx: Context<InitializeMarket>,
-) -> Result<()> {
+pub fn handle_initialize_market(ctx: Context<InitializeMarket>) -> Result<()> {
     let market = &mut ctx.accounts.market;
 
     market.authority = ctx.accounts.authority.key();
