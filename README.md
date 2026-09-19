@@ -55,6 +55,12 @@ anchor test
 `anchor test` runs the Rust LiteSVM suite configured in `Anchor.toml`; it does
 not require a local validator.
 
+Deploy or upgrade the configured program on devnet with:
+
+```bash
+anchor deploy
+```
+
 ## Program identity
 
 ```text

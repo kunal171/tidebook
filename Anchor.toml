@@ -11,8 +11,11 @@ skip-lint = false
 [programs.localnet]
 tidebook = "Honq7kkNfptR6XF5H4zn2jWqSmNRsteCpGwB8iG393cR"
 
+[programs.devnet]
+tidebook = "Honq7kkNfptR6XF5H4zn2jWqSmNRsteCpGwB8iG393cR"
+
 [provider]
-cluster = "localnet"
+cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
