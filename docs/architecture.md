@@ -28,6 +28,17 @@ The program has two external roles:
 The program reads SPL Token mint accounts during market initialization. It does
 not currently invoke the Token Program or transfer any tokens.
 
+### Companion web application
+
+The `app/` workspace is a Vite, React, and TypeScript client. Its first
+milestone connects browser wallets, targets devnet, and checks the configured
+program account through Solana RPC. Transaction controls remain disabled until
+the program is deployed and the generated Anchor IDL is connected to the app.
+
+The client keeps network and program identity in `app/src/config/solana.ts`.
+The program address must remain synchronized with `declare_id!`, `Anchor.toml`,
+and the deployment keypair.
+
 The editable system diagram is available at
 [`diagrams/tidebook-architecture.drawio`](diagrams/tidebook-architecture.drawio).
 
@@ -187,15 +198,16 @@ public APIs exchange concrete `Address`, `Message`, `Transaction`, `Signer`, and
 
 The recommended implementation order is:
 
-1. Add `cancel_limit_order` and complete the basic order lifecycle.
-2. Define price ticks, quantity lots, and checked arithmetic rules.
-3. Add market vault authorities and base/quote token vaults.
-4. Lock the correct asset when a bid or ask is placed.
-5. Add price-level accounts and FIFO queues.
-6. Implement deterministic matching and partial fills.
-7. Settle base/quote transfers and fees.
-8. Add safe market shutdown, order cleanup, and withdrawal rules.
+1. Deploy the current program to devnet and enable market creation in the app.
+2. Add `cancel_limit_order` and complete the basic order lifecycle in program,
+   tests, and UI.
+3. Define price ticks, quantity lots, and checked arithmetic rules.
+4. Add market vault authorities and base/quote token vaults.
+5. Lock the correct asset when a bid or ask is placed.
+6. Add price-level accounts and FIFO queues.
+7. Implement deterministic matching and partial fills.
+8. Settle base/quote transfers and fees.
+9. Add safe market shutdown, order cleanup, and withdrawal rules.
 
 Each phase should add its invariants and failure-path tests before the next
 state transition is introduced.
-
