@@ -3,7 +3,7 @@ use anchor_lang::prelude::*;
 use crate::{
     constants::{ADMIN_SEED, PROTOCOL_CONFIG_SEED},
     error::MarketError,
-    state::{AdminRecord, AdminStatus, ProtocolConfig},
+    state::{AdminRecord, ProtocolConfig},
 };
 
 #[derive(Accounts)]
