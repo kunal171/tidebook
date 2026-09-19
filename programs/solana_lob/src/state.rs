@@ -7,9 +7,42 @@ pub struct Market {
     pub authority: Pubkey,
     pub base_mint: Pubkey,
     pub quote_mint: Pubkey,
-    pub status: u8, // 0-Active, 1-Paused
-    pub next_order_id: i64,
+    pub status: MarketStatus,
+    pub next_order_id: u64,
     pub best_bid: Option<u64>,
     pub best_ask: Option<u64>,
+    pub bump: u8,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace, Debug)]
+pub enum MarketStatus {
+    Active,
+    Paused,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace, Debug)]
+pub enum OrderSide {
+    Bid,
+    Ask,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace, Debug)]
+pub enum OrderStatus {
+    Open,
+    Filled,
+    Canceled,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct Order {
+    pub owner: Pubkey,
+    pub market: Pubkey,
+    pub order_id: u64,
+    pub side: OrderSide,
+    pub price: u64,
+    pub quantity: u64,
+    pub remaining_quantity: u64,
+    pub status: OrderStatus,
     pub bump: u8,
 }

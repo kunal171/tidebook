@@ -1,6 +1,9 @@
 use anchor_lang::prelude::*;
 
-use crate::{error::MarketError, state::Market};
+use crate::{
+    error::MarketError,
+    state::{Market, MarketStatus},
+};
 
 #[derive(Accounts)]
 pub struct UnpauseMarket<'info> {
@@ -9,12 +12,12 @@ pub struct UnpauseMarket<'info> {
     #[account(
         mut,
         has_one = authority,
-        constraint = market.status == 1 @ MarketError::MarketAlreadyActive
+        constraint = market.status == MarketStatus::Paused @ MarketError::MarketAlreadyActive
     )]
     pub market: Account<'info, Market>,
 }
 
 pub fn handle_unpause_market(ctx: Context<UnpauseMarket>) -> Result<()> {
-    ctx.accounts.market.status = 0;
+    ctx.accounts.market.status = MarketStatus::Active;
     Ok(())
 }

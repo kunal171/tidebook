@@ -4,6 +4,9 @@ use anchor_lang::prelude::*;
 pub const MARKET_SEED: &[u8] = b"market";
 
 #[constant]
+pub const ORDER_SEED: &[u8] = b"order";
+
+#[constant]
 pub const MIN_PRICE: u64 = 1;
 
 #[constant]

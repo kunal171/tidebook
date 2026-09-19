@@ -1,11 +1,18 @@
 use anchor_lang::prelude::*;
 
-use crate::{constants::MARKET_SEED, state::Market};
+use crate::{
+    constants::MARKET_SEED,
+    error::MarketError,
+    state::{Market, MarketStatus},
+};
+
+use anchor_spl::token::Mint;
 
 #[derive(Accounts)]
 pub struct InitializeMarket<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
+
     #[account(
         init,
         payer = authority,
@@ -21,10 +28,15 @@ pub struct InitializeMarket<'info> {
 
     /// CHECK: base mint account; we use its key to derive the market PDA and
     /// validate it as a real SPL mint in later instruction logic.
-    pub base_mint: UncheckedAccount<'info>,
+    pub base_mint: Account<'info, Mint>,
+
     /// CHECK: quote mint account; we use its key to derive the market PDA and
     /// validate it as a real SPL mint in later instruction logic.
-    pub quote_mint: UncheckedAccount<'info>,
+    #[account(
+    constraint = base_mint.key() != quote_mint.key()
+        @ MarketError::IdenticalMints
+    )]
+    pub quote_mint: Account<'info, Mint>,
 
     pub system_program: Program<'info, System>,
 }
@@ -35,7 +47,7 @@ pub fn handle_initialize_market(ctx: Context<InitializeMarket>) -> Result<()> {
     market.authority = ctx.accounts.authority.key();
     market.base_mint = ctx.accounts.base_mint.key();
     market.quote_mint = ctx.accounts.quote_mint.key();
-    market.status = 0; // active
+    market.status = MarketStatus::Active;
     market.next_order_id = 1;
     market.best_bid = None;
     market.best_ask = None;

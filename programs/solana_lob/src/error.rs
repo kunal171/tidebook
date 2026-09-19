@@ -26,4 +26,19 @@ pub enum MarketError {
 
     #[msg("Market must be paused before it can be closed")]
     MarketMustBePaused,
+
+    #[msg("Market is not active")]
+    MarketNotActive,
+
+    #[msg("Invalid order ID")]
+    InvalidOrderId,
+
+    #[msg("Price must be greater than zero")]
+    InvalidPrice,
+
+    #[msg("Quantity must be greater than zero")]
+    InvalidQuantity,
+
+    #[msg("Base and quote mints must be different")]
+    IdenticalMints,
 }
