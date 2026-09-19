@@ -8,6 +8,8 @@ exchange functionality that is still planned.
 
 - [Architecture](architecture.md): program boundaries, accounts, instructions,
   invariants, transaction flows, tests, and planned evolution.
+- [Devnet deployment](deployment.md): stable program identity, upgrade details,
+  verification, and the current IDL-upload limitation.
 - [Draw.io architecture diagram](diagrams/tidebook-architecture.drawio):
   editable source for the current and planned architecture.
 
@@ -24,4 +26,3 @@ anchor test
 ```
 
 The Anchor test script runs the Rust LiteSVM integration-test suite.
-

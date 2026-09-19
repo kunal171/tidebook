@@ -58,8 +58,11 @@ not require a local validator.
 Deploy or upgrade the configured program on devnet with:
 
 ```bash
-anchor deploy
+anchor program deploy --no-idl
 ```
+
+The temporary `--no-idl` flag bypasses an upstream metadata-CLI packaging issue;
+the application consumes the locally generated IDL instead.
 
 ## Program identity
 
@@ -69,6 +72,9 @@ Honq7kkNfptR6XF5H4zn2jWqSmNRsteCpGwB8iG393cR
 
 The same address is declared in the program, configured in `Anchor.toml`, and
 derived from `target/deploy/tidebook-keypair.json`.
+
+The program is live on
+[Solana devnet](https://explorer.solana.com/address/Honq7kkNfptR6XF5H4zn2jWqSmNRsteCpGwB8iG393cR?cluster=devnet).
 
 ## Development approach
 

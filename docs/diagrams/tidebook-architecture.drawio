@@ -13,7 +13,7 @@
         <mxCell id="trader" value="Trader&lt;br&gt;&lt;font style=&quot;font-size: 11px;&quot;&gt;place limit order&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1" vertex="1" parent="1">
           <mxGeometry x="40" y="270" width="210" height="70" as="geometry"/>
         </mxCell>
-        <mxCell id="program" value="Anchor Program: tidebook&lt;br&gt;&lt;br&gt;Account validation&lt;br&gt;Authorization&lt;br&gt;State transitions" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1" vertex="1" parent="1">
+        <mxCell id="program" value="Anchor Program: tidebook&lt;br&gt;&lt;font style=&quot;font-size: 11px;&quot;&gt;live on devnet&lt;/font&gt;&lt;br&gt;&lt;br&gt;Account validation&lt;br&gt;Authorization&lt;br&gt;State transitions" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1" vertex="1" parent="1">
           <mxGeometry x="360" y="170" width="260" height="150" as="geometry"/>
         </mxCell>
         <mxCell id="baseMint" value="Base Mint&lt;br&gt;&lt;font style=&quot;font-size: 11px;&quot;&gt;SPL Token Mint&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#fff2cc;strokeColor=#d6b656" vertex="1" parent="1">
