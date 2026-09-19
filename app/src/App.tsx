@@ -116,8 +116,9 @@ export function App() {
             <div className="eyebrow">Market workspace</div>
             <h2>Start with a trusted pair.</h2>
             <p>
-              Market creation will appear here after the program is live on
-              devnet. Both addresses must be initialized SPL Token mints.
+              The program is live on devnet. Wiring this form to the generated
+              Anchor IDL is the next client milestone; both addresses will need
+              to be initialized SPL Token mints.
             </p>
           </div>
 
@@ -132,7 +133,7 @@ export function App() {
               <input placeholder="Quote mint address" disabled />
             </label>
             <button className="primary-button" type="button" disabled>
-              {connected ? "Available after deployment" : "Connect wallet to begin"}
+              {connected ? "Market creation coming next" : "Connect wallet to begin"}
             </button>
             {publicKey && (
               <span className="wallet-note">

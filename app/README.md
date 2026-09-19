@@ -24,8 +24,8 @@ npm run build
 - Link to the program account in Solana Explorer.
 - Present the current backend milestone and test status.
 
-Market creation is intentionally disabled until the program is deployed to
-devnet and the generated Anchor IDL is wired into the client.
+The program is deployed to devnet. Market creation remains intentionally
+disabled until the generated Anchor IDL is wired into the client.
 
 Override the default public devnet RPC endpoint locally with:
 
@@ -43,4 +43,3 @@ the latest v1 release. npm's proposed automatic remediation downgrades web3.js
 to an incompatible historical version, so it is not applied. This boundary
 should be rechecked when Anchor supports the newer Solana JavaScript client or
 web3.js v1 publishes a patched dependency graph.
-
