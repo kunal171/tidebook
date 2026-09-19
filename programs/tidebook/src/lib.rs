@@ -12,7 +12,7 @@ pub use state::*;
 declare_id!("Honq7kkNfptR6XF5H4zn2jWqSmNRsteCpGwB8iG393cR");
 
 #[program]
-pub mod solana_lob {
+pub mod tidebook {
     use super::*;
 
     //Initialize a new Market Pair

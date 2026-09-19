@@ -1,8 +1,8 @@
-# Solana Limit Order Book Architecture
+# Tidebook Architecture
 
 ## 1. Purpose and current scope
 
-`solana_lob` is an Anchor program being developed as a research study of an
+`tidebook` is an Anchor program being developed as a research study of an
 on-chain central limit order book.
 
 The current implementation establishes the account and authorization foundation:
@@ -29,7 +29,7 @@ The program reads SPL Token mint accounts during market initialization. It does
 not currently invoke the Token Program or transfer any tokens.
 
 The editable system diagram is available at
-[`diagrams/solana-lob-architecture.drawio`](diagrams/solana-lob-architecture.drawio).
+[`diagrams/tidebook-architecture.drawio`](diagrams/tidebook-architecture.drawio).
 
 ## 3. On-chain account model
 
@@ -155,7 +155,7 @@ shutdown and withdrawal process.
 ## 7. Test architecture
 
 Integration tests run against LiteSVM in
-`programs/solana_lob/tests/order_flow.rs`.
+`programs/tidebook/tests/order_flow.rs`.
 
 The test harness:
 

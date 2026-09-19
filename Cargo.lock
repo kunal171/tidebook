@@ -4023,20 +4023,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "solana_lob"
-version = "0.1.0"
-dependencies = [
- "anchor-lang",
- "anchor-spl",
- "litesvm",
- "solana-account",
- "solana-keypair",
- "solana-message",
- "solana-signer",
- "solana-transaction",
-]
-
-[[package]]
 name = "spki"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4344,6 +4330,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d050e60b33d41c19108b32cea32164033a9013fe3b46cbd4457559bfbf77afaa"
 dependencies = [
  "num_cpus",
+]
+
+[[package]]
+name = "tidebook"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "anchor-spl",
+ "litesvm",
+ "solana-account",
+ "solana-keypair",
+ "solana-message",
+ "solana-signer",
+ "solana-transaction",
 ]
 
 [[package]]

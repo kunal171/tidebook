@@ -1,4 +1,4 @@
-# Solana LOB Documentation
+# Tidebook Documentation
 
 This directory describes the design of the Solana limit order book as it exists
 today. It also records the boundary between the implemented foundation and the
@@ -8,7 +8,7 @@ exchange functionality that is still planned.
 
 - [Architecture](architecture.md): program boundaries, accounts, instructions,
   invariants, transaction flows, tests, and planned evolution.
-- [Draw.io architecture diagram](diagrams/solana-lob-architecture.drawio):
+- [Draw.io architecture diagram](diagrams/tidebook-architecture.drawio):
   editable source for the current and planned architecture.
 
 Open the `.drawio` file with [draw.io](https://app.diagrams.net/) or a compatible

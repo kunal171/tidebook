@@ -1,10 +1,10 @@
 <mxfile host="app.diagrams.net" modified="2026-09-19T13:20:00.000Z" agent="Codex" version="24.7.17" type="device">
-  <diagram id="solana-lob-architecture" name="Solana LOB Architecture">
+  <diagram id="tidebook-architecture" name="Tidebook Architecture">
     <mxGraphModel dx="1422" dy="794" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="900" math="0" shadow="0">
       <root>
         <mxCell id="0"/>
         <mxCell id="1" parent="0"/>
-        <mxCell id="title" value="Solana Limit Order Book — Current and Planned Architecture" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=24;fontStyle=1" vertex="1" parent="1">
+        <mxCell id="title" value="Tidebook — Current and Planned Architecture" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=24;fontStyle=1" vertex="1" parent="1">
           <mxGeometry x="360" y="20" width="880" height="40" as="geometry"/>
         </mxCell>
         <mxCell id="authority" value="Market Authority&lt;br&gt;&lt;font style=&quot;font-size: 11px;&quot;&gt;initialize / pause / unpause / close&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1" vertex="1" parent="1">
@@ -13,7 +13,7 @@
         <mxCell id="trader" value="Trader&lt;br&gt;&lt;font style=&quot;font-size: 11px;&quot;&gt;place limit order&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1" vertex="1" parent="1">
           <mxGeometry x="40" y="270" width="210" height="70" as="geometry"/>
         </mxCell>
-        <mxCell id="program" value="Anchor Program: solana_lob&lt;br&gt;&lt;br&gt;Account validation&lt;br&gt;Authorization&lt;br&gt;State transitions" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1" vertex="1" parent="1">
+        <mxCell id="program" value="Anchor Program: tidebook&lt;br&gt;&lt;br&gt;Account validation&lt;br&gt;Authorization&lt;br&gt;State transitions" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1" vertex="1" parent="1">
           <mxGeometry x="360" y="170" width="260" height="150" as="geometry"/>
         </mxCell>
         <mxCell id="baseMint" value="Base Mint&lt;br&gt;&lt;font style=&quot;font-size: 11px;&quot;&gt;SPL Token Mint&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#fff2cc;strokeColor=#d6b656" vertex="1" parent="1">

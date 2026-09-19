@@ -15,7 +15,7 @@ use {
 
 const PROGRAM_BYTES: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../target/deploy/solana_lob.so"
+    "/../../target/deploy/tidebook.so"
 ));
 
 fn send_initialize_market(
@@ -24,11 +24,11 @@ fn send_initialize_market(
     base_mint: Pubkey,
     quote_mint: Pubkey,
 ) -> (Pubkey, litesvm::types::TransactionResult) {
-    let program_id = solana_lob::id();
+    let program_id = tidebook::id();
 
     let (market, _) = Pubkey::find_program_address(
         &[
-            solana_lob::constants::MARKET_SEED,
+            tidebook::constants::MARKET_SEED,
             base_mint.as_ref(),
             quote_mint.as_ref(),
         ],
@@ -37,8 +37,8 @@ fn send_initialize_market(
 
     let instruction = Instruction::new_with_bytes(
         program_id,
-        &solana_lob::instruction::InitializeMarket {}.data(),
-        solana_lob::accounts::InitializeMarket {
+        &tidebook::instruction::InitializeMarket {}.data(),
+        tidebook::accounts::InitializeMarket {
             authority: payer.pubkey(),
             market,
             base_mint,
@@ -90,7 +90,7 @@ fn create_test_mint(svm: &mut LiteSVM, decimals: u8) -> Pubkey {
 
 #[test]
 fn market_and_order_flow() {
-    let program_id = solana_lob::id();
+    let program_id = tidebook::id();
     let payer = Keypair::new();
     let mut svm = LiteSVM::new();
     let base_mint = create_test_mint(&mut svm, 9);
@@ -105,15 +105,15 @@ fn market_and_order_flow() {
 
     let market_account = svm.get_account(&market).unwrap();
     let mut market_data: &[u8] = &market_account.data;
-    let market_state = solana_lob::state::Market::try_deserialize(&mut market_data).unwrap();
+    let market_state = tidebook::state::Market::try_deserialize(&mut market_data).unwrap();
     assert_eq!(market_state.authority, payer.pubkey());
-    assert_eq!(market_state.status, solana_lob::state::MarketStatus::Active);
+    assert_eq!(market_state.status, tidebook::state::MarketStatus::Active);
     assert_eq!(market_state.next_order_id, 1);
 
     let order_id = market_state.next_order_id;
     let (order, _) = Pubkey::find_program_address(
         &[
-            solana_lob::constants::ORDER_SEED,
+            tidebook::constants::ORDER_SEED,
             market.as_ref(),
             order_id.to_le_bytes().as_ref(),
         ],
@@ -122,13 +122,13 @@ fn market_and_order_flow() {
 
     let place_order_ix = Instruction::new_with_bytes(
         program_id,
-        &solana_lob::instruction::PlaceLimitOrder {
-            side: solana_lob::state::OrderSide::Bid,
+        &tidebook::instruction::PlaceLimitOrder {
+            side: tidebook::state::OrderSide::Bid,
             price: 100,
             quantity: 5,
         }
         .data(),
-        solana_lob::accounts::PlaceLimitOrder {
+        tidebook::accounts::PlaceLimitOrder {
             trader: payer.pubkey(),
             market,
             order,
@@ -144,26 +144,26 @@ fn market_and_order_flow() {
 
     let order_account = svm.get_account(&order).unwrap();
     let mut order_data: &[u8] = &order_account.data;
-    let order_state = solana_lob::state::Order::try_deserialize(&mut order_data).unwrap();
+    let order_state = tidebook::state::Order::try_deserialize(&mut order_data).unwrap();
 
     assert_eq!(order_state.owner, payer.pubkey());
     assert_eq!(order_state.market, market);
     assert_eq!(order_state.order_id, 1);
-    assert_eq!(order_state.side, solana_lob::state::OrderSide::Bid);
+    assert_eq!(order_state.side, tidebook::state::OrderSide::Bid);
     assert_eq!(order_state.price, 100);
     assert_eq!(order_state.quantity, 5);
     assert_eq!(order_state.remaining_quantity, 5);
-    assert_eq!(order_state.status, solana_lob::state::OrderStatus::Open);
+    assert_eq!(order_state.status, tidebook::state::OrderStatus::Open);
 
     let market_account = svm.get_account(&market).unwrap();
     let mut market_data: &[u8] = &market_account.data;
-    let market_state = solana_lob::state::Market::try_deserialize(&mut market_data).unwrap();
+    let market_state = tidebook::state::Market::try_deserialize(&mut market_data).unwrap();
     assert_eq!(market_state.next_order_id, 2);
 }
 
 #[test]
 fn pause_and_unpause_market() {
-    let program_id = solana_lob::id();
+    let program_id = tidebook::id();
     let payer = Keypair::new();
     let mut svm = LiteSVM::new();
     let base_mint = create_test_mint(&mut svm, 9);
@@ -178,8 +178,8 @@ fn pause_and_unpause_market() {
 
     let pause_ix = Instruction::new_with_bytes(
         program_id,
-        &solana_lob::instruction::PauseMarket {}.data(),
-        solana_lob::accounts::PauseMarket {
+        &tidebook::instruction::PauseMarket {}.data(),
+        tidebook::accounts::PauseMarket {
             authority: payer.pubkey(),
             market,
         }
@@ -193,13 +193,13 @@ fn pause_and_unpause_market() {
 
     let market_account = svm.get_account(&market).unwrap();
     let mut market_data: &[u8] = &market_account.data;
-    let market_state = solana_lob::state::Market::try_deserialize(&mut market_data).unwrap();
-    assert_eq!(market_state.status, solana_lob::state::MarketStatus::Paused);
+    let market_state = tidebook::state::Market::try_deserialize(&mut market_data).unwrap();
+    assert_eq!(market_state.status, tidebook::state::MarketStatus::Paused);
 
     let unpause_ix = Instruction::new_with_bytes(
         program_id,
-        &solana_lob::instruction::UnpauseMarket {}.data(),
-        solana_lob::accounts::UnpauseMarket {
+        &tidebook::instruction::UnpauseMarket {}.data(),
+        tidebook::accounts::UnpauseMarket {
             authority: payer.pubkey(),
             market,
         }
@@ -213,13 +213,13 @@ fn pause_and_unpause_market() {
 
     let market_account = svm.get_account(&market).unwrap();
     let mut market_data: &[u8] = &market_account.data;
-    let market_state = solana_lob::state::Market::try_deserialize(&mut market_data).unwrap();
-    assert_eq!(market_state.status, solana_lob::state::MarketStatus::Active);
+    let market_state = tidebook::state::Market::try_deserialize(&mut market_data).unwrap();
+    assert_eq!(market_state.status, tidebook::state::MarketStatus::Active);
 }
 
 #[test]
 fn place_order_fails_when_market_is_paused() {
-    let program_id = solana_lob::id();
+    let program_id = tidebook::id();
     let payer = Keypair::new();
     let mut svm = LiteSVM::new();
     let base_mint = create_test_mint(&mut svm, 9);
@@ -234,8 +234,8 @@ fn place_order_fails_when_market_is_paused() {
 
     let pause_ix = Instruction::new_with_bytes(
         program_id,
-        &solana_lob::instruction::PauseMarket {}.data(),
-        solana_lob::accounts::PauseMarket {
+        &tidebook::instruction::PauseMarket {}.data(),
+        tidebook::accounts::PauseMarket {
             authority: payer.pubkey(),
             market,
         }
@@ -249,7 +249,7 @@ fn place_order_fails_when_market_is_paused() {
 
     let (order, _) = Pubkey::find_program_address(
         &[
-            solana_lob::constants::ORDER_SEED,
+            tidebook::constants::ORDER_SEED,
             market.as_ref(),
             1_u64.to_le_bytes().as_ref(),
         ],
@@ -258,13 +258,13 @@ fn place_order_fails_when_market_is_paused() {
 
     let place_order_ix = Instruction::new_with_bytes(
         program_id,
-        &solana_lob::instruction::PlaceLimitOrder {
-            side: solana_lob::state::OrderSide::Bid,
+        &tidebook::instruction::PlaceLimitOrder {
+            side: tidebook::state::OrderSide::Bid,
             price: 100,
             quantity: 5,
         }
         .data(),
-        solana_lob::accounts::PlaceLimitOrder {
+        tidebook::accounts::PlaceLimitOrder {
             trader: payer.pubkey(),
             market,
             order,
@@ -284,7 +284,7 @@ fn valid_mints_initialize_market() {
     let payer = Keypair::new();
     let mut svm = LiteSVM::new();
 
-    svm.add_program(solana_lob::id(), PROGRAM_BYTES).unwrap();
+    svm.add_program(tidebook::id(), PROGRAM_BYTES).unwrap();
     svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
 
     let base_mint = create_test_mint(&mut svm, 9);
@@ -300,7 +300,7 @@ fn non_mint_account_is_rejected() {
     let payer = Keypair::new();
     let mut svm = LiteSVM::new();
 
-    svm.add_program(solana_lob::id(), PROGRAM_BYTES).unwrap();
+    svm.add_program(tidebook::id(), PROGRAM_BYTES).unwrap();
     svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
 
     let fake_base_mint = Pubkey::new_unique();
@@ -318,7 +318,7 @@ fn identical_base_and_quote_mints_are_rejected() {
     let payer = Keypair::new();
     let mut svm = LiteSVM::new();
 
-    svm.add_program(solana_lob::id(), PROGRAM_BYTES).unwrap();
+    svm.add_program(tidebook::id(), PROGRAM_BYTES).unwrap();
     svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
 
     let mint = create_test_mint(&mut svm, 6);
@@ -333,7 +333,7 @@ fn market_stores_base_and_quote_mints() {
     let payer = Keypair::new();
     let mut svm = LiteSVM::new();
 
-    svm.add_program(solana_lob::id(), PROGRAM_BYTES).unwrap();
+    svm.add_program(tidebook::id(), PROGRAM_BYTES).unwrap();
     svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
 
     let base_mint = create_test_mint(&mut svm, 9);
@@ -345,17 +345,17 @@ fn market_stores_base_and_quote_mints() {
 
     let (market, _) = Pubkey::find_program_address(
         &[
-            solana_lob::constants::MARKET_SEED,
+            tidebook::constants::MARKET_SEED,
             base_mint.as_ref(),
             quote_mint.as_ref(),
         ],
-        &solana_lob::id(),
+        &tidebook::id(),
     );
 
     let account = svm.get_account(&market).unwrap();
     let mut data: &[u8] = &account.data;
 
-    let state = solana_lob::state::Market::try_deserialize(&mut data).unwrap();
+    let state = tidebook::state::Market::try_deserialize(&mut data).unwrap();
 
     assert_eq!(state.base_mint, base_mint);
     assert_eq!(state.quote_mint, quote_mint);

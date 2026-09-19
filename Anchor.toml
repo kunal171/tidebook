@@ -9,7 +9,7 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-solana_lob = "Honq7kkNfptR6XF5H4zn2jWqSmNRsteCpGwB8iG393cR"
+tidebook = "Honq7kkNfptR6XF5H4zn2jWqSmNRsteCpGwB8iG393cR"
 
 [provider]
 cluster = "localnet"

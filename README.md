@@ -1,105 +1,71 @@
-# Solana Limit Order Book
+# Tidebook
 
-A Solana on-chain limit order book being built step by step with Anchor and Rust.
+Tidebook is a research-driven on-chain central limit order book for Solana,
+built incrementally with Anchor, LiteSVM, and a companion web application.
 
-The project currently implements the first foundation: creating a market account for a base/quote asset pair. Order accounts, order placement, matching, and settlement are planned next.
+## Current capabilities
 
-## Current milestone
+- Create a deterministic market PDA for two distinct SPL Token mints.
+- Validate base and quote mint accounts during market initialization.
+- Pause, unpause, and close markets under authority control.
+- Create deterministic bid and ask limit-order PDAs.
+- Reject zero-price, zero-quantity, and paused-market orders.
+- Exercise program behavior through LiteSVM integration tests.
 
-Implemented instruction:
+Token custody, cancellation, price-level queues, matching, and settlement are
+planned milestones. Current orders record intent but do not lock assets.
 
-- `initialize_market`
+## Architecture
 
-The instruction creates a `Market` PDA using these seeds:
+Detailed account models, instruction flows, invariants, limitations, and the
+editable Draw.io diagram are maintained in [`docs/`](docs/README.md).
+
+The two principal PDA schemes are:
 
 ```text
-["market", base_mint_pubkey, quote_mint_pubkey]
+Market = ["market", base_mint, quote_mint]
+Order  = ["order", market, order_id.to_le_bytes()]
 ```
 
-Each base/quote pair therefore gets its own deterministic market account.
-
-The current `Market` account stores:
-
-- market authority
-- base mint public key
-- quote mint public key
-- market status
-- next order ID
-- best bid
-- best ask
-- PDA bump
-
-## Project layout
+## Repository layout
 
 ```text
-solana_lob/
+tidebook/
+├── app/                         # Companion web application
+├── docs/                        # Architecture and research documentation
+├── programs/tidebook/          # Anchor program and LiteSVM tests
 ├── Anchor.toml
-├── programs/solana_lob/src/
-│   ├── constants.rs
-│   ├── error.rs
-│   ├── instructions/
-│   │   └── initialize.rs
-│   ├── state.rs
-│   └── lib.rs
 └── rust-toolchain.toml
 ```
 
-## Requirements
+## Toolchain
 
-- Rust `1.89.0`
+- Rust `1.97.1`
 - Anchor CLI `1.2.0`
-- Solana CLI compatible with the configured Anchor toolchain
-- A configured Solana wallet at `~/.config/solana/id.json` for local deployment and tests
+- Solana CLI `4.1.2`
+- LiteSVM `0.16.0`
 
-## Build
-
-From this directory:
+## Build and test
 
 ```bash
 anchor build
+anchor test
 ```
 
-Run the Rust test suite:
+`anchor test` runs the Rust LiteSVM suite configured in `Anchor.toml`; it does
+not require a local validator.
 
-```bash
-cargo test
-```
-
-The local validator is currently skipped in `Anchor.toml`, so `anchor build` is the primary validation command for the current milestone.
-
-## Program ID
+## Program identity
 
 ```text
-E5Ms8cNg6Xvy7RLwWVgimRZwZkhcXNjGMRZRnon5Tt1D
+Honq7kkNfptR6XF5H4zn2jWqSmNRsteCpGwB8iG393cR
 ```
 
-The same ID is configured in `Anchor.toml` and declared in `src/lib.rs`.
+The same address is declared in the program, configured in `Anchor.toml`, and
+derived from `target/deploy/tidebook-keypair.json`.
 
-## Design notes
+## Development approach
 
-A market represents a trading pair, not a single asset. For example:
-
-```text
-base mint:  SOL
-quote mint: USDC
-```
-
-and
-
-```text
-base mint:  BTC
-quote mint: USDC
-```
-
-produce different market PDAs.
-
-The initializer currently accepts the two mint accounts as `UncheckedAccount` values because it only needs their public keys for PDA derivation. SPL mint validation should be added before production use and before funds or orders are handled.
-
-## Roadmap
-
-1. Add validation for base and quote mint accounts.
-2. Add the `Order` account and order-side/type enums.
-3. Implement `place_limit_order`.
-4. Add price levels and order queues.
-5. Implement matching and settlement.
-6. Add LiteSVM integration tests for market creation and order behavior.
+Tidebook is built in small feature branches. Each backend milestone is covered
+by LiteSVM tests, exposed through the web application where appropriate, and
+followed by an architecture-documentation update.

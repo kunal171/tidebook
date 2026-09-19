@@ -1,13 +1,13 @@
 [package]
-name = "solana_lob"
+name = "tidebook"
 version = "0.1.0"
-description = "Created with Anchor"
+description = "Tidebook on-chain central limit order book for Solana"
 edition.workspace = true
 rust-version.workspace = true
 
 [lib]
 crate-type = ["cdylib", "lib"]
-name = "solana_lob"
+name = "tidebook"
 
 [features]
 default = []
@@ -35,4 +35,3 @@ solana-account = "=4.3.2"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }
-
