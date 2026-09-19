@@ -1,3 +1,5 @@
+"use client";
+
 import { useCallback, useEffect, useState } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
@@ -5,14 +7,14 @@ import {
   NETWORK,
   PROGRAM_EXPLORER_URL,
   PROGRAM_ID,
-} from "./config/solana";
+} from "@/lib/solana";
 
 type ProgramStatus = "checking" | "deployed" | "not-deployed" | "unavailable";
 
 const shortAddress = (address: string) =>
   `${address.slice(0, 5)}…${address.slice(-5)}`;
 
-export function App() {
+export function Dashboard() {
   const { connection } = useConnection();
   const { connected, publicKey } = useWallet();
   const [programStatus, setProgramStatus] =

@@ -4,6 +4,7 @@ target
 **/*.rs.bk
 node_modules
 app/dist
+app/.next
 app/.env.local
 *.tsbuildinfo
 test-ledger

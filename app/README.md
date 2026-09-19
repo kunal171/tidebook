@@ -1,7 +1,7 @@
 # Tidebook App
 
-The Tidebook web application is a Vite, React, and TypeScript client for the
-Anchor program.
+The Tidebook web application is a Next.js App Router, React, and TypeScript
+client for the Anchor program.
 
 ## Run locally
 
@@ -30,10 +30,20 @@ disabled until the generated Anchor IDL is wired into the client.
 Override the default public devnet RPC endpoint locally with:
 
 ```bash
-VITE_SOLANA_RPC_URL=https://your-devnet-endpoint.example
+NEXT_PUBLIC_SOLANA_RPC_URL=https://your-devnet-endpoint.example
 ```
 
 Store that value in `app/.env.local`; the file is ignored by Git.
+
+## Application boundaries
+
+- `app/layout.tsx` and route pages are Server Components by default.
+- `components/solana-provider.tsx` owns the client-only wallet and RPC context.
+- `components/dashboard.tsx` owns interactive wallet and program-status state.
+- `lib/solana.ts` is the shared network and program-identity configuration.
+
+New routes should keep read-only structure server-rendered and move only wallet,
+transaction, state, and browser-dependent behavior behind `"use client"`.
 
 ## Dependency note
 
