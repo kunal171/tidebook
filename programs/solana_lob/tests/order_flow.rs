@@ -1,0 +1,362 @@
+use {
+    anchor_lang::{
+        prelude::Pubkey,
+        solana_program::{instruction::Instruction, program_pack::Pack, system_program},
+        AccountDeserialize, InstructionData, ToAccountMetas,
+    },
+    anchor_spl::token::spl_token::state::Mint as SplMint,
+    litesvm::LiteSVM,
+    solana_account::Account,
+    solana_keypair::Keypair,
+    solana_message::{Message, VersionedMessage},
+    solana_signer::Signer,
+    solana_transaction::versioned::VersionedTransaction,
+};
+
+const PROGRAM_BYTES: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../target/deploy/solana_lob.so"
+));
+
+fn send_initialize_market(
+    svm: &mut LiteSVM,
+    payer: &Keypair,
+    base_mint: Pubkey,
+    quote_mint: Pubkey,
+) -> (Pubkey, litesvm::types::TransactionResult) {
+    let program_id = solana_lob::id();
+
+    let (market, _) = Pubkey::find_program_address(
+        &[
+            solana_lob::constants::MARKET_SEED,
+            base_mint.as_ref(),
+            quote_mint.as_ref(),
+        ],
+        &program_id,
+    );
+
+    let instruction = Instruction::new_with_bytes(
+        program_id,
+        &solana_lob::instruction::InitializeMarket {}.data(),
+        solana_lob::accounts::InitializeMarket {
+            authority: payer.pubkey(),
+            market,
+            base_mint,
+            quote_mint,
+            system_program: system_program::ID,
+        }
+        .to_account_metas(None),
+    );
+
+    let message = Message::new_with_blockhash(
+        &[instruction],
+        Some(&payer.pubkey()),
+        &svm.latest_blockhash(),
+    );
+
+    let transaction =
+        VersionedTransaction::try_new(VersionedMessage::Legacy(message), &[payer]).unwrap();
+
+    let result = svm.send_transaction(transaction);
+    (market, result)
+}
+
+fn create_test_mint(svm: &mut LiteSVM, decimals: u8) -> Pubkey {
+    let mint = Pubkey::new_unique();
+
+    let mint_state = SplMint {
+        decimals,
+        is_initialized: true,
+        ..SplMint::default()
+    };
+
+    let mut data = vec![0_u8; SplMint::LEN];
+    SplMint::pack(mint_state, &mut data).unwrap();
+
+    svm.set_account(
+        mint,
+        Account {
+            lamports: svm.minimum_balance_for_rent_exemption(SplMint::LEN),
+            data,
+            owner: anchor_spl::token::ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    )
+    .unwrap();
+
+    mint
+}
+
+#[test]
+fn market_and_order_flow() {
+    let program_id = solana_lob::id();
+    let payer = Keypair::new();
+    let mut svm = LiteSVM::new();
+    let base_mint = create_test_mint(&mut svm, 9);
+    let quote_mint = create_test_mint(&mut svm, 6);
+
+    svm.add_program(program_id, PROGRAM_BYTES).unwrap();
+    svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
+
+    let (market, result) = send_initialize_market(&mut svm, &payer, base_mint, quote_mint);
+
+    assert!(result.is_ok(), "initialization failed: {result:?}");
+
+    let market_account = svm.get_account(&market).unwrap();
+    let mut market_data: &[u8] = &market_account.data;
+    let market_state = solana_lob::state::Market::try_deserialize(&mut market_data).unwrap();
+    assert_eq!(market_state.authority, payer.pubkey());
+    assert_eq!(market_state.status, solana_lob::state::MarketStatus::Active);
+    assert_eq!(market_state.next_order_id, 1);
+
+    let order_id = market_state.next_order_id;
+    let (order, _) = Pubkey::find_program_address(
+        &[
+            solana_lob::constants::ORDER_SEED,
+            market.as_ref(),
+            order_id.to_le_bytes().as_ref(),
+        ],
+        &program_id,
+    );
+
+    let place_order_ix = Instruction::new_with_bytes(
+        program_id,
+        &solana_lob::instruction::PlaceLimitOrder {
+            side: solana_lob::state::OrderSide::Bid,
+            price: 100,
+            quantity: 5,
+        }
+        .data(),
+        solana_lob::accounts::PlaceLimitOrder {
+            trader: payer.pubkey(),
+            market,
+            order,
+            system_program: system_program::ID,
+        }
+        .to_account_metas(None),
+    );
+
+    let blockhash = svm.latest_blockhash();
+    let msg = Message::new_with_blockhash(&[place_order_ix], Some(&payer.pubkey()), &blockhash);
+    let tx = VersionedTransaction::try_new(VersionedMessage::Legacy(msg), &[&payer]).unwrap();
+    assert!(svm.send_transaction(tx).is_ok());
+
+    let order_account = svm.get_account(&order).unwrap();
+    let mut order_data: &[u8] = &order_account.data;
+    let order_state = solana_lob::state::Order::try_deserialize(&mut order_data).unwrap();
+
+    assert_eq!(order_state.owner, payer.pubkey());
+    assert_eq!(order_state.market, market);
+    assert_eq!(order_state.order_id, 1);
+    assert_eq!(order_state.side, solana_lob::state::OrderSide::Bid);
+    assert_eq!(order_state.price, 100);
+    assert_eq!(order_state.quantity, 5);
+    assert_eq!(order_state.remaining_quantity, 5);
+    assert_eq!(order_state.status, solana_lob::state::OrderStatus::Open);
+
+    let market_account = svm.get_account(&market).unwrap();
+    let mut market_data: &[u8] = &market_account.data;
+    let market_state = solana_lob::state::Market::try_deserialize(&mut market_data).unwrap();
+    assert_eq!(market_state.next_order_id, 2);
+}
+
+#[test]
+fn pause_and_unpause_market() {
+    let program_id = solana_lob::id();
+    let payer = Keypair::new();
+    let mut svm = LiteSVM::new();
+    let base_mint = create_test_mint(&mut svm, 9);
+    let quote_mint = create_test_mint(&mut svm, 6);
+
+    svm.add_program(program_id, PROGRAM_BYTES).unwrap();
+    svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
+
+    let (market, result) = send_initialize_market(&mut svm, &payer, base_mint, quote_mint);
+
+    assert!(result.is_ok(), "initialization failed: {result:?}");
+
+    let pause_ix = Instruction::new_with_bytes(
+        program_id,
+        &solana_lob::instruction::PauseMarket {}.data(),
+        solana_lob::accounts::PauseMarket {
+            authority: payer.pubkey(),
+            market,
+        }
+        .to_account_metas(None),
+    );
+
+    let blockhash = svm.latest_blockhash();
+    let msg = Message::new_with_blockhash(&[pause_ix], Some(&payer.pubkey()), &blockhash);
+    let tx = VersionedTransaction::try_new(VersionedMessage::Legacy(msg), &[&payer]).unwrap();
+    assert!(svm.send_transaction(tx).is_ok());
+
+    let market_account = svm.get_account(&market).unwrap();
+    let mut market_data: &[u8] = &market_account.data;
+    let market_state = solana_lob::state::Market::try_deserialize(&mut market_data).unwrap();
+    assert_eq!(market_state.status, solana_lob::state::MarketStatus::Paused);
+
+    let unpause_ix = Instruction::new_with_bytes(
+        program_id,
+        &solana_lob::instruction::UnpauseMarket {}.data(),
+        solana_lob::accounts::UnpauseMarket {
+            authority: payer.pubkey(),
+            market,
+        }
+        .to_account_metas(None),
+    );
+
+    let blockhash = svm.latest_blockhash();
+    let msg = Message::new_with_blockhash(&[unpause_ix], Some(&payer.pubkey()), &blockhash);
+    let tx = VersionedTransaction::try_new(VersionedMessage::Legacy(msg), &[&payer]).unwrap();
+    assert!(svm.send_transaction(tx).is_ok());
+
+    let market_account = svm.get_account(&market).unwrap();
+    let mut market_data: &[u8] = &market_account.data;
+    let market_state = solana_lob::state::Market::try_deserialize(&mut market_data).unwrap();
+    assert_eq!(market_state.status, solana_lob::state::MarketStatus::Active);
+}
+
+#[test]
+fn place_order_fails_when_market_is_paused() {
+    let program_id = solana_lob::id();
+    let payer = Keypair::new();
+    let mut svm = LiteSVM::new();
+    let base_mint = create_test_mint(&mut svm, 9);
+    let quote_mint = create_test_mint(&mut svm, 6);
+
+    svm.add_program(program_id, PROGRAM_BYTES).unwrap();
+    svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
+
+    let (market, result) = send_initialize_market(&mut svm, &payer, base_mint, quote_mint);
+
+    assert!(result.is_ok(), "initialization failed: {result:?}");
+
+    let pause_ix = Instruction::new_with_bytes(
+        program_id,
+        &solana_lob::instruction::PauseMarket {}.data(),
+        solana_lob::accounts::PauseMarket {
+            authority: payer.pubkey(),
+            market,
+        }
+        .to_account_metas(None),
+    );
+
+    let blockhash = svm.latest_blockhash();
+    let msg = Message::new_with_blockhash(&[pause_ix], Some(&payer.pubkey()), &blockhash);
+    let tx = VersionedTransaction::try_new(VersionedMessage::Legacy(msg), &[&payer]).unwrap();
+    assert!(svm.send_transaction(tx).is_ok());
+
+    let (order, _) = Pubkey::find_program_address(
+        &[
+            solana_lob::constants::ORDER_SEED,
+            market.as_ref(),
+            1_u64.to_le_bytes().as_ref(),
+        ],
+        &program_id,
+    );
+
+    let place_order_ix = Instruction::new_with_bytes(
+        program_id,
+        &solana_lob::instruction::PlaceLimitOrder {
+            side: solana_lob::state::OrderSide::Bid,
+            price: 100,
+            quantity: 5,
+        }
+        .data(),
+        solana_lob::accounts::PlaceLimitOrder {
+            trader: payer.pubkey(),
+            market,
+            order,
+            system_program: system_program::ID,
+        }
+        .to_account_metas(None),
+    );
+
+    let blockhash = svm.latest_blockhash();
+    let msg = Message::new_with_blockhash(&[place_order_ix], Some(&payer.pubkey()), &blockhash);
+    let tx = VersionedTransaction::try_new(VersionedMessage::Legacy(msg), &[&payer]).unwrap();
+    assert!(svm.send_transaction(tx).is_err());
+}
+
+#[test]
+fn valid_mints_initialize_market() {
+    let payer = Keypair::new();
+    let mut svm = LiteSVM::new();
+
+    svm.add_program(solana_lob::id(), PROGRAM_BYTES).unwrap();
+    svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
+
+    let base_mint = create_test_mint(&mut svm, 9);
+    let quote_mint = create_test_mint(&mut svm, 6);
+
+    let (_, result) = send_initialize_market(&mut svm, &payer, base_mint, quote_mint);
+
+    assert!(result.is_ok(), "initialization failed: {result:?}");
+}
+
+#[test]
+fn non_mint_account_is_rejected() {
+    let payer = Keypair::new();
+    let mut svm = LiteSVM::new();
+
+    svm.add_program(solana_lob::id(), PROGRAM_BYTES).unwrap();
+    svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
+
+    let fake_base_mint = Pubkey::new_unique();
+    svm.airdrop(&fake_base_mint, 1_000_000).unwrap();
+
+    let quote_mint = create_test_mint(&mut svm, 6);
+
+    let (_, result) = send_initialize_market(&mut svm, &payer, fake_base_mint, quote_mint);
+
+    assert!(result.is_err(), "non-mint account was accepted");
+}
+
+#[test]
+fn identical_base_and_quote_mints_are_rejected() {
+    let payer = Keypair::new();
+    let mut svm = LiteSVM::new();
+
+    svm.add_program(solana_lob::id(), PROGRAM_BYTES).unwrap();
+    svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
+
+    let mint = create_test_mint(&mut svm, 6);
+
+    let (_, result) = send_initialize_market(&mut svm, &payer, mint, mint);
+
+    assert!(result.is_err(), "identical mints were accepted");
+}
+
+#[test]
+fn market_stores_base_and_quote_mints() {
+    let payer = Keypair::new();
+    let mut svm = LiteSVM::new();
+
+    svm.add_program(solana_lob::id(), PROGRAM_BYTES).unwrap();
+    svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
+
+    let base_mint = create_test_mint(&mut svm, 9);
+    let quote_mint = create_test_mint(&mut svm, 6);
+
+    let result = send_initialize_market(&mut svm, &payer, base_mint, quote_mint);
+
+    assert!(result.1.is_ok());
+
+    let (market, _) = Pubkey::find_program_address(
+        &[
+            solana_lob::constants::MARKET_SEED,
+            base_mint.as_ref(),
+            quote_mint.as_ref(),
+        ],
+        &solana_lob::id(),
+    );
+
+    let account = svm.get_account(&market).unwrap();
+    let mut data: &[u8] = &account.data;
+
+    let state = solana_lob::state::Market::try_deserialize(&mut data).unwrap();
+
+    assert_eq!(state.base_mint, base_mint);
+    assert_eq!(state.quote_mint, quote_mint);
+}
