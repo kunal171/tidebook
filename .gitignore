@@ -3,6 +3,9 @@
 target
 **/*.rs.bk
 node_modules
+app/dist
+app/.env.local
+*.tsbuildinfo
 test-ledger
 .yarn
 .surfpool
