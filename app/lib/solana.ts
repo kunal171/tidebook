@@ -2,7 +2,6 @@ import { clusterApiUrl, PublicKey } from "@solana/web3.js";
 
 export const NETWORK = "devnet" as const;
 export const RPC_ENDPOINT =
-//@ts-ignore
   process.env.NEXT_PUBLIC_SOLANA_RPC_URL ?? clusterApiUrl(NETWORK);
 
 export const PROGRAM_ID = new PublicKey(
