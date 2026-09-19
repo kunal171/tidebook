@@ -30,10 +30,17 @@ not currently invoke the Token Program or transfer any tokens.
 
 ### Companion web application
 
-The `app/` workspace is a Vite, React, and TypeScript client. Its first
-milestone connects browser wallets, targets devnet, and checks the configured
-program account through Solana RPC. The program is live on devnet. Transaction
-controls remain disabled until the generated Anchor IDL is connected to the app.
+The `app/` workspace is a Next.js App Router, React, and TypeScript client. Its
+first milestone connects browser wallets, targets devnet, and checks the
+configured program account through Solana RPC. The program is live on devnet.
+Transaction controls remain disabled until the generated Anchor IDL is connected
+to the app.
+
+The root layout and route pages are Server Components. Wallet Adapter, RPC
+context, browser state, and future transaction signing are isolated behind
+client-component boundaries. Planned routes can therefore share layouts and
+loading/error boundaries without forcing the entire application into the client
+bundle.
 
 The client keeps network and program identity in `app/src/config/solana.ts`.
 The program address must remain synchronized with `declare_id!`, `Anchor.toml`,
