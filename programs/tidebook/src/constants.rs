@@ -14,3 +14,9 @@ pub const MAX_PRICE: u64 = u64::MAX;
 
 #[constant]
 pub const MAX_QUANTITY: u64 = u64::MAX;
+
+#[constant]
+pub const PROTOCOL_CONFIG_SEED: &[u8] = b"protocol_config";
+
+#[constant]
+pub const ADMIN_SEED: &[u8] = b"admin";

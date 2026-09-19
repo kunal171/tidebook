@@ -41,4 +41,31 @@ pub enum MarketError {
 
     #[msg("Base and quote mints must be different")]
     IdenticalMints,
+
+    #[msg("Signer is not a protocol administrator")]
+    UnauthorizedAdmin,
+
+    #[msg("Signer is not the program upgrade authority")]
+    InvalidDeployer,
+
+    #[msg("Only the protocol super admin can perform this action")]
+    UnauthorizedSuperAdmin,
+
+    #[msg("Invalid administrator address")]
+    InvalidAdmin,
+
+    #[msg("Administrator is already disabled")]
+    AdminAlreadyDisabled,
+
+    #[msg("Administrator is already active")]
+    AdminAlreadyActive,
+
+    #[msg("The super administrator cannot be disabled or removed")]
+    CannotModifySuperAdmin,
+
+    #[msg("Administrator must be disabled before removal")]
+    AdminMustBeDisabled,
+
+    #[msg("Administrator is disabled")]
+    AdminDisabled,
 }
