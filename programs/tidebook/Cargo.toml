@@ -1,13 +1,13 @@
 [package]
-name = "solana_lob"
+name = "tidebook"
 version = "0.1.0"
-description = "Created with Anchor"
+description = "Tidebook on-chain central limit order book for Solana"
 edition.workspace = true
 rust-version.workspace = true
 
 [lib]
 crate-type = ["cdylib", "lib"]
-name = "solana_lob"
+name = "tidebook"
 
 [features]
 default = []
@@ -25,13 +25,13 @@ anchor-lang = "1.2.0"
 anchor-spl = { version = "1.2.0", features = ["token"] }
 
 [dev-dependencies]
-litesvm = "0.10.0"
-solana-message = "3.0.1"
-solana-transaction = "3.0.2"
-solana-signer = "3.0.0"
-solana-keypair = "3.0.1"
+litesvm = "=0.16.0"
+solana-message = "=4.4.1"
+solana-transaction = "=4.1.6"
+solana-signer = "=3.0.1"
+solana-keypair = "=3.1.2"
+solana-account = "=4.3.2"
 
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }
-

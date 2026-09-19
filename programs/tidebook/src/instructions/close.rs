@@ -1,6 +1,9 @@
 use anchor_lang::prelude::*;
 
-use crate::{error::MarketError, state::Market};
+use crate::{
+    error::MarketError,
+    state::{Market, MarketStatus},
+};
 
 #[derive(Accounts)]
 pub struct CloseMarket<'info> {
@@ -11,7 +14,7 @@ pub struct CloseMarket<'info> {
         mut,
         has_one = authority,
         close = authority,
-        constraint = market.status == 1 @ MarketError::MarketMustBePaused
+        constraint = market.status == MarketStatus::Paused @ MarketError::MarketMustBePaused
     )]
     pub market: Account<'info, Market>,
 }

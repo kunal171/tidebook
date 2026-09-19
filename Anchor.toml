@@ -1,16 +1,21 @@
 skip_local_validator = true
 
 [toolchain]
+anchor_version = "1.2.0"
+solana_version = "4.1.2"
 
 [features]
 resolution = true
 skip-lint = false
 
 [programs.localnet]
-solana_lob = "E5Ms8cNg6Xvy7RLwWVgimRZwZkhcXNjGMRZRnon5Tt1D"
+tidebook = "Honq7kkNfptR6XF5H4zn2jWqSmNRsteCpGwB8iG393cR"
+
+[programs.devnet]
+tidebook = "Honq7kkNfptR6XF5H4zn2jWqSmNRsteCpGwB8iG393cR"
 
 [provider]
-cluster = "localnet"
+cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]

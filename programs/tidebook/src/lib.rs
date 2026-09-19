@@ -9,10 +9,10 @@ pub use constants::*;
 pub use instructions::*;
 pub use state::*;
 
-declare_id!("E5Ms8cNg6Xvy7RLwWVgimRZwZkhcXNjGMRZRnon5Tt1D");
+declare_id!("Honq7kkNfptR6XF5H4zn2jWqSmNRsteCpGwB8iG393cR");
 
 #[program]
-pub mod solana_lob {
+pub mod tidebook {
     use super::*;
 
     //Initialize a new Market Pair
@@ -22,6 +22,15 @@ pub mod solana_lob {
 
     pub fn pause_market(ctx: Context<PauseMarket>) -> Result<()> {
         crate::instructions::pause::handle_pause_market(ctx)
+    }
+
+    pub fn place_limit_order(
+        ctx: Context<PlaceLimitOrder>,
+        side: OrderSide,
+        price: u64,
+        quantity: u64,
+    ) -> Result<()> {
+        crate::instructions::place_limit_order::handle_place_limit_order(ctx, side, price, quantity)
     }
 
     pub fn unpause_market(ctx: Context<UnpauseMarket>) -> Result<()> {
