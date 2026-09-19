@@ -7,7 +7,7 @@ import {
   NETWORK,
   PROGRAM_EXPLORER_URL,
   PROGRAM_ID,
-} from "@/lib/solana";
+} from "../lib/solana";
 
 type ProgramStatus = "checking" | "deployed" | "not-deployed" | "unavailable";
 
