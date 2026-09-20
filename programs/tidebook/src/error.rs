@@ -68,4 +68,13 @@ pub enum MarketError {
 
     #[msg("Administrator is disabled")]
     AdminDisabled,
+
+    #[msg("Only the order owner can cancel this order")]
+    UnauthorizedOrderOwner,
+
+    #[msg("Order does not belong to the supplied market")]
+    OrderMarketMismatch,
+
+    #[msg("Only an open order can be canceled")]
+    OrderNotOpen,
 }

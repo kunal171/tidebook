@@ -90,6 +90,66 @@
       ]
     },
     {
+      "name": "cancel_limit_order",
+      "discriminator": [
+        132,
+        156,
+        132,
+        31,
+        67,
+        40,
+        232,
+        97
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "signer": true,
+          "relations": [
+            "order"
+          ]
+        },
+        {
+          "name": "market",
+          "relations": [
+            "order"
+          ]
+        },
+        {
+          "name": "order",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  114,
+                  100,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "arg",
+                "path": "order_id"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "order_id",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "close_market",
       "discriminator": [
         88,
@@ -811,6 +871,21 @@
       "code": 6021,
       "name": "AdminDisabled",
       "msg": "Administrator is disabled"
+    },
+    {
+      "code": 6022,
+      "name": "UnauthorizedOrderOwner",
+      "msg": "Only the order owner can cancel this order"
+    },
+    {
+      "code": 6023,
+      "name": "OrderMarketMismatch",
+      "msg": "Order does not belong to the supplied market"
+    },
+    {
+      "code": 6024,
+      "name": "OrderNotOpen",
+      "msg": "Only an open order can be canceled"
     }
   ],
   "types": [

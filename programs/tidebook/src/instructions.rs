@@ -1,4 +1,5 @@
 pub mod add_admin;
+pub mod cancel_limit_order;
 pub mod close;
 pub mod initialize;
 pub mod initialize_protocol;
@@ -9,6 +10,7 @@ pub mod remove_admin;
 pub mod unpause;
 
 pub use add_admin::*;
+pub use cancel_limit_order::*;
 pub use close::*;
 pub use initialize::*;
 pub use initialize_protocol::*;

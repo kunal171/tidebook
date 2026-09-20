@@ -43,6 +43,7 @@ export function AppHeader() {
   const roleLabel = loading ? "Checking role" : roleLabels[role];
   const isSuperAdmin = !loading && role === "super-admin";
   const canCreateMarket = !loading && (role === "super-admin" || role === "admin");
+  const canViewOrders = !loading && role !== "disconnected";
 
   return (
     <header className="topbar">
@@ -56,6 +57,8 @@ export function AppHeader() {
       </Link>
 
       <nav className="topbar-nav" aria-label="Primary navigation">
+        <Link href="/markets">Markets</Link>
+        {canViewOrders && <Link href="/orders">Orders</Link>}
         {isSuperAdmin && <Link href="/admin">Manage admins</Link>}
         {canCreateMarket && <Link href="/markets/new">Create market</Link>}
       </nav>

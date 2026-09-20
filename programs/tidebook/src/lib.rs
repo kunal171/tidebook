@@ -59,4 +59,8 @@ pub mod tidebook {
     pub fn remove_admin(ctx: Context<RemoveAdmin>, target_admin: Pubkey) -> Result<()> {
         crate::instructions::remove_admin::handle_remove_admin(ctx, target_admin)
     }
+
+    pub fn cancel_limit_order(ctx: Context<CancelLimitOrder>, order_id: u64) -> Result<()> {
+        crate::instructions::cancel_limit_order::handle_cancel_limit_order(ctx, order_id)
+    }
 }
