@@ -15,8 +15,8 @@ The current implementation establishes the account and authorization foundation:
 - validate behavior with in-process LiteSVM integration tests.
 
 It does **not** yet lock tokens, maintain sorted price levels, match opposing
-orders, cancel orders, or settle trades. An `Order` currently records intent; it
-is not a collateralized order.
+orders, or settle trades. An `Order` currently records intent; it is not a
+collateralized order.
 
 ## 2. System context
 
@@ -120,7 +120,7 @@ seeds = ["order", market, order_id.to_le_bytes()]
 | `price` | Raw integer limit price; must be greater than zero |
 | `quantity` | Original raw integer quantity; must be greater than zero |
 | `remaining_quantity` | Unfilled quantity; initially equals `quantity` |
-| `status` | Initially `Open`; `Filled` and `Canceled` are modeled but not transitioned yet |
+| `status` | Initially `Open`; the owner can transition it to `Canceled`; `Filled` is modeled but not transitioned yet |
 | `bump` | Canonical order PDA bump |
 
 Each successful order placement increments `Market.next_order_id`. The order PDA
@@ -140,6 +140,7 @@ therefore also provides insertion order that can later support FIFO priority.
 | `unpause_market` | Market authority | `has_one = authority`; market is paused | `Paused -> Active` |
 | `close_market` | Market authority | `has_one = authority`; market is paused | Closes the market account and returns rent to the authority |
 | `place_limit_order` | Trader | Market is active; price and quantity are nonzero; order PDA is canonical | Creates an open order and increments `next_order_id` |
+| `cancel_limit_order` | Order owner | Order PDA belongs to the supplied market and signer; order status is `Open` | `Open -> Canceled` while preserving `remaining_quantity` |
 
 ### Market initialization flow
 
@@ -193,6 +194,8 @@ The program currently enforces:
 10. The super-admin cannot disable its own admin record.
 11. An administrator must be disabled before its record can be removed.
 12. Only a signer with its canonical active admin record can initialize a market.
+13. Only the stored order owner can cancel an order.
+14. Only an `Open` order can transition to `Canceled`.
 
 ## 6. Known architectural gaps
 
@@ -203,7 +206,6 @@ These are planned features, not defects in the current research milestone:
 - No tick-size, lot-size, overflow, or notional-value rules.
 - No price-level accounts or FIFO order queues.
 - No matching engine or partial-fill transitions.
-- No cancel-order instruction.
 - No settlement or fee accounting.
 - `best_bid` and `best_ask` are not updated.
 - A paused market can be closed without checking for live order accounts.
@@ -216,7 +218,8 @@ shutdown and withdrawal process.
 ## 7. Test architecture
 
 Integration tests run against LiteSVM in
-`programs/tidebook/tests/admin_flow.rs` and
+`programs/tidebook/tests/admin_flow.rs`,
+`programs/tidebook/tests/cancel_order.rs`, and
 `programs/tidebook/tests/order_flow.rs`.
 
 The test harness:
@@ -228,7 +231,7 @@ The test harness:
 5. sends transactions through LiteSVM;
 6. deserializes resulting Anchor accounts and checks state.
 
-The 20-test suite currently covers:
+The 25-test suite currently covers:
 
 - upgrade-authority-only, one-time protocol initialization;
 - creation of the deployer's config and active admin record;
@@ -242,7 +245,10 @@ The 20-test suite currently covers:
 - acceptance of two valid mint accounts;
 - rejection of a non-mint account;
 - rejection of identical base and quote mints;
-- persistence of the selected mint addresses.
+- persistence of the selected mint addresses;
+- owner-only cancellation of open orders;
+- rejection of repeated cancellation and mismatched markets;
+- cancellation while the market is paused.
 
 ## 8. Dependency boundary
 
@@ -255,8 +261,7 @@ public APIs exchange concrete `Address`, `Message`, `Transaction`, `Signer`, and
 
 The recommended implementation order is:
 
-1. Add `cancel_limit_order` and complete the basic order lifecycle in program,
-   tests, and UI.
+1. Add order discovery and cancellation controls to the UI.
 2. Define price ticks, quantity lots, and checked arithmetic rules.
 3. Add market vault authorities and base/quote token vaults.
 4. Lock the correct asset when a bid or ask is placed.
