@@ -10,6 +10,8 @@ exchange functionality that is still planned.
   invariants, transaction flows, tests, and planned evolution.
 - [Devnet deployment](deployment.md): stable program identity, upgrade details,
   verification, and the current IDL-upload limitation.
+- [Devnet address registry](devnet-addresses.md): program, governance, mint,
+  market, and transaction addresses used by the shared research deployment.
 - [Draw.io architecture diagram](diagrams/tidebook-architecture.drawio):
   editable source for the current and planned architecture.
 

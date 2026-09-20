@@ -43,8 +43,14 @@ active on-chain record. Role-aware routes are:
 
 | Route | UI access | Purpose |
 | --- | --- | --- |
+| `/markets` | Public | Discover active and paused on-chain markets without connecting a wallet |
+| `/markets/[address]` | Public viewing; connected wallet for trading | Inspect one market and place bid or ask limit orders while it is active |
 | `/admin` | Super-admin | Initialize governance and add, disable, enable, or remove admins |
 | `/markets/new` | Active admin or super-admin | Create a market for two SPL mints |
+| `/orders` | Any connected wallet | List wallet-owned orders and cancel orders whose status is `Open` |
+
+The orders page filters program accounts by the owner field, displays their
+market and order state, and refreshes the list after a confirmed cancellation.
 
 Route visibility is a user-interface concern, not an authorization boundary.
 Every privileged action must also be constrained by the Anchor program because
@@ -261,14 +267,13 @@ public APIs exchange concrete `Address`, `Message`, `Transaction`, `Signer`, and
 
 The recommended implementation order is:
 
-1. Add order discovery and cancellation controls to the UI.
-2. Define price ticks, quantity lots, and checked arithmetic rules.
-3. Add market vault authorities and base/quote token vaults.
-4. Lock the correct asset when a bid or ask is placed.
-5. Add price-level accounts and FIFO queues.
-6. Implement deterministic matching and partial fills.
-7. Settle base/quote transfers and fees.
-8. Add safe market shutdown, order cleanup, and withdrawal rules.
+1. Define price ticks, quantity lots, and checked arithmetic rules.
+2. Add market vault authorities and base/quote token vaults.
+3. Lock the correct asset when a bid or ask is placed.
+4. Add price-level accounts and FIFO queues.
+5. Implement deterministic matching and partial fills.
+6. Settle base/quote transfers and fees.
+7. Add safe market shutdown, order cleanup, and withdrawal rules.
 
 Each phase should add its invariants and failure-path tests before the next
 state transition is introduced.
