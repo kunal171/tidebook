@@ -7,6 +7,8 @@ on-chain central limit order book.
 
 The current implementation establishes the account and authorization foundation:
 
+- initialize protocol governance from the program upgrade authority;
+- manage deterministic, independently removable administrator records;
 - create one deterministic market for a distinct SPL base/quote mint pair;
 - pause, unpause, and close a market under authority control;
 - create deterministic limit-order accounts while a market is active;
@@ -18,10 +20,11 @@ is not a collateralized order.
 
 ## 2. System context
 
-The program has two external roles:
+The program has three external roles:
 
 | Role | Current capabilities |
 | --- | --- |
+| Super-admin | Add, disable, enable, and remove administrator records |
 | Market authority | Initialize a market, pause it, unpause it, and close it while paused |
 | Trader | Place a bid or ask limit order while the market is active |
 
@@ -30,11 +33,22 @@ not currently invoke the Token Program or transfer any tokens.
 
 ### Companion web application
 
-The `app/` workspace is a Next.js App Router, React, and TypeScript client. Its
-first milestone connects browser wallets, targets devnet, and checks the
-configured program account through Solana RPC. The program is live on devnet.
-Transaction controls remain disabled until the generated Anchor IDL is connected
-to the app.
+The `app/` workspace is a Next.js App Router, React, and TypeScript client. It
+connects browser wallets to devnet and uses a checked-in copy of the generated
+Anchor IDL at `app/idl/tidebook.json`.
+
+The shared role provider reads the protocol config and the connected wallet's
+admin-record PDA. The header shows a `Super admin` or `Admin` badge only for an
+active on-chain record. Role-aware routes are:
+
+| Route | UI access | Purpose |
+| --- | --- | --- |
+| `/admin` | Super-admin | Initialize governance and add, disable, enable, or remove admins |
+| `/markets/new` | Active admin or super-admin | Create a market for two SPL mints |
+
+Route visibility is a user-interface concern, not an authorization boundary.
+Every privileged action must also be constrained by the Anchor program because
+any client can submit an instruction directly.
 
 The root layout and route pages are Server Components. Wallet Adapter, RPC
 context, browser state, and future transaction signing are isolated behind
@@ -42,7 +56,7 @@ client-component boundaries. Planned routes can therefore share layouts and
 loading/error boundaries without forcing the entire application into the client
 bundle.
 
-The client keeps network and program identity in `app/src/config/solana.ts`.
+The client keeps network and program identity in `app/lib/solana.ts`.
 The program address must remain synchronized with `declare_id!`, `Anchor.toml`,
 and the deployment keypair.
 
@@ -50,6 +64,26 @@ The editable system diagram is available at
 [`diagrams/tidebook-architecture.drawio`](diagrams/tidebook-architecture.drawio).
 
 ## 3. On-chain account model
+
+### Protocol config PDA
+
+```text
+seeds = ["protocol_config"]
+```
+
+The singleton config stores the immutable super-admin authority selected during
+protocol initialization. Initialization verifies that the signer is the
+program's current upgrade authority.
+
+### Admin record PDA
+
+```text
+seeds = ["admin", authority]
+```
+
+Each administrator has an independent account containing its authority,
+provenance, status, and bump. This avoids an unbounded vector in one account and
+allows records to be queried or closed independently.
 
 ### Market PDA
 
@@ -96,7 +130,12 @@ therefore also provides insertion order that can later support FIFO priority.
 
 | Instruction | Required signer | Important checks | State transition |
 | --- | --- | --- | --- |
-| `initialize_market` | Authority | Both accounts deserialize as SPL mints; base and quote differ; market PDA is canonical | Creates an active market with `next_order_id = 1` |
+| `initialize_protocol` | Program upgrade authority | Program-data relationship and upgrade authority match; singleton PDAs are canonical | Creates protocol config and an active deployer admin record |
+| `add_admin` | Super-admin | Signer matches config; target is valid; admin PDA is canonical | Creates an active admin record |
+| `disable_admin` | Super-admin | Signer matches config; target is active and is not the super-admin | `Active -> Disabled` |
+| `enable_admin` | Super-admin | Signer matches config; target is disabled | `Disabled -> Active` |
+| `remove_admin` | Super-admin | Signer matches config; target is disabled | Closes the admin record |
+| `initialize_market` | Active admin | Admin record belongs to signer, is canonical and active; both accounts deserialize as SPL mints; base and quote differ; market PDA is canonical | Creates an active market with `next_order_id = 1` |
 | `pause_market` | Market authority | `has_one = authority`; market is active | `Active -> Paused` |
 | `unpause_market` | Market authority | `has_one = authority`; market is paused | `Paused -> Active` |
 | `close_market` | Market authority | `has_one = authority`; market is paused | Closes the market account and returns rent to the authority |
@@ -150,6 +189,10 @@ The program currently enforces:
 6. A market must be paused before it can be closed.
 7. Price and quantity must both be nonzero.
 8. An order ID is allocated only by incrementing its market's counter.
+9. Only the configured super-admin can manage administrator records.
+10. The super-admin cannot disable its own admin record.
+11. An administrator must be disabled before its record can be removed.
+12. Only a signer with its canonical active admin record can initialize a market.
 
 ## 6. Known architectural gaps
 
@@ -173,6 +216,7 @@ shutdown and withdrawal process.
 ## 7. Test architecture
 
 Integration tests run against LiteSVM in
+`programs/tidebook/tests/admin_flow.rs` and
 `programs/tidebook/tests/order_flow.rs`.
 
 The test harness:
@@ -184,8 +228,14 @@ The test harness:
 5. sends transactions through LiteSVM;
 6. deserializes resulting Anchor accounts and checks state.
 
-The suite currently covers:
+The 20-test suite currently covers:
 
+- upgrade-authority-only, one-time protocol initialization;
+- creation of the deployer's config and active admin record;
+- super-admin-only add, disable, enable, and remove operations;
+- protection against disabling the super-admin or removing an active admin;
+- removal and re-creation of a disabled admin record;
+- rejection of market creation by non-admin and disabled-admin wallets;
 - market initialization followed by order placement;
 - market pause and unpause;
 - rejection of order placement while paused;
@@ -205,16 +255,15 @@ public APIs exchange concrete `Address`, `Message`, `Transaction`, `Signer`, and
 
 The recommended implementation order is:
 
-1. Wire the generated Anchor IDL into the app and enable market creation.
-2. Add `cancel_limit_order` and complete the basic order lifecycle in program,
+1. Add `cancel_limit_order` and complete the basic order lifecycle in program,
    tests, and UI.
-3. Define price ticks, quantity lots, and checked arithmetic rules.
-4. Add market vault authorities and base/quote token vaults.
-5. Lock the correct asset when a bid or ask is placed.
-6. Add price-level accounts and FIFO queues.
-7. Implement deterministic matching and partial fills.
-8. Settle base/quote transfers and fees.
-9. Add safe market shutdown, order cleanup, and withdrawal rules.
+2. Define price ticks, quantity lots, and checked arithmetic rules.
+3. Add market vault authorities and base/quote token vaults.
+4. Lock the correct asset when a bid or ask is placed.
+5. Add price-level accounts and FIFO queues.
+6. Implement deterministic matching and partial fills.
+7. Settle base/quote transfers and fees.
+8. Add safe market shutdown, order cleanup, and withdrawal rules.
 
 Each phase should add its invariants and failure-path tests before the next
 state transition is introduced.
