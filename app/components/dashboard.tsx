@@ -89,7 +89,7 @@ export function Dashboard() {
 
           <article className="status-card">
             <div className="card-label">Test coverage</div>
-            <strong>25 passing flows</strong>
+            <strong>31 passing flows</strong>
             <p>LiteSVM verifies protocol roles, market lifecycle, and orders.</p>
           </article>
         </section>

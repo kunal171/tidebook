@@ -149,6 +149,14 @@ export function Markets() {
                     <dd>#{market.nextOrderId.toString()}</dd>
                   </div>
                   <div>
+                    <dt>Price tick</dt>
+                    <dd>{market.priceTickSize.toString()}</dd>
+                  </div>
+                  <div>
+                    <dt>Quantity lot</dt>
+                    <dd>{market.quantityLotSize.toString()}</dd>
+                  </div>
+                  <div>
                     <dt>Best bid</dt>
                     <dd>{market.bestBid?.toString() ?? "—"}</dd>
                   </div>

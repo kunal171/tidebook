@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { BN } from "@anchor-lang/core";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
 import {
@@ -16,6 +17,24 @@ function getErrorMessage(cause: unknown) {
   return cause instanceof Error ? cause.message : "Market creation failed";
 }
 
+function parsePositiveU64(value: string, label: string) {
+  const normalized = value.trim();
+
+  if (!/^[0-9]+$/.test(normalized)) {
+    throw new Error(`${label} must be a positive whole number`);
+  }
+
+  const number = new BN(normalized, 10);
+  if (number.isZero()) {
+    throw new Error(`${label} must be greater than zero`);
+  }
+  if (number.bitLength() > 64) {
+    throw new Error(`${label} exceeds the u64 limit`);
+  }
+
+  return number;
+}
+
 export function CreateMarket() {
   const { connection } = useConnection();
   const wallet = useAnchorWallet();
@@ -25,6 +44,8 @@ export function CreateMarket() {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ signature: string; market: PublicKey } | null>(null);
+  const [priceTickSize, setPriceTickSize] = useState("");
+  const [quantityLotSize, setQuantityLotSize] = useState("");
 
   const program = useMemo(
     () => (wallet ? getTidebookProgram(connection, wallet) : null),
@@ -46,10 +67,12 @@ export function CreateMarket() {
       if (base.equals(quote)) {
         throw new Error("Base and quote mints must be different");
       }
+      const tickSize = parsePositiveU64(priceTickSize, "Price tick size");
+      const lotSize = parsePositiveU64(quantityLotSize, "Quantity lot size");
 
       const market = deriveMarketPda(base, quote);
       const signature = await program.methods
-        .initializeMarket()
+        .initializeMarket(tickSize, lotSize)
         .accounts({
           authority: wallet.publicKey,
           adminRecord: deriveAdminRecordPda(wallet.publicKey),
@@ -108,10 +131,39 @@ export function CreateMarket() {
                 autoComplete="off"
               />
             </label>
+            <label>
+              Price tick size
+              <input
+                inputMode="numeric"
+                value={priceTickSize}
+                onChange={(event) => setPriceTickSize(event.target.value)}
+                placeholder="10000"
+                autoComplete="off"
+                required
+              />
+            </label>
+
+            <label>
+              Quantity lot size
+              <input
+                inputMode="numeric"
+                value={quantityLotSize}
+                onChange={(event) => setQuantityLotSize(event.target.value)}
+                placeholder="100000"
+                autoComplete="off"
+                required
+              />
+            </label>
             <button
               className="primary-button"
               type="submit"
-              disabled={!baseMint.trim() || !quoteMint.trim() || pending}
+              disabled={
+                !baseMint.trim() ||
+                !quoteMint.trim() ||
+                !priceTickSize.trim() ||
+                !quantityLotSize.trim() ||
+                pending
+              }
             >
               {pending ? "Creating market…" : "Create market"}
             </button>
