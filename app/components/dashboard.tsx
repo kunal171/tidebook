@@ -1,13 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import { useConnection } from "@solana/wallet-adapter-react";
 import {
-  NETWORK,
   PROGRAM_EXPLORER_URL,
   PROGRAM_ID,
 } from "../lib/solana";
+import { AppHeader } from "./app-header";
 
 type ProgramStatus = "checking" | "deployed" | "not-deployed" | "unavailable";
 
@@ -16,7 +15,6 @@ const shortAddress = (address: string) =>
 
 export function Dashboard() {
   const { connection } = useConnection();
-  const { connected, publicKey } = useWallet();
   const [programStatus, setProgramStatus] =
     useState<ProgramStatus>("checking");
 
@@ -44,24 +42,7 @@ export function Dashboard() {
 
   return (
     <div className="app-shell">
-      <header className="topbar">
-        <a className="brand" href="#top" aria-label="Tidebook home">
-          <span className="brand-mark" aria-hidden="true">
-            <i />
-            <i />
-            <i />
-          </span>
-          <span>Tidebook</span>
-        </a>
-
-        <div className="topbar-actions">
-          <span className="network-pill">
-            <span className="network-dot" />
-            {NETWORK}
-          </span>
-          <WalletMultiButton />
-        </div>
-      </header>
+      <AppHeader />
 
       <main id="top">
         <section className="hero">
@@ -108,42 +89,11 @@ export function Dashboard() {
 
           <article className="status-card">
             <div className="card-label">Test coverage</div>
-            <strong>7 passing flows</strong>
-            <p>LiteSVM verifies market lifecycle and order behavior.</p>
+            <strong>20 passing flows</strong>
+            <p>LiteSVM verifies protocol roles, market lifecycle, and orders.</p>
           </article>
         </section>
 
-        <section className="workspace">
-          <div className="workspace-copy">
-            <div className="eyebrow">Market workspace</div>
-            <h2>Start with a trusted pair.</h2>
-            <p>
-              The program is live on devnet. Wiring this form to the generated
-              Anchor IDL is the next client milestone; both addresses will need
-              to be initialized SPL Token mints.
-            </p>
-          </div>
-
-          <div className="market-panel">
-            <label>
-              Base mint
-              <input placeholder="Base mint address" disabled />
-            </label>
-            <span className="pair-divider">/</span>
-            <label>
-              Quote mint
-              <input placeholder="Quote mint address" disabled />
-            </label>
-            <button className="primary-button" type="button" disabled>
-              {connected ? "Market creation coming next" : "Connect wallet to begin"}
-            </button>
-            {publicKey && (
-              <span className="wallet-note">
-                Connected as {shortAddress(publicKey.toBase58())}
-              </span>
-            )}
-          </div>
-        </section>
       </main>
 
       <footer>
