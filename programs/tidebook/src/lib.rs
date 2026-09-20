@@ -9,7 +9,7 @@ pub use constants::*;
 pub use instructions::*;
 pub use state::*;
 
-declare_id!("Honq7kkNfptR6XF5H4zn2jWqSmNRsteCpGwB8iG393cR");
+declare_id!("BPdNF5CnV8z1EkHo7tcueR6wXmzZV2j6j4wsUTirPgWL");
 
 #[program]
 pub mod tidebook {

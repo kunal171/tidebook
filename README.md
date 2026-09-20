@@ -9,11 +9,12 @@ built incrementally with Anchor, LiteSVM, and a companion web application.
 - Validate base and quote mint accounts during market initialization.
 - Pause, unpause, and close markets under authority control.
 - Create deterministic bid and ask limit-order PDAs.
-- Reject zero-price, zero-quantity, and paused-market orders.
+- Enforce fixed-point price ticks, quantity lots, and nonzero quote notional.
+- Cancel open orders under owner control, including while a market is paused.
 - Exercise program behavior through LiteSVM integration tests.
 
-Token custody, cancellation, price-level queues, matching, and settlement are
-planned milestones. Current orders record intent but do not lock assets.
+Token custody, price-level queues, matching, and settlement are planned
+milestones. Current orders record intent but do not lock assets.
 
 ## Architecture
 
@@ -49,11 +50,13 @@ tidebook/
 
 ```bash
 anchor build
-anchor test
+anchor test --skip-deploy
 ```
 
-`anchor test` runs the Rust LiteSVM suite configured in `Anchor.toml`; it does
-not require a local validator.
+`anchor test --skip-deploy` runs the Rust LiteSVM suite configured in
+`Anchor.toml`; it does not require a local validator and does not deploy to the
+configured devnet cluster. Bare `anchor test` deploys before running the suite
+and must not be used as the local test command.
 
 Deploy or upgrade the configured program on devnet with:
 
@@ -67,14 +70,14 @@ the application consumes the locally generated IDL instead.
 ## Program identity
 
 ```text
-Honq7kkNfptR6XF5H4zn2jWqSmNRsteCpGwB8iG393cR
+BPdNF5CnV8z1EkHo7tcueR6wXmzZV2j6j4wsUTirPgWL
 ```
 
 The same address is declared in the program, configured in `Anchor.toml`, and
 derived from `target/deploy/tidebook-keypair.json`.
 
 The program is live on
-[Solana devnet](https://explorer.solana.com/address/Honq7kkNfptR6XF5H4zn2jWqSmNRsteCpGwB8iG393cR?cluster=devnet).
+[Solana devnet](https://explorer.solana.com/address/BPdNF5CnV8z1EkHo7tcueR6wXmzZV2j6j4wsUTirPgWL?cluster=devnet).
 
 ## Development approach
 
