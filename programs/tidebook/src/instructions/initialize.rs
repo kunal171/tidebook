@@ -1,9 +1,9 @@
 use anchor_lang::prelude::*;
 
 use crate::{
-    constants::MARKET_SEED,
+    constants::{ADMIN_SEED, MARKET_SEED},
     error::MarketError,
-    state::{Market, MarketStatus},
+    state::{AdminRecord, AdminStatus, Market, MarketStatus},
 };
 
 use anchor_spl::token::Mint;
@@ -12,6 +12,15 @@ use anchor_spl::token::Mint;
 pub struct InitializeMarket<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
+
+    #[account(
+        seeds = [ADMIN_SEED, authority.key().as_ref()],
+        bump = admin_record.bump,
+        has_one = authority @ MarketError::UnauthorizedAdmin,
+        constraint = admin_record.status == AdminStatus::Active
+            @ MarketError::AdminDisabled
+    )]
+    pub admin_record: Account<'info, AdminRecord>,
 
     #[account(
         init,

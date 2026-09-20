@@ -2,7 +2,7 @@ use {
     anchor_lang::{
         prelude::Pubkey,
         solana_program::{instruction::Instruction, program_pack::Pack, system_program},
-        AccountDeserialize, InstructionData, ToAccountMetas,
+        AccountDeserialize, AccountSerialize, InstructionData, ToAccountMetas,
     },
     anchor_spl::token::spl_token::state::Mint as SplMint,
     litesvm::LiteSVM,
@@ -34,12 +34,17 @@ fn send_initialize_market(
         ],
         &program_id,
     );
+    let (admin_record, _) = Pubkey::find_program_address(
+        &[tidebook::constants::ADMIN_SEED, payer.pubkey().as_ref()],
+        &program_id,
+    );
 
     let instruction = Instruction::new_with_bytes(
         program_id,
         &tidebook::instruction::InitializeMarket {}.data(),
         tidebook::accounts::InitializeMarket {
             authority: payer.pubkey(),
+            admin_record,
             market,
             base_mint,
             quote_mint,
@@ -59,6 +64,33 @@ fn send_initialize_market(
 
     let result = svm.send_transaction(transaction);
     (market, result)
+}
+
+fn store_admin_record(svm: &mut LiteSVM, authority: Pubkey, status: tidebook::state::AdminStatus) {
+    let (address, bump) = Pubkey::find_program_address(
+        &[tidebook::constants::ADMIN_SEED, authority.as_ref()],
+        &tidebook::id(),
+    );
+    let state = tidebook::state::AdminRecord {
+        authority,
+        added_by: authority,
+        status,
+        bump,
+    };
+    let mut data = Vec::new();
+    state.try_serialize(&mut data).unwrap();
+
+    svm.set_account(
+        address,
+        Account {
+            lamports: svm.minimum_balance_for_rent_exemption(data.len()),
+            data,
+            owner: tidebook::id(),
+            executable: false,
+            rent_epoch: 0,
+        },
+    )
+    .unwrap();
 }
 
 fn create_test_mint(svm: &mut LiteSVM, decimals: u8) -> Pubkey {
@@ -98,6 +130,11 @@ fn market_and_order_flow() {
 
     svm.add_program(program_id, PROGRAM_BYTES).unwrap();
     svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
+    store_admin_record(
+        &mut svm,
+        payer.pubkey(),
+        tidebook::state::AdminStatus::Active,
+    );
 
     let (market, result) = send_initialize_market(&mut svm, &payer, base_mint, quote_mint);
 
@@ -171,6 +208,11 @@ fn pause_and_unpause_market() {
 
     svm.add_program(program_id, PROGRAM_BYTES).unwrap();
     svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
+    store_admin_record(
+        &mut svm,
+        payer.pubkey(),
+        tidebook::state::AdminStatus::Active,
+    );
 
     let (market, result) = send_initialize_market(&mut svm, &payer, base_mint, quote_mint);
 
@@ -227,6 +269,11 @@ fn place_order_fails_when_market_is_paused() {
 
     svm.add_program(program_id, PROGRAM_BYTES).unwrap();
     svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
+    store_admin_record(
+        &mut svm,
+        payer.pubkey(),
+        tidebook::state::AdminStatus::Active,
+    );
 
     let (market, result) = send_initialize_market(&mut svm, &payer, base_mint, quote_mint);
 
@@ -286,6 +333,11 @@ fn valid_mints_initialize_market() {
 
     svm.add_program(tidebook::id(), PROGRAM_BYTES).unwrap();
     svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
+    store_admin_record(
+        &mut svm,
+        payer.pubkey(),
+        tidebook::state::AdminStatus::Active,
+    );
 
     let base_mint = create_test_mint(&mut svm, 9);
     let quote_mint = create_test_mint(&mut svm, 6);
@@ -302,6 +354,11 @@ fn non_mint_account_is_rejected() {
 
     svm.add_program(tidebook::id(), PROGRAM_BYTES).unwrap();
     svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
+    store_admin_record(
+        &mut svm,
+        payer.pubkey(),
+        tidebook::state::AdminStatus::Active,
+    );
 
     let fake_base_mint = Pubkey::new_unique();
     svm.airdrop(&fake_base_mint, 1_000_000).unwrap();
@@ -320,6 +377,11 @@ fn identical_base_and_quote_mints_are_rejected() {
 
     svm.add_program(tidebook::id(), PROGRAM_BYTES).unwrap();
     svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
+    store_admin_record(
+        &mut svm,
+        payer.pubkey(),
+        tidebook::state::AdminStatus::Active,
+    );
 
     let mint = create_test_mint(&mut svm, 6);
 
@@ -335,6 +397,11 @@ fn market_stores_base_and_quote_mints() {
 
     svm.add_program(tidebook::id(), PROGRAM_BYTES).unwrap();
     svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
+    store_admin_record(
+        &mut svm,
+        payer.pubkey(),
+        tidebook::state::AdminStatus::Active,
+    );
 
     let base_mint = create_test_mint(&mut svm, 9);
     let quote_mint = create_test_mint(&mut svm, 6);
@@ -359,4 +426,41 @@ fn market_stores_base_and_quote_mints() {
 
     assert_eq!(state.base_mint, base_mint);
     assert_eq!(state.quote_mint, quote_mint);
+}
+
+#[test]
+fn non_admin_cannot_initialize_market() {
+    let payer = Keypair::new();
+    let mut svm = LiteSVM::new();
+
+    svm.add_program(tidebook::id(), PROGRAM_BYTES).unwrap();
+    svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
+
+    let base_mint = create_test_mint(&mut svm, 9);
+    let quote_mint = create_test_mint(&mut svm, 6);
+
+    let (_, result) = send_initialize_market(&mut svm, &payer, base_mint, quote_mint);
+
+    assert!(result.is_err(), "non-admin initialized a market");
+}
+
+#[test]
+fn disabled_admin_cannot_initialize_market() {
+    let payer = Keypair::new();
+    let mut svm = LiteSVM::new();
+
+    svm.add_program(tidebook::id(), PROGRAM_BYTES).unwrap();
+    svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
+    store_admin_record(
+        &mut svm,
+        payer.pubkey(),
+        tidebook::state::AdminStatus::Disabled,
+    );
+
+    let base_mint = create_test_mint(&mut svm, 9);
+    let quote_mint = create_test_mint(&mut svm, 6);
+
+    let (_, result) = send_initialize_market(&mut svm, &payer, base_mint, quote_mint);
+
+    assert!(result.is_err(), "disabled admin initialized a market");
 }

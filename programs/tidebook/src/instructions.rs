@@ -1,15 +1,19 @@
+pub mod add_admin;
 pub mod close;
 pub mod initialize;
+pub mod initialize_protocol;
+pub mod manage_admin;
 pub mod pause;
 pub mod place_limit_order;
+pub mod remove_admin;
 pub mod unpause;
-pub mod add_admin;
-pub mod initialize_protocol;
 
+pub use add_admin::*;
 pub use close::*;
 pub use initialize::*;
+pub use initialize_protocol::*;
+pub use manage_admin::*;
 pub use pause::*;
 pub use place_limit_order::*;
+pub use remove_admin::*;
 pub use unpause::*;
-pub use add_admin::*;
-pub use initialize_protocol::*;
