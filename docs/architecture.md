@@ -107,6 +107,10 @@ program ID. Reversing the pair produces a different address.
 | `quote_mint` | Validated, distinct SPL Token mint used to price the base asset |
 | `status` | `Active` or `Paused` |
 | `next_order_id` | Monotonic identifier assigned to the next order; begins at `1` |
+| `base_decimals` | Decimal precision read from the base SPL mint during initialization |
+| `quote_decimals` | Decimal precision read from the quote SPL mint during initialization |
+| `price_tick_size` | Smallest permitted price increment, expressed in raw price units |
+| `quantity_lot_size` | Smallest permitted quantity increment, expressed in base-mint atoms |
 | `best_bid` | Reserved summary field; currently initialized to `None` and not maintained |
 | `best_ask` | Reserved summary field; currently initialized to `None` and not maintained |
 | `bump` | Canonical market PDA bump |
@@ -123,8 +127,8 @@ seeds = ["order", market, order_id.to_le_bytes()]
 | `market` | Market to which the order belongs |
 | `order_id` | Market-local monotonic order number |
 | `side` | `Bid` or `Ask` |
-| `price` | Raw integer limit price; must be greater than zero |
-| `quantity` | Original raw integer quantity; must be greater than zero |
+| `price` | Quote-mint atoms per one whole base token; must be nonzero and aligned to the market tick size |
+| `quantity` | Base-mint atoms; must be nonzero and aligned to the market lot size |
 | `remaining_quantity` | Unfilled quantity; initially equals `quantity` |
 | `status` | Initially `Open`; the owner can transition it to `Canceled`; `Filled` is modeled but not transitioned yet |
 | `bump` | Canonical order PDA bump |
@@ -141,11 +145,11 @@ therefore also provides insertion order that can later support FIFO priority.
 | `disable_admin` | Super-admin | Signer matches config; target is active and is not the super-admin | `Active -> Disabled` |
 | `enable_admin` | Super-admin | Signer matches config; target is disabled | `Disabled -> Active` |
 | `remove_admin` | Super-admin | Signer matches config; target is disabled | Closes the admin record |
-| `initialize_market` | Active admin | Admin record belongs to signer, is canonical and active; both accounts deserialize as SPL mints; base and quote differ; market PDA is canonical | Creates an active market with `next_order_id = 1` |
+| `initialize_market` | Active admin | Admin record belongs to signer, is canonical and active; both accounts deserialize as SPL mints; base and quote differ; tick and lot sizes are nonzero; market PDA is canonical | Creates an active market with mint decimals, price configuration, and `next_order_id = 1` |
 | `pause_market` | Market authority | `has_one = authority`; market is active | `Active -> Paused` |
 | `unpause_market` | Market authority | `has_one = authority`; market is paused | `Paused -> Active` |
 | `close_market` | Market authority | `has_one = authority`; market is paused | Closes the market account and returns rent to the authority |
-| `place_limit_order` | Trader | Market is active; price and quantity are nonzero; order PDA is canonical | Creates an open order and increments `next_order_id` |
+| `place_limit_order` | Trader | Market is active; price and quantity are nonzero and aligned to its tick/lot sizes; checked notional is at least one quote atom; order PDA is canonical | Creates an open order and increments `next_order_id` |
 | `cancel_limit_order` | Order owner | Order PDA belongs to the supplied market and signer; order status is `Open` | `Open -> Canceled` while preserving `remaining_quantity` |
 
 ### Market initialization flow
@@ -153,12 +157,14 @@ therefore also provides insertion order that can later support FIFO priority.
 ```text
 Authority
    |
-   | initialize_market(base mint, quote mint)
+   | initialize_market(base mint, quote mint, tick size, lot size)
    v
 Anchor account validation
    |-- base account is an SPL Mint
    |-- quote account is an SPL Mint
    |-- base mint != quote mint
+   |-- tick size > 0
+   |-- lot size > 0
    |-- market PDA matches the ordered pair
    v
 Market PDA created as Active
@@ -172,6 +178,9 @@ Trader
    | place_limit_order(side, price, quantity)
    v
 Validate active Market + nonzero values
+   |-- price % price_tick_size == 0
+   |-- quantity % quantity_lot_size == 0
+   |-- checked quote notional > 0
    |
    | derive ["order", market, next_order_id]
    v
@@ -184,6 +193,30 @@ Increment Market.next_order_id
 This operation is atomic: if account creation or validation fails, the market
 counter and order state are not committed.
 
+### Fixed-point price model
+
+Tidebook does not use floating-point values on-chain. An order price represents
+quote-mint atoms per one whole base token, while quantity represents base-mint
+atoms. Their human-readable forms are:
+
+```text
+human_price    = price / 10^quote_decimals
+human_quantity = quantity / 10^base_decimals
+```
+
+The quote notional used for validation is calculated with checked `u128`
+arithmetic:
+
+```text
+quote_notional_atoms = price * quantity / 10^base_decimals
+```
+
+Integer division rounds down. Orders that round below one quote-mint atom are
+rejected. For a base mint with 9 decimals and quote mint with 6 decimals, a
+price of `100_000_000` represents `100.000000` quote tokens per base token, and
+a quantity of `5_000_000` represents `0.005000000` base tokens. Their notional
+is `500_000` quote atoms, or `0.500000` quote tokens.
+
 ## 5. Current invariants
 
 The program currently enforces:
@@ -195,13 +228,17 @@ The program currently enforces:
 5. A market must be active to accept a new order.
 6. A market must be paused before it can be closed.
 7. Price and quantity must both be nonzero.
-8. An order ID is allocated only by incrementing its market's counter.
-9. Only the configured super-admin can manage administrator records.
-10. The super-admin cannot disable its own admin record.
-11. An administrator must be disabled before its record can be removed.
-12. Only a signer with its canonical active admin record can initialize a market.
-13. Only the stored order owner can cancel an order.
-14. Only an `Open` order can transition to `Canceled`.
+8. Market tick and lot sizes must both be nonzero.
+9. Order prices must be exact multiples of the market tick size.
+10. Order quantities must be exact multiples of the market lot size.
+11. Checked order notional must be at least one quote-mint atom.
+12. An order ID is allocated only by incrementing its market's counter.
+13. Only the configured super-admin can manage administrator records.
+14. The super-admin cannot disable its own admin record.
+15. An administrator must be disabled before its record can be removed.
+16. Only a signer with its canonical active admin record can initialize a market.
+17. Only the stored order owner can cancel an order.
+18. Only an `Open` order can transition to `Canceled`.
 
 ## 6. Known architectural gaps
 
@@ -209,7 +246,6 @@ These are planned features, not defects in the current research milestone:
 
 - No trader token-account validation or asset custody.
 - No base or quote vault PDAs.
-- No tick-size, lot-size, overflow, or notional-value rules.
 - No price-level accounts or FIFO order queues.
 - No matching engine or partial-fill transitions.
 - No settlement or fee accounting.
@@ -237,7 +273,7 @@ The test harness:
 5. sends transactions through LiteSVM;
 6. deserializes resulting Anchor accounts and checks state.
 
-The 25-test suite currently covers:
+The 31-test suite currently covers:
 
 - upgrade-authority-only, one-time protocol initialization;
 - creation of the deployer's config and active admin record;
@@ -255,6 +291,10 @@ The 25-test suite currently covers:
 - owner-only cancellation of open orders;
 - rejection of repeated cancellation and mismatched markets;
 - cancellation while the market is paused.
+- persistence of mint decimals, tick size, and lot size;
+- rejection of zero tick and lot sizes;
+- rejection of off-tick prices and off-lot quantities;
+- rejection of orders whose notional rounds below one quote atom.
 
 ## 8. Dependency boundary
 
@@ -267,13 +307,12 @@ public APIs exchange concrete `Address`, `Message`, `Transaction`, `Signer`, and
 
 The recommended implementation order is:
 
-1. Define price ticks, quantity lots, and checked arithmetic rules.
-2. Add market vault authorities and base/quote token vaults.
-3. Lock the correct asset when a bid or ask is placed.
-4. Add price-level accounts and FIFO queues.
-5. Implement deterministic matching and partial fills.
-6. Settle base/quote transfers and fees.
-7. Add safe market shutdown, order cleanup, and withdrawal rules.
+1. Add market vault authorities and base/quote token vaults.
+2. Lock the correct asset when a bid or ask is placed.
+3. Add price-level accounts and FIFO queues.
+4. Implement deterministic matching and partial fills.
+5. Settle base/quote transfers and fees.
+6. Add safe market shutdown, order cleanup, and withdrawal rules.
 
 Each phase should add its invariants and failure-path tests before the next
 state transition is introduced.

@@ -44,6 +44,28 @@ pub fn handle_place_limit_order(
     let market = &mut ctx.accounts.market;
     let order = &mut ctx.accounts.order;
 
+    require!(
+        price % market.price_tick_size == 0,
+        MarketError::PriceNotOnTick
+    );
+
+    require!(
+        quantity % market.quantity_lot_size == 0,
+        MarketError::QuantityNotOnLot
+    );
+
+    let base_scale = 10_u128
+        .checked_pow(u32::from(market.base_decimals))
+        .ok_or(MarketError::OrderNotionalOverflow)?;
+
+    let quote_notional = u128::from(price)
+        .checked_mul(u128::from(quantity))
+        .ok_or(MarketError::OrderNotionalOverflow)?
+        .checked_div(base_scale)
+        .ok_or(MarketError::OrderNotionalOverflow)?;
+
+    require!(quote_notional > 0, MarketError::OrderNotionalTooSmall);
+
     order.owner = ctx.accounts.trader.key();
     order.market = market.key();
     order.order_id = market.next_order_id;

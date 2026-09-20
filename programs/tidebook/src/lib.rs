@@ -16,8 +16,16 @@ pub mod tidebook {
     use super::*;
 
     //Initialize a new Market Pair
-    pub fn initialize_market(ctx: Context<InitializeMarket>) -> Result<()> {
-        crate::instructions::initialize::handle_initialize_market(ctx)
+    pub fn initialize_market(
+        ctx: Context<InitializeMarket>,
+        price_tick_size: u64,
+        quantity_lot_size: u64,
+    ) -> Result<()> {
+        crate::instructions::initialize::handle_initialize_market(
+            ctx,
+            price_tick_size,
+            quantity_lot_size,
+        )
     }
 
     pub fn pause_market(ctx: Context<PauseMarket>) -> Result<()> {

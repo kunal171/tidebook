@@ -77,4 +77,22 @@ pub enum MarketError {
 
     #[msg("Only an open order can be canceled")]
     OrderNotOpen,
+
+    #[msg("Price tick size must be greater than zero")]
+    InvalidPriceTickSize,
+
+    #[msg("Quantity lot size must be greater than zero")]
+    InvalidQuantityLotSize,
+
+    #[msg("Price must be a multiple of the market tick size")]
+    PriceNotOnTick,
+
+    #[msg("Quantity must be a multiple of the market lot size")]
+    QuantityNotOnLot,
+
+    #[msg("Order notional arithmetic overflow")]
+    OrderNotionalOverflow,
+
+    #[msg("Order notional is below one quote-mint unit")]
+    OrderNotionalTooSmall,
 }

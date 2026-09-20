@@ -50,12 +50,23 @@ pub struct InitializeMarket<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn handle_initialize_market(ctx: Context<InitializeMarket>) -> Result<()> {
+pub fn handle_initialize_market(
+    ctx: Context<InitializeMarket>,
+    price_tick_size: u64,
+    quantity_lot_size: u64,
+) -> Result<()> {
+    require!(price_tick_size > 0, MarketError::InvalidPriceTickSize);
+    require!(quantity_lot_size > 0, MarketError::InvalidQuantityLotSize);
+
     let market = &mut ctx.accounts.market;
 
     market.authority = ctx.accounts.authority.key();
     market.base_mint = ctx.accounts.base_mint.key();
     market.quote_mint = ctx.accounts.quote_mint.key();
+    market.base_decimals = ctx.accounts.base_mint.decimals;
+    market.quote_decimals = ctx.accounts.quote_mint.decimals;
+    market.price_tick_size = price_tick_size;
+    market.quantity_lot_size = quantity_lot_size;
     market.status = MarketStatus::Active;
     market.next_order_id = 1;
     market.best_bid = None;
