@@ -33,6 +33,12 @@ pub enum OrderStatus {
     Canceled,
 }
 
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace, Debug)]
+pub enum AdminStatus {
+    Active,
+    Disabled,
+}
+
 #[account]
 #[derive(InitSpace)]
 pub struct Order {
@@ -44,5 +50,23 @@ pub struct Order {
     pub quantity: u64,
     pub remaining_quantity: u64,
     pub status: OrderStatus,
+    pub bump: u8,
+}
+
+// Create one super admin on initialization.
+#[account]
+#[derive(InitSpace)]
+pub struct ProtocolConfig {
+    pub super_admin: Pubkey,
+    pub bump: u8,
+}
+
+// Administrator record for market control.
+#[account]
+#[derive(InitSpace)]
+pub struct AdminRecord {
+    pub authority: Pubkey,
+    pub added_by: Pubkey,
+    pub status: AdminStatus,
     pub bump: u8,
 }

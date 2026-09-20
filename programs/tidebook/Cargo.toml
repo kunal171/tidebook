@@ -31,6 +31,8 @@ solana-transaction = "=4.1.6"
 solana-signer = "=3.0.1"
 solana-keypair = "=3.1.2"
 solana-account = "=4.3.2"
+solana-loader-v3-interface = { version = "=8.0.1", features = ["wincode"] }
+wincode = "=0.5.5"
 
 
 [lints.rust]

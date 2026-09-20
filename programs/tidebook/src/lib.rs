@@ -39,4 +39,24 @@ pub mod tidebook {
     pub fn close_market(ctx: Context<CloseMarket>) -> Result<()> {
         crate::instructions::close::handle_close_market(ctx)
     }
+
+    pub fn initialize_protocol(ctx: Context<InitializeProtocol>) -> Result<()> {
+        crate::instructions::initialize_protocol::handle_initialize_protocol(ctx)
+    }
+
+    pub fn add_admin(ctx: Context<AddAdmin>, new_admin: Pubkey) -> Result<()> {
+        crate::instructions::add_admin::handle_add_admin(ctx, new_admin)
+    }
+
+    pub fn disable_admin(ctx: Context<ManageAdmin>, target_admin: Pubkey) -> Result<()> {
+        crate::instructions::manage_admin::handle_disable_admin(ctx, target_admin)
+    }
+
+    pub fn enable_admin(ctx: Context<ManageAdmin>, target_admin: Pubkey) -> Result<()> {
+        crate::instructions::manage_admin::handle_enable_admin(ctx, target_admin)
+    }
+
+    pub fn remove_admin(ctx: Context<RemoveAdmin>, target_admin: Pubkey) -> Result<()> {
+        crate::instructions::remove_admin::handle_remove_admin(ctx, target_admin)
+    }
 }
