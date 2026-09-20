@@ -15,6 +15,7 @@ import {
   accountExplorerUrl,
   decodeMarketStatus,
   deriveOrderPda,
+  formatAtomicAmount,
   getTidebookAccounts,
   getTidebookProgram,
   getTidebookReadProgram,
@@ -128,7 +129,19 @@ export function MarketDetail({ address }: { address: string }) {
       }
 
       const rawPrice = parsePositiveU64(price, "Price");
+      if (!rawPrice.mod(market.priceTickSize).isZero()) {
+        throw new Error(
+          `Price must be a multiple of ${market.priceTickSize.toString()}`,
+        );
+      }
+
       const rawQuantity = parsePositiveU64(quantity, "Quantity");
+      if (!rawQuantity.mod(market.quantityLotSize).isZero()) {
+        throw new Error(
+          `Quantity must be a multiple of ${market.quantityLotSize.toString()}`,
+        );
+      }
+
       const order = deriveOrderPda(marketAddress, market.nextOrderId);
       const orderSide = side === "bid" ? { bid: {} } : { ask: {} };
 
@@ -154,6 +167,17 @@ export function MarketDetail({ address }: { address: string }) {
   };
 
   const status = market ? decodeMarketStatus(market.status) : null;
+  const pricePreview = useMemo(() => {
+    if (!market || !/^[0-9]+$/.test(price.trim())) return null;
+    return formatAtomicAmount(new BN(price.trim(), 10), market.quoteDecimals);
+  }, [market, price]);
+  const quantityPreview = useMemo(() => {
+    if (!market || !/^[0-9]+$/.test(quantity.trim())) return null;
+    return formatAtomicAmount(
+      new BN(quantity.trim(), 10),
+      market.baseDecimals,
+    );
+  }, [market, quantity]);
 
   return (
     <div className="app-shell">
@@ -211,6 +235,34 @@ export function MarketDetail({ address }: { address: string }) {
                     <dt>Best ask</dt>
                     <dd>{market.bestAsk?.toString() ?? "Not maintained"}</dd>
                   </div>
+                  <div>
+                    <dt>Base decimals</dt>
+                    <dd>{market.baseDecimals}</dd>
+                  </div>
+                  <div>
+                    <dt>Quote decimals</dt>
+                    <dd>{market.quoteDecimals}</dd>
+                  </div>
+                  <div>
+                    <dt>Price tick</dt>
+                    <dd>
+                      {market.priceTickSize.toString()} raw (
+                      {formatAtomicAmount(
+                        market.priceTickSize,
+                        market.quoteDecimals,
+                      )} quote)
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Quantity lot</dt>
+                    <dd>
+                      {market.quantityLotSize.toString()} raw (
+                      {formatAtomicAmount(
+                        market.quantityLotSize,
+                        market.baseDecimals,
+                      )} base)
+                    </dd>
+                  </div>
                 </dl>
 
                 <a
@@ -264,6 +316,11 @@ export function MarketDetail({ address }: { address: string }) {
                         placeholder="100"
                         autoComplete="off"
                       />
+                      <small>
+                        {pricePreview === null
+                          ? `Tick: ${market.priceTickSize.toString()} raw units`
+                          : `${pricePreview} quote tokens per base token`}
+                      </small>
                     </label>
 
                     <label>
@@ -275,6 +332,11 @@ export function MarketDetail({ address }: { address: string }) {
                         placeholder="5"
                         autoComplete="off"
                       />
+                      <small>
+                        {quantityPreview === null
+                          ? `Lot: ${market.quantityLotSize.toString()} raw units`
+                          : `${quantityPreview} base tokens`}
+                      </small>
                     </label>
 
                     <button

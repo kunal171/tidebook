@@ -62,6 +62,12 @@ export interface MarketAccount {
   quoteMint: PublicKey;
   status: { active?: object; paused?: object };
   nextOrderId: BN;
+
+  baseDecimals: number;
+  quoteDecimals: number;
+  priceTickSize: BN;
+  quantityLotSize: BN;
+
   bestBid: BN | null;
   bestAsk: BN | null;
   bump: number;
@@ -182,6 +188,18 @@ export function decodeOrderStatus(
   if ("open" in status) return "open";
   if ("filled" in status) return "filled";
   return "canceled";
+}
+
+export function formatAtomicAmount(value: BN, decimals: number) {
+  const raw = value.toString(10);
+
+  if (decimals === 0) return raw;
+
+  const padded = raw.padStart(decimals + 1, "0");
+  const whole = padded.slice(0, -decimals);
+  const fraction = padded.slice(-decimals).replace(/0+$/, "");
+
+  return fraction ? `${whole}.${fraction}` : whole;
 }
 
 export function transactionExplorerUrl(signature: string) {

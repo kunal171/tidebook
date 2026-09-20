@@ -22,6 +22,10 @@ const PROGRAM_BYTES: &[u8] = include_bytes!(concat!(
 ));
 
 const ORDER_ID: u64 = 1;
+const TEST_PRICE_TICK_SIZE: u64 = 10_000;
+const TEST_QUANTITY_LOT_SIZE: u64 = 1_000_000;
+const TEST_ORDER_PRICE: u64 = 100_000_000;
+const TEST_ORDER_QUANTITY: u64 = 5_000_000;
 
 fn send_instruction(
     svm: &mut LiteSVM,
@@ -109,7 +113,11 @@ fn initialize_market(svm: &mut LiteSVM, authority: &Keypair) -> Pubkey {
     );
     let instruction = Instruction::new_with_bytes(
         tidebook::id(),
-        &tidebook::instruction::InitializeMarket {}.data(),
+        &tidebook::instruction::InitializeMarket {
+            price_tick_size: TEST_PRICE_TICK_SIZE,
+            quantity_lot_size: TEST_QUANTITY_LOT_SIZE,
+        }
+        .data(),
         tidebook::accounts::InitializeMarket {
             authority: authority.pubkey(),
             admin_record,
@@ -139,8 +147,8 @@ fn place_order(svm: &mut LiteSVM, owner: &Keypair, market: Pubkey, order_id: u64
         tidebook::id(),
         &tidebook::instruction::PlaceLimitOrder {
             side: OrderSide::Bid,
-            price: 100,
-            quantity: 5,
+            price: TEST_ORDER_PRICE,
+            quantity: TEST_ORDER_QUANTITY,
         }
         .data(),
         tidebook::accounts::PlaceLimitOrder {
@@ -211,7 +219,7 @@ fn owner_cancels_open_order() {
     assert!(result.is_ok(), "order cancellation failed: {result:?}");
     let state = load_order(&svm, order);
     assert_eq!(state.status, OrderStatus::Canceled);
-    assert_eq!(state.remaining_quantity, 5);
+    assert_eq!(state.remaining_quantity, TEST_ORDER_QUANTITY);
 }
 
 #[test]

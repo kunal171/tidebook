@@ -9,15 +9,23 @@ pub use constants::*;
 pub use instructions::*;
 pub use state::*;
 
-declare_id!("Honq7kkNfptR6XF5H4zn2jWqSmNRsteCpGwB8iG393cR");
+declare_id!("BPdNF5CnV8z1EkHo7tcueR6wXmzZV2j6j4wsUTirPgWL");
 
 #[program]
 pub mod tidebook {
     use super::*;
 
     //Initialize a new Market Pair
-    pub fn initialize_market(ctx: Context<InitializeMarket>) -> Result<()> {
-        crate::instructions::initialize::handle_initialize_market(ctx)
+    pub fn initialize_market(
+        ctx: Context<InitializeMarket>,
+        price_tick_size: u64,
+        quantity_lot_size: u64,
+    ) -> Result<()> {
+        crate::instructions::initialize::handle_initialize_market(
+            ctx,
+            price_tick_size,
+            quantity_lot_size,
+        )
     }
 
     pub fn pause_market(ctx: Context<PauseMarket>) -> Result<()> {

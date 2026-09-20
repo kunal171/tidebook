@@ -1,5 +1,5 @@
 {
-  "address": "Honq7kkNfptR6XF5H4zn2jWqSmNRsteCpGwB8iG393cR",
+  "address": "BPdNF5CnV8z1EkHo7tcueR6wXmzZV2j6j4wsUTirPgWL",
   "metadata": {
     "name": "tidebook",
     "version": "0.1.0",
@@ -417,7 +417,16 @@
           "address": "11111111111111111111111111111111"
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "price_tick_size",
+          "type": "u64"
+        },
+        {
+          "name": "quantity_lot_size",
+          "type": "u64"
+        }
+      ]
     },
     {
       "name": "initialize_protocol",
@@ -489,7 +498,7 @@
         },
         {
           "name": "program",
-          "address": "Honq7kkNfptR6XF5H4zn2jWqSmNRsteCpGwB8iG393cR"
+          "address": "BPdNF5CnV8z1EkHo7tcueR6wXmzZV2j6j4wsUTirPgWL"
         },
         {
           "name": "program_data"
@@ -886,6 +895,36 @@
       "code": 6024,
       "name": "OrderNotOpen",
       "msg": "Only an open order can be canceled"
+    },
+    {
+      "code": 6025,
+      "name": "InvalidPriceTickSize",
+      "msg": "Price tick size must be greater than zero"
+    },
+    {
+      "code": 6026,
+      "name": "InvalidQuantityLotSize",
+      "msg": "Quantity lot size must be greater than zero"
+    },
+    {
+      "code": 6027,
+      "name": "PriceNotOnTick",
+      "msg": "Price must be a multiple of the market tick size"
+    },
+    {
+      "code": 6028,
+      "name": "QuantityNotOnLot",
+      "msg": "Quantity must be a multiple of the market lot size"
+    },
+    {
+      "code": 6029,
+      "name": "OrderNotionalOverflow",
+      "msg": "Order notional arithmetic overflow"
+    },
+    {
+      "code": 6030,
+      "name": "OrderNotionalTooSmall",
+      "msg": "Order notional is below one quote-mint unit"
     }
   ],
   "types": [
@@ -958,6 +997,22 @@
           },
           {
             "name": "next_order_id",
+            "type": "u64"
+          },
+          {
+            "name": "base_decimals",
+            "type": "u8"
+          },
+          {
+            "name": "quote_decimals",
+            "type": "u8"
+          },
+          {
+            "name": "price_tick_size",
+            "type": "u64"
+          },
+          {
+            "name": "quantity_lot_size",
             "type": "u64"
           },
           {

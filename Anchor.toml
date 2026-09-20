@@ -8,11 +8,11 @@ solana_version = "4.1.2"
 resolution = true
 skip-lint = false
 
-[programs.localnet]
-tidebook = "Honq7kkNfptR6XF5H4zn2jWqSmNRsteCpGwB8iG393cR"
-
 [programs.devnet]
-tidebook = "Honq7kkNfptR6XF5H4zn2jWqSmNRsteCpGwB8iG393cR"
+tidebook = "BPdNF5CnV8z1EkHo7tcueR6wXmzZV2j6j4wsUTirPgWL"
+
+[programs.localnet]
+tidebook = "BPdNF5CnV8z1EkHo7tcueR6wXmzZV2j6j4wsUTirPgWL"
 
 [provider]
 cluster = "devnet"

@@ -8,11 +8,14 @@ production configuration.
 
 | Account | Address | Notes |
 | --- | --- | --- |
-| Tidebook program | `Honq7kkNfptR6XF5H4zn2jWqSmNRsteCpGwB8iG393cR` | Upgradeable devnet program |
-| ProgramData | `4419TJGH2EMxFhpfpz1CANZrvyxirCjRbjMEMJeAhzPt` | Upgradeable loader metadata and program data |
+| Tidebook program | `BPdNF5CnV8z1EkHo7tcueR6wXmzZV2j6j4wsUTirPgWL` | Current upgradeable devnet program |
+| ProgramData | `HvXrEzK1NeTQg3PhRsVFXPyshAe6mj4L5PwK132xn26g` | Upgradeable loader metadata and program data |
 | Upgrade authority | `BX6RJHGbi7msj7t1ECCX6T1ZvvetHDK6UkjzAhPfWngq` | Protocol deployer and super-admin |
-| Protocol config PDA | `Gymt28bxrkXFxXnNhnbFgW34oP91u6r7iRgKMKTTF7XH` | Seeds: `["protocol_config"]` |
-| Super-admin record PDA | `DXLqsoioXX157XFgSZLv5gNR5bvbKkfNtbdSf6Fa7QE6` | Seeds: `["admin", upgrade_authority]` |
+| Protocol config PDA | `4zjC2AkEeCqWAc2Hbytt9envB4VP8EYtz9vGk9MFvUsP` | Seeds: `["protocol_config"]` |
+| Super-admin record PDA | `6hMnArFtd6UigUTtBW5283v1PEJps2ofUfJRozuKNtcJ` | Seeds: `["admin", upgrade_authority]` |
+
+Governance initialization transaction:
+`55rkrHeyYcVksfVxmpChDbSEfuuDAsSyFkWPd7StyKUQQ1VWmmFuYuTHBZVgTXsSm9xsTag8RDtKsdpQ32renNNM`.
 
 ## Test token mints
 
@@ -39,10 +42,29 @@ Mint authority for both test assets:
 
 | Pair | Market PDA | Status | Creation transaction |
 | --- | --- | --- | --- |
-| `tBTC/tUSDT` | `DMkKmZ44C8rvA4z2PeGDYmj73HHeCfXbBCVDPqCA9ecb` | Active | `24T3QZuGX6qvZPbLYQgHgvinYvxiR8qpQNq7yZ2fmeaiKsNXffGpoujYC6KRab5tj82kydmjTYN5wTbDCMZthWuw` |
+| `tBTC/tUSDT` | `9t1vydxLFBzUFrh5v7CE4nPgu46v4Nk7uPFcPmk69kqa` | Active; tick `10000`, lot `100000` | `4jNDzMMnHYx8v6C5yWT5KzCKPQu43kWZ2Xmt75YiFTGsc5XYj2BcmQLipM8X5SPBmtSDHVm6G9gjK5AVm9enqE4M` |
 
 The PDA uses the ordered seeds `["market", tBTC_mint, tUSDT_mint]`. Reversing
 the mint order produces a different market address.
+
+### Price-model smoke order
+
+| Account/action | Address or transaction |
+| --- | --- |
+| Order PDA (`#1`) | `ALqkALSYnBxvNSYGAMwQqocB3EH2hEFCeWzP44zvGg8k` |
+| Place order | `2cXeTxAuc4VP2vwzpnXHzKhKbNuxvoUQAhDEYpdLRk85EwP7dPwy4wS5bBPrPYLz6g8aJUofYX5Ed9XUkBmPvygo` |
+| Cancel order | `237sGm5DnC9zs3w4RFxyujKNEZMCrNvf97FvcuJwgJsh6TLEYQGUhA4ZK85VmfbZjVBevCz4dacXPt6aCcGGJave` |
+
+The smoke order used price `67250120000` and quantity `100000`. Its final
+on-chain status is `Canceled`. Separate simulations confirmed that off-tick and
+off-lot values fail with `PriceNotOnTick` and `QuantityNotOnLot`.
+
+## Legacy deployment
+
+Program `Honq7kkNfptR6XF5H4zn2jWqSmNRsteCpGwB8iG393cR` and market
+`DMkKmZ44C8rvA4z2PeGDYmj73HHeCfXbBCVDPqCA9ecb` use the earlier market account
+layout. They are retained only as devnet research history and are unsupported by
+the current application IDL.
 
 ## Maintenance rules
 
