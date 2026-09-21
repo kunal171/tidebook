@@ -19,6 +19,7 @@ export const ORDER_SEED = "order";
 export const VAULT_AUTHORITY_SEED = "vault-authority";
 export const VAULT_SEED = "vault";
 
+// Markets currently use the original SPL Token program, not Token-2022.
 export const TOKEN_PROGRAM_ID = new PublicKey(
   "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
 );
@@ -119,6 +120,8 @@ interface TidebookAccounts {
 }
 
 export function deriveVaultAuthorityPda(market: PublicKey) {
+  // This PDA has no account data; it exists only as the signing authority for
+  // both token vaults belonging to the market.
   return PublicKey.findProgramAddressSync(
     [Buffer.from(VAULT_AUTHORITY_SEED), market.toBuffer()],
     PROGRAM_ID,
@@ -126,6 +129,7 @@ export function deriveVaultAuthorityPda(market: PublicKey) {
 }
 
 export function deriveVaultPda(market: PublicKey, mint: PublicKey) {
+  // Including the mint gives each market exactly one canonical vault per asset.
   return PublicKey.findProgramAddressSync(
     [
       Buffer.from(VAULT_SEED),

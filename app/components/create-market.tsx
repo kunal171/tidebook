@@ -73,6 +73,8 @@ export function CreateMarket() {
       const tickSize = parsePositiveU64(priceTickSize, "Price tick size");
       const lotSize = parsePositiveU64(quantityLotSize, "Quantity lot size");
 
+      // Derive the same canonical account graph enforced by Anchor. The market
+      // and both vaults are created atomically by initialize_market.
       const market = deriveMarketPda(base, quote);
       const vaultAuthority = deriveVaultAuthorityPda(market);
       const baseVault = deriveVaultPda(market, base);

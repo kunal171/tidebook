@@ -82,6 +82,8 @@ export function MarketDetail({ address }: { address: string }) {
     () => (wallet ? getTidebookProgram(connection, wallet) : null),
     [connection, wallet],
   );
+  // Vault addresses are deterministic children of the market and mint, so the
+  // UI can link to them without storing extra addresses in the Market account.
   const baseVault =
     market && marketAddress
       ? deriveVaultPda(marketAddress, market.baseMint)
