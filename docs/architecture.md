@@ -14,9 +14,9 @@ The current implementation establishes the account and authorization foundation:
 - create deterministic limit-order accounts while atomically locking collateral;
 - validate behavior with in-process LiteSVM integration tests.
 
-It does **not** yet refund canceled orders, maintain sorted price levels, match
-opposing orders, or settle trades. Orders now hold collateral in market vaults,
-but the custody lifecycle is not complete until cancellation can refund it.
+It does **not** yet maintain sorted price levels, match opposing orders, or
+settle trades. Orders hold collateral in market vaults, and canceling an open
+order refunds its entire locked amount to an owner-controlled token account.
 
 ## 2. System context
 
@@ -170,7 +170,7 @@ therefore also provides insertion order that can later support FIFO priority.
 | `unpause_market` | Market authority | `has_one = authority`; market is paused | `Paused -> Active` |
 | `close_market` | Market authority | `has_one = authority`; market is paused | Closes the market account and returns rent to the authority |
 | `place_limit_order` | Trader | Market is active; price and quantity are aligned; notional is valid; trader owns the correctly minted token account; collateral vault is canonical; balance is sufficient | Transfers collateral, creates an open order, records the locked amount, and increments `next_order_id` atomically |
-| `cancel_limit_order` | Order owner | Order PDA belongs to the supplied market and signer; order status is `Open` | `Open -> Canceled` while preserving `remaining_quantity` |
+| `cancel_limit_order` | Order owner | Order belongs to the supplied market and signer; status is `Open`; refund account belongs to the owner and uses the side's collateral mint; vault is canonical | Refunds `locked_collateral`, sets it to zero, and transitions `Open -> Canceled` even while paused |
 
 ### Market initialization flow
 
@@ -226,6 +226,29 @@ Increment Market.next_order_id
 This operation is atomic: if account creation or validation fails, the market
 counter and order state are not committed.
 
+### Order cancellation flow
+
+```text
+Order owner
+   |
+   | cancel_limit_order(order_id)
+   v
+Validate ownership + Open status
+   |-- bid selects quote mint and quote vault
+   |-- ask selects base mint and base vault
+   |-- destination belongs to the order owner
+   |-- vault matches ["vault", market, collateral mint]
+   v
+Vault-authority PDA signs the collateral refund
+   |
+   v
+Set locked_collateral = 0 and status = Canceled
+```
+
+Cancellation deliberately has no active-market requirement, preserving the
+owner's exit path while a market is paused. Transfer and state changes are one
+atomic transaction, so a failed refund leaves the order open and funded.
+
 ### Fixed-point price model
 
 Tidebook does not use floating-point values on-chain. An order price represents
@@ -279,12 +302,14 @@ The program currently enforces:
 23. Bid orders lock their checked quote notional in quote-mint atoms.
 24. The collateral token account must belong to the trader and use the side's expected mint.
 25. Collateral transfer, order creation, and counter increment succeed or roll back together.
+26. Only an open order can refund collateral, preventing duplicate withdrawals.
+27. Cancellation refunds to an owner-controlled account of the correct mint.
+28. Refund transfer, collateral clearing, and cancellation status update are atomic.
 
 ## 6. Known architectural gaps
 
 These are planned features, not defects in the current research milestone:
 
-- Cancellation changes order status but does not yet refund locked collateral.
 - No price-level accounts or FIFO order queues.
 - No matching engine or partial-fill transitions.
 - No settlement or fee accounting.
@@ -312,7 +337,7 @@ The test harness:
 5. sends transactions through LiteSVM;
 6. deserializes resulting Anchor accounts and checks state.
 
-The 40-test suite currently covers:
+The 44-test suite currently covers:
 
 - upgrade-authority-only, one-time protocol initialization;
 - creation of the deployer's config and active admin record;
@@ -341,7 +366,12 @@ The 40-test suite currently covers:
 - persistence of the exact locked collateral amount;
 - rejection of the wrong collateral mint or token-account owner;
 - rejection of insufficient balances and noncanonical order vaults;
-- rollback of order state, counters, and token balances on failed placement.
+- rollback of order state, counters, and token balances on failed placement;
+- exact base and quote collateral refunds for ask and bid cancellation;
+- refunds while a market is paused;
+- rejection of wrong refund mints, owners, markets, and vaults;
+- atomic preservation of locked collateral after failed cancellation;
+- prevention of repeated cancellation and duplicate refunds.
 
 ## 8. Dependency boundary
 
@@ -354,12 +384,12 @@ public APIs exchange concrete `Address`, `Message`, `Transaction`, `Signer`, and
 
 The recommended implementation order is:
 
-1. Refund locked collateral when an open order is canceled.
-2. Prevent market closure while live orders or vault balances remain.
+1. Prevent market closure while live orders or vault balances remain.
+2. Close empty market vaults safely during final market shutdown.
 3. Add price-level accounts and FIFO queues.
 4. Implement deterministic matching and partial fills.
 5. Settle base/quote transfers and fees.
-6. Add safe market shutdown, vault closure, order cleanup, and withdrawal rules.
+6. Add order cleanup and rent-reclamation rules.
 
 Each phase should add its invariants and failure-path tests before the next
 state transition is introduced.
