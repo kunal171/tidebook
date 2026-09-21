@@ -10,11 +10,13 @@ built incrementally with Anchor, LiteSVM, and a companion web application.
 - Pause, unpause, and close markets under authority control.
 - Create deterministic bid and ask limit-order PDAs.
 - Enforce fixed-point price ticks, quantity lots, and nonzero quote notional.
+- Lock quote collateral for bids and base collateral for asks in canonical vaults.
 - Cancel open orders under owner control, including while a market is paused.
+- Refund collateral on cancellation and safely close empty, paused markets.
 - Exercise program behavior through LiteSVM integration tests.
 
-Token custody, price-level queues, matching, and settlement are planned
-milestones. Current orders record intent but do not lock assets.
+Price-level queues, matching, and settlement are planned milestones. Current
+orders lock assets but do not yet match or settle trades.
 
 ## Architecture
 

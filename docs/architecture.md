@@ -45,13 +45,15 @@ active on-chain record. Role-aware routes are:
 | Route | UI access | Purpose |
 | --- | --- | --- |
 | `/markets` | Public | Discover active and paused on-chain markets without connecting a wallet |
-| `/markets/[address]` | Public viewing; connected wallet for trading | Inspect one market and place bid or ask limit orders while it is active |
+| `/markets/[address]` | Public viewing; connected wallet for trading; market authority for lifecycle controls | Inspect one market, place collateralized orders while active, and pause, unpause, or safely close an authorized market |
 | `/admin` | Super-admin | Initialize governance and add, disable, enable, or remove admins |
 | `/markets/new` | Active admin or super-admin | Create a market for two SPL mints |
 | `/orders` | Any connected wallet | List wallet-owned orders and cancel orders whose status is `Open` |
 
-The orders page filters program accounts by the owner field, displays their
-market and order state, and refreshes the list after a confirmed cancellation.
+The order form discovers a wallet-owned token account for the required mint and
+passes the canonical vault accounts to the program. The orders page filters
+program accounts by owner, displays locked collateral, returns it to an owned
+token account during cancellation, and refreshes after confirmation.
 
 Route visibility is a user-interface concern, not an authorization boundary.
 Every privileged action must also be constrained by the Anchor program because
