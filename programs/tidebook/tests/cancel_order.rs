@@ -1,3 +1,6 @@
+//! LiteSVM integration coverage for owner-authorized order cancellation,
+//! including cancellation while a market is paused.
+
 use {
     anchor_lang::{
         prelude::Pubkey,

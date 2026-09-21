@@ -1,3 +1,6 @@
+//! LiteSVM integration coverage for market creation, canonical vaults, market
+//! lifecycle transitions, and limit-order validation.
+
 use {
     anchor_lang::{
         prelude::Pubkey,
@@ -23,6 +26,8 @@ const TEST_QUANTITY_LOT_SIZE: u64 = 1_000_000;
 const TEST_ORDER_PRICE: u64 = 100_000_000;
 const TEST_ORDER_QUANTITY: u64 = 5_000_000;
 
+/// Mirrors the program's canonical market custody graph for instruction setup
+/// and post-transaction assertions.
 fn derive_market_vault_addresses(
     program_id: &Pubkey,
     market: &Pubkey,
