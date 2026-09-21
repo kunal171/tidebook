@@ -20,6 +20,7 @@ import {
   getTidebookProgram,
   getTidebookReadProgram,
   transactionExplorerUrl,
+  deriveVaultPda,
   type MarketAccount,
   type OrderSide,
 } from "../lib/tidebook";
@@ -65,7 +66,6 @@ export function MarketDetail({ address }: { address: string }) {
     signature: string;
     order: PublicKey;
   } | null>(null);
-
   const marketAddress = useMemo(() => {
     try {
       return new PublicKey(address);
@@ -82,6 +82,17 @@ export function MarketDetail({ address }: { address: string }) {
     () => (wallet ? getTidebookProgram(connection, wallet) : null),
     [connection, wallet],
   );
+  // Vault addresses are deterministic children of the market and mint, so the
+  // UI can link to them without storing extra addresses in the Market account.
+  const baseVault =
+    market && marketAddress
+      ? deriveVaultPda(marketAddress, market.baseMint)
+      : null;
+
+  const quoteVault =
+    market && marketAddress
+      ? deriveVaultPda(marketAddress, market.quoteMint)
+      : null;
 
   const loadMarket = useCallback(async () => {
     if (!marketAddress) {
@@ -263,6 +274,35 @@ export function MarketDetail({ address }: { address: string }) {
                       )} base)
                     </dd>
                   </div>
+                  {baseVault && (
+                    <div>
+                      <dt>Base vault</dt>
+                      <dd>
+                        <a
+                          href={accountExplorerUrl(baseVault)}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {shortAddress(baseVault.toBase58())} ↗
+                        </a>
+                      </dd>
+                    </div>
+                  )}
+
+                  {quoteVault && (
+                    <div>
+                      <dt>Quote vault</dt>
+                      <dd>
+                        <a
+                          href={accountExplorerUrl(quoteVault)}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {shortAddress(quoteVault.toBase58())} ↗
+                        </a>
+                      </dd>
+                    </div>
+                  )}
                 </dl>
 
                 <a

@@ -1,3 +1,5 @@
+//! Pauses an active market under its stored market authority.
+
 use anchor_lang::prelude::*;
 
 use crate::{
@@ -5,7 +7,6 @@ use crate::{
     state::{Market, MarketStatus},
 };
 
-//Pause active Market Pair
 #[derive(Accounts)]
 pub struct PauseMarket<'info> {
     pub authority: Signer<'info>,

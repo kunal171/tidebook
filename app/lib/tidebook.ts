@@ -16,6 +16,13 @@ export const PROTOCOL_CONFIG_SEED = "protocol_config";
 export const ADMIN_SEED = "admin";
 export const MARKET_SEED = "market";
 export const ORDER_SEED = "order";
+export const VAULT_AUTHORITY_SEED = "vault-authority";
+export const VAULT_SEED = "vault";
+
+// Markets currently use the original SPL Token program, not Token-2022.
+export const TOKEN_PROGRAM_ID = new PublicKey(
+  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+);
 
 const BPF_LOADER_UPGRADEABLE_PROGRAM_ID = new PublicKey(
   "BPFLoaderUpgradeab1e11111111111111111111111",
@@ -110,6 +117,27 @@ interface TidebookAccounts {
   adminRecord: AccountClient<AdminRecordAccount>;
   market: AccountClient<MarketAccount>;
   order: AccountClient<OrderAccount>;
+}
+
+export function deriveVaultAuthorityPda(market: PublicKey) {
+  // This PDA has no account data; it exists only as the signing authority for
+  // both token vaults belonging to the market.
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(VAULT_AUTHORITY_SEED), market.toBuffer()],
+    PROGRAM_ID,
+  )[0];
+}
+
+export function deriveVaultPda(market: PublicKey, mint: PublicKey) {
+  // Including the mint gives each market exactly one canonical vault per asset.
+  return PublicKey.findProgramAddressSync(
+    [
+      Buffer.from(VAULT_SEED),
+      market.toBuffer(),
+      mint.toBuffer(),
+    ],
+    PROGRAM_ID,
+  )[0];
 }
 
 export function getTidebookProgram(connection: Connection, wallet: BrowserWallet) {

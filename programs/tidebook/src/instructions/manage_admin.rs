@@ -1,3 +1,7 @@
+//! Enables or disables administrator records under super-admin control.
+//!
+//! The super-admin record is protected from disabling to preserve governance.
+
 use anchor_lang::prelude::*;
 
 use crate::{

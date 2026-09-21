@@ -1,3 +1,5 @@
+//! Instruction modules and their public account-context re-exports.
+
 pub mod add_admin;
 pub mod cancel_limit_order;
 pub mod close;

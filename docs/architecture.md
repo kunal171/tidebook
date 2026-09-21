@@ -115,6 +115,24 @@ program ID. Reversing the pair produces a different address.
 | `best_ask` | Reserved summary field; currently initialized to `None` and not maintained |
 | `bump` | Canonical market PDA bump |
 
+### Market vault topology
+
+Each market is created with one PDA authority and two canonical SPL Token
+accounts. The authority PDA stores no account data; the program signs for it
+with its seeds when token transfers are added in a later milestone.
+
+```text
+vault authority = ["vault-authority", market]
+base vault      = ["vault", market, base_mint]
+quote vault     = ["vault", market, quote_mint]
+```
+
+The base vault's token mint is the market's base mint, and the quote vault's
+token mint is the market's quote mint. Both token accounts use the same vault
+authority and begin with a zero balance. Market and vault creation occur in one
+transaction, so a failed validation or account initialization leaves none of
+them behind.
+
 ### Order PDA
 
 ```text
@@ -145,7 +163,7 @@ therefore also provides insertion order that can later support FIFO priority.
 | `disable_admin` | Super-admin | Signer matches config; target is active and is not the super-admin | `Active -> Disabled` |
 | `enable_admin` | Super-admin | Signer matches config; target is disabled | `Disabled -> Active` |
 | `remove_admin` | Super-admin | Signer matches config; target is disabled | Closes the admin record |
-| `initialize_market` | Active admin | Admin record belongs to signer, is canonical and active; both accounts deserialize as SPL mints; base and quote differ; tick and lot sizes are nonzero; market PDA is canonical | Creates an active market with mint decimals, price configuration, and `next_order_id = 1` |
+| `initialize_market` | Active admin | Admin record belongs to signer, is canonical and active; both accounts deserialize as SPL mints; base and quote differ; tick and lot sizes are nonzero; market, vault authority, and vault PDAs are canonical | Atomically creates an active market and empty base/quote SPL Token vaults |
 | `pause_market` | Market authority | `has_one = authority`; market is active | `Active -> Paused` |
 | `unpause_market` | Market authority | `has_one = authority`; market is paused | `Paused -> Active` |
 | `close_market` | Market authority | `has_one = authority`; market is paused | Closes the market account and returns rent to the authority |
@@ -155,7 +173,7 @@ therefore also provides insertion order that can later support FIFO priority.
 ### Market initialization flow
 
 ```text
-Authority
+Active administrator
    |
    | initialize_market(base mint, quote mint, tick size, lot size)
    v
@@ -166,8 +184,14 @@ Anchor account validation
    |-- tick size > 0
    |-- lot size > 0
    |-- market PDA matches the ordered pair
+   |-- vault authority matches ["vault-authority", market]
+   |-- vaults match ["vault", market, mint]
    v
-Market PDA created as Active
+Create Market PDA as Active
+   |
+   |-- create empty base SPL Token vault
+   |-- create empty quote SPL Token vault
+   `-- set both token-account authorities to the vault-authority PDA
 ```
 
 ### Limit-order placement flow
@@ -239,13 +263,16 @@ The program currently enforces:
 16. Only a signer with its canonical active admin record can initialize a market.
 17. Only the stored order owner can cancel an order.
 18. Only an `Open` order can transition to `Canceled`.
+19. Every market is initialized atomically with its canonical base and quote vaults.
+20. Each vault is bound to the correct market mint and the shared vault-authority PDA.
+21. Newly initialized market vaults have zero token balances.
 
 ## 6. Known architectural gaps
 
 These are planned features, not defects in the current research milestone:
 
-- No trader token-account validation or asset custody.
-- No base or quote vault PDAs.
+- No trader token-account validation or collateral deposit flow.
+- Vault accounts exist, but order placement does not yet transfer or lock assets.
 - No price-level accounts or FIFO order queues.
 - No matching engine or partial-fill transitions.
 - No settlement or fee accounting.
@@ -273,7 +300,7 @@ The test harness:
 5. sends transactions through LiteSVM;
 6. deserializes resulting Anchor accounts and checks state.
 
-The 31-test suite currently covers:
+The 34-test suite currently covers:
 
 - upgrade-authority-only, one-time protocol initialization;
 - creation of the deployer's config and active admin record;
@@ -290,11 +317,14 @@ The 31-test suite currently covers:
 - persistence of the selected mint addresses;
 - owner-only cancellation of open orders;
 - rejection of repeated cancellation and mismatched markets;
-- cancellation while the market is paused.
+- cancellation while the market is paused;
 - persistence of mint decimals, tick size, and lot size;
 - rejection of zero tick and lot sizes;
 - rejection of off-tick prices and off-lot quantities;
-- rejection of orders whose notional rounds below one quote atom.
+- rejection of orders whose notional rounds below one quote atom;
+- canonical base/quote vault mints, shared authority, and zero balances;
+- atomic rollback when market initialization fails;
+- rejection of noncanonical vault accounts and duplicate market initialization.
 
 ## 8. Dependency boundary
 
@@ -307,12 +337,13 @@ public APIs exchange concrete `Address`, `Message`, `Transaction`, `Signer`, and
 
 The recommended implementation order is:
 
-1. Add market vault authorities and base/quote token vaults.
-2. Lock the correct asset when a bid or ask is placed.
-3. Add price-level accounts and FIFO queues.
-4. Implement deterministic matching and partial fills.
-5. Settle base/quote transfers and fees.
-6. Add safe market shutdown, order cleanup, and withdrawal rules.
+1. Add trader token-account validation and per-order collateral accounting.
+2. Lock quote tokens for bids and base tokens for asks in the market vaults.
+3. Refund unfilled collateral when an open order is canceled.
+4. Add price-level accounts and FIFO queues.
+5. Implement deterministic matching and partial fills.
+6. Settle base/quote transfers and fees.
+7. Add safe market shutdown, vault closure, order cleanup, and withdrawal rules.
 
 Each phase should add its invariants and failure-path tests before the next
 state transition is introduced.

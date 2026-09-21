@@ -1,6 +1,9 @@
+//! Program-specific errors for authorization, lifecycle, and order invariants.
+
 use anchor_lang::prelude::*;
 
-//Errors
+/// Stable program errors returned when an authorization, lifecycle, or order
+/// invariant is violated.
 #[error_code]
 pub enum MarketError {
     #[msg("Market is paused")]

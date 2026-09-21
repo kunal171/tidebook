@@ -1,3 +1,6 @@
+//! LiteSVM integration coverage for protocol initialization and administrator
+//! lifecycle authorization.
+
 use {
     anchor_lang::{
         prelude::Pubkey,
