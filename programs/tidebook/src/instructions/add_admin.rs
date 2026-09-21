@@ -1,3 +1,5 @@
+//! Creates an active administrator record under super-admin authorization.
+
 use anchor_lang::prelude::*;
 
 use crate::{

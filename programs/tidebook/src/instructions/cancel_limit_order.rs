@@ -1,3 +1,8 @@
+//! Cancels an open order while enforcing market membership and ownership.
+//!
+//! Market status is intentionally not checked so owners can cancel while a
+//! market is paused.
+
 use anchor_lang::prelude::*;
 
 use crate::{
@@ -30,6 +35,8 @@ pub struct CancelLimitOrder<'info> {
 pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64) -> Result<()> {
     let order = &mut ctx.accounts.order;
 
+    // Cancellation deliberately does not require an active market: owners
+    // must retain an exit path while trading is paused.
     require!(order.status == OrderStatus::Open, MarketError::OrderNotOpen);
 
     order.status = OrderStatus::Canceled;

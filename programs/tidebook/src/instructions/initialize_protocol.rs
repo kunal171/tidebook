@@ -1,3 +1,7 @@
+//! Bootstraps singleton governance from the program's upgrade authority.
+//!
+//! Initialization also creates the deployer's active administrator record.
+
 use anchor_lang::prelude::*;
 
 use crate::{

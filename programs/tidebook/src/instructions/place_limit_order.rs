@@ -1,3 +1,8 @@
+//! Validates and records a market-local limit order.
+//!
+//! This milestone records intent only; token collateral is not transferred or
+//! locked until the custody flow is implemented.
+
 use anchor_lang::prelude::*;
 
 use crate::{
@@ -54,6 +59,8 @@ pub fn handle_place_limit_order(
         MarketError::QuantityNotOnLot
     );
 
+    // Prices are quote atoms per whole base token, while quantities are base
+    // atoms. Dividing by the base scale converts their product to quote atoms.
     let base_scale = 10_u128
         .checked_pow(u32::from(market.base_decimals))
         .ok_or(MarketError::OrderNotionalOverflow)?;
@@ -76,6 +83,8 @@ pub fn handle_place_limit_order(
     order.status = OrderStatus::Open;
     order.bump = ctx.bumps.order;
 
+    // Increment only after the order is fully initialized. Solana transaction
+    // atomicity rolls both writes back if the instruction later fails.
     market.next_order_id += 1;
 
     Ok(())

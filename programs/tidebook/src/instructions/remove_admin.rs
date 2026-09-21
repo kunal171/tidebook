@@ -1,3 +1,7 @@
+//! Removes a disabled administrator record and returns its rent.
+//!
+//! Requiring the disabled state makes removal an explicit two-step transition.
+
 use anchor_lang::prelude::*;
 
 use crate::{

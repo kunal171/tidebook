@@ -1,3 +1,5 @@
+//! Reactivates a paused market under its stored market authority.
+
 use anchor_lang::prelude::*;
 
 use crate::{

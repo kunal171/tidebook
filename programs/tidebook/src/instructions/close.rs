@@ -1,3 +1,7 @@
+//! Closes a paused market account under its stored authority.
+//!
+//! Vault and live-order cleanup are not yet part of this research milestone.
+
 use anchor_lang::prelude::*;
 
 use crate::{
