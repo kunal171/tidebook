@@ -119,6 +119,7 @@ pub fn handle_initialize_market(
     market.next_order_id = 1;
     market.best_bid = None;
     market.best_ask = None;
+    market.open_order_count = 0;
     market.bump = ctx.bumps.market;
 
     Ok(())

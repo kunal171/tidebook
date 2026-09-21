@@ -133,6 +133,11 @@ pub fn handle_place_limit_order(
         MarketError::InsufficientCollateral
     );
 
+    let next_open_order_count = market
+        .open_order_count
+        .checked_add(1)
+        .ok_or(MarketError::OpenOrderCountOverflow)?;
+
     token::transfer_checked(
         CpiContext::new(
             ctx.accounts.token_program.key(),
@@ -161,6 +166,7 @@ pub fn handle_place_limit_order(
     // Increment only after the order is fully initialized. Solana transaction
     // atomicity rolls both writes back if the instruction later fails.
     market.next_order_id += 1;
+    market.open_order_count = next_open_order_count;
 
     Ok(())
 }

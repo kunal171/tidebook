@@ -17,6 +17,7 @@ use crate::{
 pub struct CancelLimitOrder<'info> {
     pub owner: Signer<'info>,
 
+    #[account(mut)]
     pub market: Account<'info, Market>,
 
     #[account(
@@ -97,6 +98,13 @@ pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64)
 
     let signer_seeds = &[vault_authority_seeds];
 
+    let next_open_order_count = ctx
+        .accounts
+        .market
+        .open_order_count
+        .checked_sub(1)
+        .ok_or(MarketError::OpenOrderCountUnderflow)?;
+
     token::transfer_checked(
         CpiContext::new_with_signer(
             ctx.accounts.token_program.key(),
@@ -114,6 +122,7 @@ pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64)
 
     order.locked_collateral = 0;
     order.status = OrderStatus::Canceled;
+    ctx.accounts.market.open_order_count = next_open_order_count;
 
     Ok(())
 }

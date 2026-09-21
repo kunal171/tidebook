@@ -107,4 +107,19 @@ pub enum MarketError {
 
     #[msg("Insufficient collateral balance")]
     InsufficientCollateral,
+
+    #[msg("Open-order counter overflow")]
+    OpenOrderCountOverflow,
+
+    #[msg("Open-order counter underflow")]
+    OpenOrderCountUnderflow,
+
+    #[msg("Market still contains open orders")]
+    MarketHasOpenOrders,
+
+    #[msg("Market vaults must be empty before closing")]
+    MarketVaultNotEmpty,
+
+    #[msg("Invalid market vault authority")]
+    InvalidVaultAuthority,
 }

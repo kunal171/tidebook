@@ -108,6 +108,7 @@ program ID. Reversing the pair produces a different address.
 | `quote_mint` | Validated, distinct SPL Token mint used to price the base asset |
 | `status` | `Active` or `Paused` |
 | `next_order_id` | Monotonic identifier assigned to the next order; begins at `1` |
+| `open_order_count` | Number of orders still eligible for matching or cancellation |
 | `base_decimals` | Decimal precision read from the base SPL mint during initialization |
 | `quote_decimals` | Decimal precision read from the quote SPL mint during initialization |
 | `price_tick_size` | Smallest permitted price increment, expressed in raw price units |
@@ -119,8 +120,8 @@ program ID. Reversing the pair produces a different address.
 ### Market vault topology
 
 Each market is created with one PDA authority and two canonical SPL Token
-accounts. The authority PDA stores no account data; the program signs for it
-with its seeds when token transfers are added in a later milestone.
+accounts. The authority PDA stores no account data; the program signs with its
+seeds for collateral deposits, cancellation refunds, and vault closure.
 
 ```text
 vault authority = ["vault-authority", market]
@@ -168,7 +169,7 @@ therefore also provides insertion order that can later support FIFO priority.
 | `initialize_market` | Active admin | Admin record belongs to signer, is canonical and active; both accounts deserialize as SPL mints; base and quote differ; tick and lot sizes are nonzero; market, vault authority, and vault PDAs are canonical | Atomically creates an active market and empty base/quote SPL Token vaults |
 | `pause_market` | Market authority | `has_one = authority`; market is active | `Active -> Paused` |
 | `unpause_market` | Market authority | `has_one = authority`; market is paused | `Paused -> Active` |
-| `close_market` | Market authority | `has_one = authority`; market is paused | Closes the market account and returns rent to the authority |
+| `close_market` | Market authority | Market is paused; `open_order_count` is zero; both canonical vaults are empty | Closes both vaults and the market atomically, returning their rent to the authority |
 | `place_limit_order` | Trader | Market is active; price and quantity are aligned; notional is valid; trader owns the correctly minted token account; collateral vault is canonical; balance is sufficient | Transfers collateral, creates an open order, records the locked amount, and increments `next_order_id` atomically |
 | `cancel_limit_order` | Order owner | Order belongs to the supplied market and signer; status is `Open`; refund account belongs to the owner and uses the side's collateral mint; vault is canonical | Refunds `locked_collateral`, sets it to zero, and transitions `Open -> Canceled` even while paused |
 
@@ -249,6 +250,28 @@ Cancellation deliberately has no active-market requirement, preserving the
 owner's exit path while a market is paused. Transfer and state changes are one
 atomic transaction, so a failed refund leaves the order open and funded.
 
+### Safe market shutdown flow
+
+```text
+Market authority
+   |
+   | close_market
+   v
+Validate paused Market
+   |-- open_order_count == 0
+   |-- base vault amount == 0
+   |-- quote vault amount == 0
+   |-- both vault addresses and authority are canonical
+   v
+Vault-authority PDA closes base and quote vaults
+   |
+   v
+Anchor closes the Market account
+```
+
+All three accounts close atomically. A failed vault closure leaves the market
+and both vaults intact.
+
 ### Fixed-point price model
 
 Tidebook does not use floating-point values on-chain. An order price represents
@@ -305,6 +328,9 @@ The program currently enforces:
 26. Only an open order can refund collateral, preventing duplicate withdrawals.
 27. Cancellation refunds to an owner-controlled account of the correct mint.
 28. Refund transfer, collateral clearing, and cancellation status update are atomic.
+29. Order placement increments and cancellation decrements `open_order_count`.
+30. A market can close only while paused with no open orders or vault balances.
+31. Successful shutdown closes both canonical vaults and the market atomically.
 
 ## 6. Known architectural gaps
 
@@ -314,18 +340,14 @@ These are planned features, not defects in the current research milestone:
 - No matching engine or partial-fill transitions.
 - No settlement or fee accounting.
 - `best_bid` and `best_ask` are not updated.
-- A paused market can be closed without checking for live order accounts.
 - Order accounts are not currently closed or reclaimed.
-
-The close-market rule must be strengthened before this milestone is deployed. A
-market with locked funds or live orders must not be closable without a defined
-shutdown and withdrawal process, otherwise vault funds can become stranded.
 
 ## 7. Test architecture
 
 Integration tests run against LiteSVM in
 `programs/tidebook/tests/admin_flow.rs`,
 `programs/tidebook/tests/cancel_order.rs`, and
+`programs/tidebook/tests/market_close.rs`, and
 `programs/tidebook/tests/order_flow.rs`.
 
 The test harness:
@@ -337,7 +359,7 @@ The test harness:
 5. sends transactions through LiteSVM;
 6. deserializes resulting Anchor accounts and checks state.
 
-The 44-test suite currently covers:
+The 53-test suite currently covers:
 
 - upgrade-authority-only, one-time protocol initialization;
 - creation of the deployer's config and active admin record;
@@ -371,7 +393,12 @@ The 44-test suite currently covers:
 - refunds while a market is paused;
 - rejection of wrong refund mints, owners, markets, and vaults;
 - atomic preservation of locked collateral after failed cancellation;
-- prevention of repeated cancellation and duplicate refunds.
+- prevention of repeated cancellation and duplicate refunds;
+- rejection of market closure while active or controlled by another signer;
+- rejection of shutdown with open bids, open asks, or residual vault balances;
+- rejection of noncanonical base and quote vaults during shutdown;
+- open-order counter transitions across placement and cancellation;
+- atomic closure of an empty paused market and both token vaults.
 
 ## 8. Dependency boundary
 
@@ -384,12 +411,10 @@ public APIs exchange concrete `Address`, `Message`, `Transaction`, `Signer`, and
 
 The recommended implementation order is:
 
-1. Prevent market closure while live orders or vault balances remain.
-2. Close empty market vaults safely during final market shutdown.
-3. Add price-level accounts and FIFO queues.
-4. Implement deterministic matching and partial fills.
-5. Settle base/quote transfers and fees.
-6. Add order cleanup and rent-reclamation rules.
+1. Add price-level accounts and FIFO queues.
+2. Implement deterministic matching and partial fills.
+3. Settle base/quote transfers and fees.
+4. Add order cleanup and rent-reclamation rules.
 
 Each phase should add its invariants and failure-path tests before the next
 state transition is introduced.
