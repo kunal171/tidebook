@@ -6,8 +6,12 @@ import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import {
   decodeOrderSide,
   decodeOrderStatus,
+  deriveVaultAuthorityPda,
+  deriveVaultPda,
+  findOwnedTokenAccount,
   getTidebookAccounts,
   getTidebookProgram,
+  TOKEN_PROGRAM_ID,
   transactionExplorerUrl,
   type OrderView,
 } from "../lib/tidebook";
@@ -86,12 +90,34 @@ export function Orders() {
     setSignature(null);
 
     try {
+      const market = await getTidebookAccounts(program).market.fetchNullable(
+        order.market,
+      );
+      if (!market) {
+        throw new Error("The order's market account was not found");
+      }
+
+      const side = decodeOrderSide(order.side);
+      const collateralMint = side === "bid" ? market.quoteMint : market.baseMint;
+      const ownerCollateral = await findOwnedTokenAccount(
+        connection,
+        wallet.publicKey,
+        collateralMint,
+      );
+      const vaultAuthority = deriveVaultAuthorityPda(order.market);
+      const marketVault = deriveVaultPda(order.market, collateralMint);
+
       const transaction = await program.methods
         .cancelLimitOrder(order.orderId)
         .accounts({
           owner: wallet.publicKey,
           market: order.market,
           order: order.address,
+          collateralMint,
+          ownerCollateral,
+          vaultAuthority,
+          marketVault,
+          tokenProgram: TOKEN_PROGRAM_ID,
         })
         .rpc();
 
@@ -183,6 +209,14 @@ export function Orders() {
                         <span>Remaining</span>
                         <strong>
                           {order.remainingQuantity.toString()}
+                        </strong>
+                      </div>
+
+                      <div>
+                        <span>Locked collateral</span>
+                        <strong>
+                          {order.lockedCollateral.toString()} raw{" "}
+                          {side === "bid" ? "quote" : "base"}
                         </strong>
                       </div>
                     </div>

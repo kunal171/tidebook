@@ -8,6 +8,7 @@ import {
   type FormEvent,
 } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { BN } from "@anchor-lang/core";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
@@ -15,12 +16,15 @@ import {
   accountExplorerUrl,
   decodeMarketStatus,
   deriveOrderPda,
+  deriveVaultAuthorityPda,
   formatAtomicAmount,
+  findOwnedTokenAccount,
   getTidebookAccounts,
   getTidebookProgram,
   getTidebookReadProgram,
   transactionExplorerUrl,
   deriveVaultPda,
+  TOKEN_PROGRAM_ID,
   type MarketAccount,
   type OrderSide,
 } from "../lib/tidebook";
@@ -53,6 +57,7 @@ function parsePositiveU64(value: string, label: string) {
 }
 
 export function MarketDetail({ address }: { address: string }) {
+  const router = useRouter();
   const { connection } = useConnection();
   const wallet = useAnchorWallet();
   const [market, setMarket] = useState<MarketAccount | null>(null);
@@ -61,6 +66,12 @@ export function MarketDetail({ address }: { address: string }) {
   const [price, setPrice] = useState("");
   const [quantity, setQuantity] = useState("");
   const [pending, setPending] = useState(false);
+  const [lifecyclePending, setLifecyclePending] = useState<
+    "pause" | "unpause" | "close" | null
+  >(null);
+  const [lifecycleSignature, setLifecycleSignature] = useState<string | null>(
+    null,
+  );
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{
     signature: string;
@@ -155,6 +166,20 @@ export function MarketDetail({ address }: { address: string }) {
 
       const order = deriveOrderPda(marketAddress, market.nextOrderId);
       const orderSide = side === "bid" ? { bid: {} } : { ask: {} };
+      const collateralMint = side === "bid" ? market.quoteMint : market.baseMint;
+      const baseScale = new BN(10).pow(new BN(market.baseDecimals));
+      const collateralAmount =
+        side === "bid"
+          ? rawPrice.mul(rawQuantity).div(baseScale)
+          : rawQuantity;
+      const traderCollateral = await findOwnedTokenAccount(
+        connection,
+        wallet.publicKey,
+        collateralMint,
+        collateralAmount,
+      );
+      const vaultAuthority = deriveVaultAuthorityPda(marketAddress);
+      const marketVault = deriveVaultPda(marketAddress, collateralMint);
 
       const signature = await signedProgram.methods
         .placeLimitOrder(orderSide, rawPrice, rawQuantity)
@@ -162,6 +187,11 @@ export function MarketDetail({ address }: { address: string }) {
           trader: wallet.publicKey,
           market: marketAddress,
           order,
+          collateralMint,
+          traderCollateral,
+          vaultAuthority,
+          marketVault,
+          tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
         .rpc();
@@ -177,7 +207,71 @@ export function MarketDetail({ address }: { address: string }) {
     }
   };
 
+  const manageMarket = async (action: "pause" | "unpause" | "close") => {
+    if (!signedProgram || !wallet || !marketAddress || !market) return;
+    if (
+      action === "close" &&
+      !window.confirm(
+        "Close this market and both empty vaults? This cannot be undone.",
+      )
+    ) {
+      return;
+    }
+
+    setLifecyclePending(action);
+    setLifecycleSignature(null);
+    setError(null);
+
+    try {
+      let signature: string;
+
+      if (action === "pause") {
+        signature = await signedProgram.methods
+          .pauseMarket()
+          .accounts({ authority: wallet.publicKey, market: marketAddress })
+          .rpc();
+      } else if (action === "unpause") {
+        signature = await signedProgram.methods
+          .unpauseMarket()
+          .accounts({ authority: wallet.publicKey, market: marketAddress })
+          .rpc();
+      } else {
+        if (!market.openOrderCount.isZero()) {
+          throw new Error("Cancel every open order before closing this market");
+        }
+
+        signature = await signedProgram.methods
+          .closeMarket()
+          .accounts({
+            authority: wallet.publicKey,
+            market: marketAddress,
+            vaultAuthority: deriveVaultAuthorityPda(marketAddress),
+            baseVault: deriveVaultPda(marketAddress, market.baseMint),
+            quoteVault: deriveVaultPda(marketAddress, market.quoteMint),
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .rpc();
+      }
+
+      setLifecycleSignature(signature);
+
+      if (action === "close") {
+        router.push("/markets");
+        router.refresh();
+      } else {
+        await loadMarket();
+      }
+    } catch (cause) {
+      setError(getErrorMessage(cause));
+    } finally {
+      setLifecyclePending(null);
+    }
+  };
+
   const status = market ? decodeMarketStatus(market.status) : null;
+  const isMarketAuthority = Boolean(
+    wallet && market && wallet.publicKey.equals(market.authority),
+  );
   const pricePreview = useMemo(() => {
     if (!market || !/^[0-9]+$/.test(price.trim())) return null;
     return formatAtomicAmount(new BN(price.trim(), 10), market.quoteDecimals);
@@ -189,6 +283,26 @@ export function MarketDetail({ address }: { address: string }) {
       market.baseDecimals,
     );
   }, [market, quantity]);
+  const collateralPreview = useMemo(() => {
+    if (
+      !market ||
+      !/^[0-9]+$/.test(price.trim()) ||
+      !/^[0-9]+$/.test(quantity.trim())
+    ) {
+      return null;
+    }
+
+    const rawPrice = new BN(price.trim(), 10);
+    const rawQuantity = new BN(quantity.trim(), 10);
+
+    if (side === "ask") {
+      return `${formatAtomicAmount(rawQuantity, market.baseDecimals)} base tokens`;
+    }
+
+    const baseScale = new BN(10).pow(new BN(market.baseDecimals));
+    const quoteAmount = rawPrice.mul(rawQuantity).div(baseScale);
+    return `${formatAtomicAmount(quoteAmount, market.quoteDecimals)} quote tokens`;
+  }, [market, price, quantity, side]);
 
   return (
     <div className="app-shell">
@@ -208,8 +322,8 @@ export function MarketDetail({ address }: { address: string }) {
                 <div className="eyebrow">Market details</div>
                 <h1>{shortAddress(marketAddress.toBase58())}</h1>
                 <p>
-                  Submit raw integer limit orders to this research market. No
-                  assets are locked or transferred at the current milestone.
+                  Submit collateralized limit orders. Bids lock quote tokens;
+                  asks lock base tokens until cancellation or future matching.
                 </p>
               </div>
               <span className={`role-badge market-${status}`}>{status}</span>
@@ -237,6 +351,10 @@ export function MarketDetail({ address }: { address: string }) {
                   <div>
                     <dt>Next order</dt>
                     <dd>#{market.nextOrderId.toString()}</dd>
+                  </div>
+                  <div>
+                    <dt>Open orders</dt>
+                    <dd>{market.openOrderCount.toString()}</dd>
                   </div>
                   <div>
                     <dt>Best bid</dt>
@@ -313,6 +431,54 @@ export function MarketDetail({ address }: { address: string }) {
                 >
                   View market account on Explorer ↗
                 </a>
+
+                {isMarketAuthority && (
+                  <div className="market-card-actions">
+                    {status === "active" ? (
+                      <button
+                        className="admin-action-button"
+                        type="button"
+                        disabled={lifecyclePending !== null}
+                        onClick={() => void manageMarket("pause")}
+                      >
+                        {lifecyclePending === "pause"
+                          ? "Pausing…"
+                          : "Pause market"}
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          className="admin-action-button"
+                          type="button"
+                          disabled={lifecyclePending !== null}
+                          onClick={() => void manageMarket("unpause")}
+                        >
+                          {lifecyclePending === "unpause"
+                            ? "Unpausing…"
+                            : "Unpause market"}
+                        </button>
+                        <button
+                          className="danger-button"
+                          type="button"
+                          disabled={
+                            lifecyclePending !== null ||
+                            !market.openOrderCount.isZero()
+                          }
+                          title={
+                            market.openOrderCount.isZero()
+                              ? "Close this market and both empty vaults"
+                              : "Cancel every open order before closing"
+                          }
+                          onClick={() => void manageMarket("close")}
+                        >
+                          {lifecyclePending === "close"
+                            ? "Closing…"
+                            : "Close market"}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
               </section>
 
               <section className="admin-card">
@@ -386,6 +552,9 @@ export function MarketDetail({ address }: { address: string }) {
                     >
                       {pending ? "Placing order…" : `Place ${side}`}
                     </button>
+                    {collateralPreview && (
+                      <small>This order will lock {collateralPreview}.</small>
+                    )}
                   </form>
                 )}
               </section>
@@ -402,6 +571,19 @@ export function MarketDetail({ address }: { address: string }) {
             Order created at {shortAddress(result.order.toBase58())}.{" "}
             <a
               href={transactionExplorerUrl(result.signature)}
+              target="_blank"
+              rel="noreferrer"
+            >
+              View transaction ↗
+            </a>
+          </div>
+        )}
+
+        {lifecycleSignature && (
+          <div className="transaction-message transaction-success">
+            Market lifecycle updated.{" "}
+            <a
+              href={transactionExplorerUrl(lifecycleSignature)}
               target="_blank"
               rel="noreferrer"
             >

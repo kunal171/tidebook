@@ -77,6 +77,7 @@ export interface MarketAccount {
 
   bestBid: BN | null;
   bestAsk: BN | null;
+  openOrderCount: BN;
   bump: number;
 }
 
@@ -92,6 +93,7 @@ export interface OrderAccount {
   price: BN;
   quantity: BN;
   remainingQuantity: BN;
+  lockedCollateral: BN;
   status: {
     open?: object;
     filled?: object;
@@ -187,6 +189,34 @@ export function deriveOrderPda(market: PublicKey, orderId: BN) {
     ],
     PROGRAM_ID,
   )[0];
+}
+
+export async function findOwnedTokenAccount(
+  connection: Connection,
+  owner: PublicKey,
+  mint: PublicKey,
+  minimumAmount = new BN(0),
+) {
+  const response = await connection.getParsedTokenAccountsByOwner(
+    owner,
+    { mint },
+    "confirmed",
+  );
+
+  const tokenAccount = response.value.find(({ account }) => {
+    if (!("parsed" in account.data)) return false;
+
+    const amount = account.data.parsed?.info?.tokenAmount?.amount;
+    return typeof amount === "string" && new BN(amount, 10).gte(minimumAmount);
+  });
+
+  if (!tokenAccount) {
+    throw new Error(
+      `No token account for ${mint.toBase58()} has enough available balance`,
+    );
+  }
+
+  return tokenAccount.pubkey;
 }
 
 export function deriveProgramDataAddress() {

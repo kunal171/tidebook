@@ -25,6 +25,8 @@ pub struct Market {
     pub best_bid: Option<u64>,
     /// Reserved for the matching-engine milestone; not maintained yet.
     pub best_ask: Option<u64>,
+    /// Number of orders still eligible for matching or cancellation.
+    pub open_order_count: u64,
     pub bump: u8,
 }
 
@@ -64,6 +66,8 @@ pub struct Order {
     pub price: u64,
     pub quantity: u64,
     pub remaining_quantity: u64,
+    /// Base atoms for asks or quote atoms for bids currently held in custody.
+    pub locked_collateral: u64,
     pub status: OrderStatus,
     pub bump: u8,
 }

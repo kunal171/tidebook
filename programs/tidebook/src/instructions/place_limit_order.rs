@@ -1,12 +1,13 @@
 //! Validates and records a market-local limit order.
 //!
-//! This milestone records intent only; token collateral is not transferred or
-//! locked until the custody flow is implemented.
+//! Bid orders lock quote tokens and ask orders lock base tokens in the
+//! market's canonical vault before the order becomes visible.
 
 use anchor_lang::prelude::*;
+use anchor_spl::token::{self, Mint, Token, TokenAccount, TransferChecked};
 
 use crate::{
-    constants::ORDER_SEED,
+    constants::{ORDER_SEED, VAULT_AUTHORITY_SEED, VAULT_SEED},
     error::MarketError,
     state::{Market, MarketStatus, Order, OrderSide, OrderStatus},
 };
@@ -33,6 +34,44 @@ pub struct PlaceLimitOrder<'info> {
         bump
     )]
     pub order: Account<'info, Order>,
+
+    /// Mint selected as collateral:
+    /// base for asks and quote for bids.
+    pub collateral_mint: Account<'info, Mint>,
+
+    #[account(
+        mut,
+        constraint = trader_collateral.owner == trader.key()
+            @ MarketError::InvalidCollateralOwner,
+        constraint = trader_collateral.mint == collateral_mint.key()
+            @ MarketError::InvalidCollateralMint
+    )]
+    pub trader_collateral: Account<'info, TokenAccount>,
+
+    /// CHECK: Seed-constrained, stateless owner of the market vaults.
+    #[account(
+        seeds = [
+            VAULT_AUTHORITY_SEED,
+            market.key().as_ref()
+        ],
+        bump
+    )]
+    pub vault_authority: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        seeds = [
+            VAULT_SEED,
+            market.key().as_ref(),
+            collateral_mint.key().as_ref()
+        ],
+        bump,
+        token::mint = collateral_mint,
+        token::authority = vault_authority
+    )]
+    pub market_vault: Account<'info, TokenAccount>,
+
+    pub token_program: Program<'info, Token>,
 
     pub system_program: Program<'info, System>,
 }
@@ -73,6 +112,46 @@ pub fn handle_place_limit_order(
 
     require!(quote_notional > 0, MarketError::OrderNotionalTooSmall);
 
+    let (expected_mint, locked_collateral) = match side {
+        OrderSide::Ask => (market.base_mint, quantity),
+        OrderSide::Bid => {
+            let quote_amount = u64::try_from(quote_notional)
+                .map_err(|_| error!(MarketError::OrderNotionalOverflow))?;
+
+            (market.quote_mint, quote_amount)
+        }
+    };
+
+    require_keys_eq!(
+        ctx.accounts.collateral_mint.key(),
+        expected_mint,
+        MarketError::InvalidCollateralMint
+    );
+
+    require!(
+        ctx.accounts.trader_collateral.amount >= locked_collateral,
+        MarketError::InsufficientCollateral
+    );
+
+    let next_open_order_count = market
+        .open_order_count
+        .checked_add(1)
+        .ok_or(MarketError::OpenOrderCountOverflow)?;
+
+    token::transfer_checked(
+        CpiContext::new(
+            ctx.accounts.token_program.key(),
+            TransferChecked {
+                from: ctx.accounts.trader_collateral.to_account_info(),
+                mint: ctx.accounts.collateral_mint.to_account_info(),
+                to: ctx.accounts.market_vault.to_account_info(),
+                authority: ctx.accounts.trader.to_account_info(),
+            },
+        ),
+        locked_collateral,
+        ctx.accounts.collateral_mint.decimals,
+    )?;
+
     order.owner = ctx.accounts.trader.key();
     order.market = market.key();
     order.order_id = market.next_order_id;
@@ -80,12 +159,14 @@ pub fn handle_place_limit_order(
     order.price = price;
     order.quantity = quantity;
     order.remaining_quantity = quantity;
+    order.locked_collateral = locked_collateral;
     order.status = OrderStatus::Open;
     order.bump = ctx.bumps.order;
 
     // Increment only after the order is fully initialized. Solana transaction
     // atomicity rolls both writes back if the instruction later fails.
     market.next_order_id += 1;
+    market.open_order_count = next_open_order_count;
 
     Ok(())
 }

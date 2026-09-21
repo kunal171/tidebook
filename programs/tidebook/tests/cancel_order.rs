@@ -1,5 +1,5 @@
-//! LiteSVM integration coverage for owner-authorized order cancellation,
-//! including cancellation while a market is paused.
+//! LiteSVM integration coverage for owner-authorized order cancellation and
+//! collateral refunds, including cancellation while a market is paused.
 
 use {
     anchor_lang::{
@@ -7,7 +7,9 @@ use {
         solana_program::{instruction::Instruction, program_pack::Pack, system_program},
         AccountDeserialize, AccountSerialize, InstructionData, ToAccountMetas,
     },
-    anchor_spl::token::spl_token::state::Mint as SplMint,
+    anchor_spl::token::spl_token::state::{
+        Account as SplTokenAccount, AccountState, Mint as SplMint,
+    },
     litesvm::LiteSVM,
     solana_account::Account,
     solana_keypair::Keypair,
@@ -29,6 +31,27 @@ const TEST_PRICE_TICK_SIZE: u64 = 10_000;
 const TEST_QUANTITY_LOT_SIZE: u64 = 1_000_000;
 const TEST_ORDER_PRICE: u64 = 100_000_000;
 const TEST_ORDER_QUANTITY: u64 = 5_000_000;
+const TEST_QUOTE_COLLATERAL: u64 = 500_000;
+
+struct MarketFixture {
+    market: Pubkey,
+    base_mint: Pubkey,
+    quote_mint: Pubkey,
+    vault_authority: Pubkey,
+    base_vault: Pubkey,
+    quote_vault: Pubkey,
+}
+
+struct OpenOrderFixture {
+    svm: LiteSVM,
+    owner: Keypair,
+    market: MarketFixture,
+    order: Pubkey,
+    owner_collateral: Pubkey,
+    collateral_mint: Pubkey,
+    market_vault: Pubkey,
+    locked_collateral: u64,
+}
 
 fn send_instruction(
     svm: &mut LiteSVM,
@@ -72,6 +95,38 @@ fn create_test_mint(svm: &mut LiteSVM, decimals: u8) -> Pubkey {
     mint
 }
 
+fn create_test_token_account(
+    svm: &mut LiteSVM,
+    mint: Pubkey,
+    owner: Pubkey,
+    amount: u64,
+) -> Pubkey {
+    let address = Pubkey::new_unique();
+    let token_state = SplTokenAccount {
+        mint,
+        owner,
+        amount,
+        state: AccountState::Initialized,
+        ..SplTokenAccount::default()
+    };
+    let mut data = vec![0_u8; SplTokenAccount::LEN];
+    SplTokenAccount::pack(token_state, &mut data).unwrap();
+
+    svm.set_account(
+        address,
+        Account {
+            lamports: svm.minimum_balance_for_rent_exemption(SplTokenAccount::LEN),
+            data,
+            owner: anchor_spl::token::ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    )
+    .unwrap();
+
+    address
+}
+
 fn store_active_admin(svm: &mut LiteSVM, authority: Pubkey) {
     let (address, bump) = Pubkey::find_program_address(
         &[tidebook::constants::ADMIN_SEED, authority.as_ref()],
@@ -99,7 +154,7 @@ fn store_active_admin(svm: &mut LiteSVM, authority: Pubkey) {
     .unwrap();
 }
 
-fn initialize_market(svm: &mut LiteSVM, authority: &Keypair) -> Pubkey {
+fn initialize_market(svm: &mut LiteSVM, authority: &Keypair) -> MarketFixture {
     let base_mint = create_test_mint(svm, 9);
     let quote_mint = create_test_mint(svm, 6);
     let (admin_record, _) = Pubkey::find_program_address(
@@ -158,14 +213,41 @@ fn initialize_market(svm: &mut LiteSVM, authority: &Keypair) -> Pubkey {
 
     let result = send_instruction(svm, authority, instruction);
     assert!(result.is_ok(), "market initialization failed: {result:?}");
-    market
+    MarketFixture {
+        market,
+        base_mint,
+        quote_mint,
+        vault_authority,
+        base_vault,
+        quote_vault,
+    }
 }
 
-fn place_order(svm: &mut LiteSVM, owner: &Keypair, market: Pubkey, order_id: u64) -> Pubkey {
+fn place_order(
+    svm: &mut LiteSVM,
+    owner: &Keypair,
+    market_fixture: &MarketFixture,
+    order_id: u64,
+    side: OrderSide,
+) -> (Pubkey, Pubkey, Pubkey, Pubkey, u64) {
+    let (collateral_mint, market_vault, locked_collateral) = match side {
+        OrderSide::Bid => (
+            market_fixture.quote_mint,
+            market_fixture.quote_vault,
+            TEST_QUOTE_COLLATERAL,
+        ),
+        OrderSide::Ask => (
+            market_fixture.base_mint,
+            market_fixture.base_vault,
+            TEST_ORDER_QUANTITY,
+        ),
+    };
+    let trader_collateral =
+        create_test_token_account(svm, collateral_mint, owner.pubkey(), locked_collateral);
     let (order, _) = Pubkey::find_program_address(
         &[
             tidebook::constants::ORDER_SEED,
-            market.as_ref(),
+            market_fixture.market.as_ref(),
             order_id.to_le_bytes().as_ref(),
         ],
         &tidebook::id(),
@@ -173,15 +255,20 @@ fn place_order(svm: &mut LiteSVM, owner: &Keypair, market: Pubkey, order_id: u64
     let instruction = Instruction::new_with_bytes(
         tidebook::id(),
         &tidebook::instruction::PlaceLimitOrder {
-            side: OrderSide::Bid,
+            side,
             price: TEST_ORDER_PRICE,
             quantity: TEST_ORDER_QUANTITY,
         }
         .data(),
         tidebook::accounts::PlaceLimitOrder {
             trader: owner.pubkey(),
-            market,
+            market: market_fixture.market,
             order,
+            collateral_mint,
+            trader_collateral,
+            vault_authority: market_fixture.vault_authority,
+            market_vault,
+            token_program: anchor_spl::token::ID,
             system_program: system_program::ID,
         }
         .to_account_metas(None),
@@ -189,14 +276,25 @@ fn place_order(svm: &mut LiteSVM, owner: &Keypair, market: Pubkey, order_id: u64
 
     let result = send_instruction(svm, owner, instruction);
     assert!(result.is_ok(), "order placement failed: {result:?}");
-    order
+    (
+        order,
+        trader_collateral,
+        collateral_mint,
+        market_vault,
+        locked_collateral,
+    )
 }
 
-fn cancel_order_instruction(
+#[allow(clippy::too_many_arguments)]
+fn cancel_order_instruction_with_accounts(
     signer: Pubkey,
     market: Pubkey,
     order: Pubkey,
     order_id: u64,
+    collateral_mint: Pubkey,
+    owner_collateral: Pubkey,
+    vault_authority: Pubkey,
+    market_vault: Pubkey,
 ) -> Instruction {
     Instruction::new_with_bytes(
         tidebook::id(),
@@ -205,8 +303,26 @@ fn cancel_order_instruction(
             owner: signer,
             market,
             order,
+            collateral_mint,
+            owner_collateral,
+            vault_authority,
+            market_vault,
+            token_program: anchor_spl::token::ID,
         }
         .to_account_metas(None),
+    )
+}
+
+fn cancel_order_instruction(fixture: &OpenOrderFixture, signer: Pubkey) -> Instruction {
+    cancel_order_instruction_with_accounts(
+        signer,
+        fixture.market.market,
+        fixture.order,
+        ORDER_ID,
+        fixture.collateral_mint,
+        fixture.owner_collateral,
+        fixture.market.vault_authority,
+        fixture.market_vault,
     )
 }
 
@@ -222,7 +338,12 @@ fn load_market(svm: &LiteSVM, address: Pubkey) -> Market {
     Market::try_deserialize(&mut data).unwrap()
 }
 
-fn setup_open_order() -> (LiteSVM, Keypair, Pubkey, Pubkey) {
+fn token_balance(svm: &LiteSVM, address: Pubkey) -> u64 {
+    let account = svm.get_account(&address).unwrap();
+    SplTokenAccount::unpack(&account.data).unwrap().amount
+}
+
+fn setup_open_order(side: OrderSide) -> OpenOrderFixture {
     let mut svm = LiteSVM::new();
     let owner = Keypair::new();
 
@@ -231,96 +352,248 @@ fn setup_open_order() -> (LiteSVM, Keypair, Pubkey, Pubkey) {
     store_active_admin(&mut svm, owner.pubkey());
 
     let market = initialize_market(&mut svm, &owner);
-    let order = place_order(&mut svm, &owner, market, ORDER_ID);
+    let (order, owner_collateral, collateral_mint, market_vault, locked_collateral) =
+        place_order(&mut svm, &owner, &market, ORDER_ID, side);
 
-    (svm, owner, market, order)
+    OpenOrderFixture {
+        svm,
+        owner,
+        market,
+        order,
+        owner_collateral,
+        collateral_mint,
+        market_vault,
+        locked_collateral,
+    }
+}
+
+fn assert_order_and_collateral_unchanged(fixture: &OpenOrderFixture) {
+    let order = load_order(&fixture.svm, fixture.order);
+    assert_eq!(order.status, OrderStatus::Open);
+    assert_eq!(order.locked_collateral, fixture.locked_collateral);
+    assert_eq!(token_balance(&fixture.svm, fixture.owner_collateral), 0);
+    assert_eq!(
+        token_balance(&fixture.svm, fixture.market_vault),
+        fixture.locked_collateral
+    );
 }
 
 #[test]
-fn owner_cancels_open_order() {
-    let (mut svm, owner, market, order) = setup_open_order();
-    let instruction = cancel_order_instruction(owner.pubkey(), market, order, ORDER_ID);
+fn canceling_bid_refunds_quote_collateral() {
+    let mut fixture = setup_open_order(OrderSide::Bid);
+    assert_order_and_collateral_unchanged(&fixture);
+    let instruction = cancel_order_instruction(&fixture, fixture.owner.pubkey());
 
-    let result = send_instruction(&mut svm, &owner, instruction);
+    let result = send_instruction(&mut fixture.svm, &fixture.owner, instruction);
 
     assert!(result.is_ok(), "order cancellation failed: {result:?}");
-    let state = load_order(&svm, order);
+    let state = load_order(&fixture.svm, fixture.order);
     assert_eq!(state.status, OrderStatus::Canceled);
     assert_eq!(state.remaining_quantity, TEST_ORDER_QUANTITY);
+    assert_eq!(state.locked_collateral, 0);
+    assert_eq!(
+        token_balance(&fixture.svm, fixture.owner_collateral),
+        TEST_QUOTE_COLLATERAL
+    );
+    assert_eq!(token_balance(&fixture.svm, fixture.market_vault), 0);
+}
+
+#[test]
+fn canceling_ask_refunds_base_collateral() {
+    let mut fixture = setup_open_order(OrderSide::Ask);
+    assert_order_and_collateral_unchanged(&fixture);
+    let instruction = cancel_order_instruction(&fixture, fixture.owner.pubkey());
+
+    let result = send_instruction(&mut fixture.svm, &fixture.owner, instruction);
+
+    assert!(result.is_ok(), "ask cancellation failed: {result:?}");
+    let state = load_order(&fixture.svm, fixture.order);
+    assert_eq!(state.status, OrderStatus::Canceled);
+    assert_eq!(state.locked_collateral, 0);
+    assert_eq!(
+        token_balance(&fixture.svm, fixture.owner_collateral),
+        TEST_ORDER_QUANTITY
+    );
+    assert_eq!(token_balance(&fixture.svm, fixture.market_vault), 0);
 }
 
 #[test]
 fn non_owner_cannot_cancel_order() {
-    let (mut svm, _owner, market, order) = setup_open_order();
+    let mut fixture = setup_open_order(OrderSide::Bid);
     let attacker = Keypair::new();
-    svm.airdrop(&attacker.pubkey(), 1_000_000_000).unwrap();
-    let instruction = cancel_order_instruction(attacker.pubkey(), market, order, ORDER_ID);
+    fixture
+        .svm
+        .airdrop(&attacker.pubkey(), 1_000_000_000)
+        .unwrap();
+    let instruction = cancel_order_instruction(&fixture, attacker.pubkey());
 
-    let result = send_instruction(&mut svm, &attacker, instruction);
+    let result = send_instruction(&mut fixture.svm, &attacker, instruction);
 
     assert!(result.is_err(), "non-owner canceled the order");
-    assert_eq!(load_order(&svm, order).status, OrderStatus::Open);
+    assert_order_and_collateral_unchanged(&fixture);
 }
 
 #[test]
-fn canceled_order_cannot_be_canceled_twice() {
-    let (mut svm, owner, market, order) = setup_open_order();
-
-    let first = send_instruction(
-        &mut svm,
-        &owner,
-        cancel_order_instruction(owner.pubkey(), market, order, ORDER_ID),
-    );
+fn canceled_order_cannot_be_canceled_or_refunded_twice() {
+    let mut fixture = setup_open_order(OrderSide::Bid);
+    let first_instruction = cancel_order_instruction(&fixture, fixture.owner.pubkey());
+    let first = send_instruction(&mut fixture.svm, &fixture.owner, first_instruction);
     assert!(first.is_ok(), "first cancellation failed: {first:?}");
 
-    let second = send_instruction(
-        &mut svm,
-        &owner,
-        cancel_order_instruction(owner.pubkey(), market, order, ORDER_ID),
-    );
+    let owner_balance_after_first = token_balance(&fixture.svm, fixture.owner_collateral);
+    let second_instruction = cancel_order_instruction(&fixture, fixture.owner.pubkey());
+    let second = send_instruction(&mut fixture.svm, &fixture.owner, second_instruction);
 
     assert!(second.is_err(), "order was canceled twice");
-    assert_eq!(load_order(&svm, order).status, OrderStatus::Canceled);
+    let state = load_order(&fixture.svm, fixture.order);
+    assert_eq!(state.status, OrderStatus::Canceled);
+    assert_eq!(state.locked_collateral, 0);
+    assert_eq!(
+        token_balance(&fixture.svm, fixture.owner_collateral),
+        owner_balance_after_first
+    );
+    assert_eq!(token_balance(&fixture.svm, fixture.market_vault), 0);
 }
 
 #[test]
 fn order_cannot_be_canceled_with_different_market() {
-    let (mut svm, owner, original_market, order) = setup_open_order();
-    let different_market = initialize_market(&mut svm, &owner);
-    assert_ne!(original_market, different_market);
-    let instruction = cancel_order_instruction(owner.pubkey(), different_market, order, ORDER_ID);
+    let mut fixture = setup_open_order(OrderSide::Bid);
+    let different_market = initialize_market(&mut fixture.svm, &fixture.owner);
+    assert_ne!(fixture.market.market, different_market.market);
+    let instruction = cancel_order_instruction_with_accounts(
+        fixture.owner.pubkey(),
+        different_market.market,
+        fixture.order,
+        ORDER_ID,
+        fixture.collateral_mint,
+        fixture.owner_collateral,
+        different_market.vault_authority,
+        different_market.quote_vault,
+    );
 
-    let result = send_instruction(&mut svm, &owner, instruction);
+    let result = send_instruction(&mut fixture.svm, &fixture.owner, instruction);
 
     assert!(result.is_err(), "order accepted a different market");
-    assert_eq!(load_order(&svm, order).status, OrderStatus::Open);
+    assert_order_and_collateral_unchanged(&fixture);
 }
 
 #[test]
-fn owner_can_cancel_order_while_market_is_paused() {
-    let (mut svm, owner, market, order) = setup_open_order();
+fn owner_can_cancel_and_receive_refund_while_market_is_paused() {
+    let mut fixture = setup_open_order(OrderSide::Bid);
     let pause = Instruction::new_with_bytes(
         tidebook::id(),
         &tidebook::instruction::PauseMarket {}.data(),
         tidebook::accounts::PauseMarket {
-            authority: owner.pubkey(),
-            market,
+            authority: fixture.owner.pubkey(),
+            market: fixture.market.market,
         }
         .to_account_metas(None),
     );
-    let pause_result = send_instruction(&mut svm, &owner, pause);
+    let pause_result = send_instruction(&mut fixture.svm, &fixture.owner, pause);
     assert!(
         pause_result.is_ok(),
         "market pause failed: {pause_result:?}"
     );
-    assert_eq!(load_market(&svm, market).status, MarketStatus::Paused);
+    assert_eq!(
+        load_market(&fixture.svm, fixture.market.market).status,
+        MarketStatus::Paused
+    );
 
-    let cancel = cancel_order_instruction(owner.pubkey(), market, order, ORDER_ID);
-    let cancel_result = send_instruction(&mut svm, &owner, cancel);
+    let cancel = cancel_order_instruction(&fixture, fixture.owner.pubkey());
+    let cancel_result = send_instruction(&mut fixture.svm, &fixture.owner, cancel);
 
     assert!(
         cancel_result.is_ok(),
         "paused-market cancellation failed: {cancel_result:?}"
     );
-    assert_eq!(load_order(&svm, order).status, OrderStatus::Canceled);
+    let state = load_order(&fixture.svm, fixture.order);
+    assert_eq!(state.status, OrderStatus::Canceled);
+    assert_eq!(state.locked_collateral, 0);
+    assert_eq!(
+        token_balance(&fixture.svm, fixture.owner_collateral),
+        TEST_QUOTE_COLLATERAL
+    );
+    assert_eq!(token_balance(&fixture.svm, fixture.market_vault), 0);
+}
+
+#[test]
+fn wrong_refund_mint_is_rejected_atomically() {
+    let mut fixture = setup_open_order(OrderSide::Bid);
+    let wrong_destination = create_test_token_account(
+        &mut fixture.svm,
+        fixture.market.base_mint,
+        fixture.owner.pubkey(),
+        0,
+    );
+    let instruction = cancel_order_instruction_with_accounts(
+        fixture.owner.pubkey(),
+        fixture.market.market,
+        fixture.order,
+        ORDER_ID,
+        fixture.market.base_mint,
+        wrong_destination,
+        fixture.market.vault_authority,
+        fixture.market.base_vault,
+    );
+
+    let result = send_instruction(&mut fixture.svm, &fixture.owner, instruction);
+
+    assert!(result.is_err(), "bid refunded through the base mint");
+    assert_order_and_collateral_unchanged(&fixture);
+    assert_eq!(token_balance(&fixture.svm, wrong_destination), 0);
+    assert_eq!(token_balance(&fixture.svm, fixture.market.base_vault), 0);
+}
+
+#[test]
+fn refund_account_owned_by_another_wallet_is_rejected() {
+    let mut fixture = setup_open_order(OrderSide::Bid);
+    let attacker = Pubkey::new_unique();
+    let wrong_destination =
+        create_test_token_account(&mut fixture.svm, fixture.market.quote_mint, attacker, 0);
+    let instruction = cancel_order_instruction_with_accounts(
+        fixture.owner.pubkey(),
+        fixture.market.market,
+        fixture.order,
+        ORDER_ID,
+        fixture.market.quote_mint,
+        wrong_destination,
+        fixture.market.vault_authority,
+        fixture.market.quote_vault,
+    );
+
+    let result = send_instruction(&mut fixture.svm, &fixture.owner, instruction);
+
+    assert!(result.is_err(), "refund was sent to another wallet");
+    assert_order_and_collateral_unchanged(&fixture);
+    assert_eq!(token_balance(&fixture.svm, wrong_destination), 0);
+}
+
+#[test]
+fn noncanonical_refund_vault_is_rejected() {
+    let mut fixture = setup_open_order(OrderSide::Bid);
+    let noncanonical_vault = create_test_token_account(
+        &mut fixture.svm,
+        fixture.market.quote_mint,
+        fixture.market.vault_authority,
+        fixture.locked_collateral,
+    );
+    let instruction = cancel_order_instruction_with_accounts(
+        fixture.owner.pubkey(),
+        fixture.market.market,
+        fixture.order,
+        ORDER_ID,
+        fixture.market.quote_mint,
+        fixture.owner_collateral,
+        fixture.market.vault_authority,
+        noncanonical_vault,
+    );
+
+    let result = send_instruction(&mut fixture.svm, &fixture.owner, instruction);
+
+    assert!(result.is_err(), "noncanonical refund vault was accepted");
+    assert_order_and_collateral_unchanged(&fixture);
+    assert_eq!(
+        token_balance(&fixture.svm, noncanonical_vault),
+        fixture.locked_collateral
+    );
 }

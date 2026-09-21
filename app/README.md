@@ -20,12 +20,16 @@ npm run build
 
 - Connect a browser wallet through Solana Wallet Adapter.
 - Connect to Solana devnet.
-- Check whether the configured Tidebook program account is executable.
-- Link to the program account in Solana Explorer.
-- Present the current backend milestone and test status.
+- Discover active and paused markets without connecting a wallet.
+- Create markets as an active protocol administrator.
+- Place collateralized bid and ask limit orders from owned token accounts.
+- List wallet-owned orders and cancel them, including while a market is paused.
+- Pause, unpause, and safely close markets as their authority.
+- Manage protocol administrators as the super-admin.
 
-The program is deployed to devnet. Market creation remains intentionally
-disabled until the generated Anchor IDL is wired into the client.
+The checked-in client IDL mirrors the generated Anchor IDL. After any account
+layout or instruction change, rebuild and redeploy the program before using the
+updated client against devnet.
 
 Override the default public devnet RPC endpoint locally with:
 
@@ -39,8 +43,10 @@ Store that value in `app/.env.local`; the file is ignored by Git.
 
 - `app/layout.tsx` and route pages are Server Components by default.
 - `components/solana-provider.tsx` owns the client-only wallet and RPC context.
-- `components/dashboard.tsx` owns interactive wallet and program-status state.
-- `lib/solana.ts` is the shared network and program-identity configuration.
+- `components/` contains the client-side route workspaces and transaction flows.
+- `lib/tidebook.ts` owns account types, PDA derivation, token-account discovery,
+  formatting, and Anchor program construction.
+- `lib/solana.ts` owns shared network and program-identity configuration.
 
 New routes should keep read-only structure server-rendered and move only wallet,
 transaction, state, and browser-dependent behavior behind `"use client"`.

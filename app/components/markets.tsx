@@ -149,6 +149,10 @@ export function Markets() {
                     <dd>#{market.nextOrderId.toString()}</dd>
                   </div>
                   <div>
+                    <dt>Open orders</dt>
+                    <dd>{market.openOrderCount.toString()}</dd>
+                  </div>
+                  <div>
                     <dt>Price tick</dt>
                     <dd>{market.priceTickSize.toString()}</dd>
                   </div>
