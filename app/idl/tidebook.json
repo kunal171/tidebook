@@ -1015,11 +1015,6 @@
       "code": 6030,
       "name": "OrderNotionalTooSmall",
       "msg": "Order notional is below one quote-mint unit"
-    },
-    {
-      "code": 6031,
-      "name": "MarketMintMismatch",
-      "msg": "Mint does not match the market configuration"
     }
   ],
   "types": [
