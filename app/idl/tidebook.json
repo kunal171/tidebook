@@ -117,6 +117,7 @@
         },
         {
           "name": "market",
+          "writable": true,
           "relations": [
             "order"
           ]
@@ -146,6 +147,52 @@
               }
             ]
           }
+        },
+        {
+          "name": "collateral_mint"
+        },
+        {
+          "name": "owner_collateral",
+          "writable": true
+        },
+        {
+          "name": "vault_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [118, 97, 117, 108, 116, 45, 97, 117, 116, 104, 111, 114, 105, 116, 121]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "market_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "account",
+                "path": "collateral_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         }
       ],
       "args": [
@@ -182,6 +229,67 @@
         {
           "name": "market",
           "writable": true
+        },
+        {
+          "name": "vault_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [118, 97, 117, 108, 116, 45, 97, 117, 116, 104, 111, 114, 105, 116, 121]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "base_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "account",
+                "path": "market.base_mint",
+                "account": "Market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "quote_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "account",
+                "path": "market.quote_mint",
+                "account": "Market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         }
       ],
       "args": []
@@ -710,6 +818,56 @@
           }
         },
         {
+          "name": "collateral_mint",
+          "docs": [
+            "Mint selected as collateral:",
+            "base for asks and quote for bids."
+          ]
+        },
+        {
+          "name": "trader_collateral",
+          "writable": true
+        },
+        {
+          "name": "vault_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [118, 97, 117, 108, 116, 45, 97, 117, 116, 104, 111, 114, 105, 116, 121]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "market_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "account",
+                "path": "collateral_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
           "name": "system_program",
           "address": "11111111111111111111111111111111"
         }
@@ -1054,6 +1212,46 @@
       "code": 6030,
       "name": "OrderNotionalTooSmall",
       "msg": "Order notional is below one quote-mint unit"
+    },
+    {
+      "code": 6031,
+      "name": "InvalidCollateralMint",
+      "msg": "Collateral mint does not match the order side"
+    },
+    {
+      "code": 6032,
+      "name": "InvalidCollateralOwner",
+      "msg": "Trader does not own the collateral token account"
+    },
+    {
+      "code": 6033,
+      "name": "InsufficientCollateral",
+      "msg": "Insufficient collateral balance"
+    },
+    {
+      "code": 6034,
+      "name": "OpenOrderCountOverflow",
+      "msg": "Open-order counter overflow"
+    },
+    {
+      "code": 6035,
+      "name": "OpenOrderCountUnderflow",
+      "msg": "Open-order counter underflow"
+    },
+    {
+      "code": 6036,
+      "name": "MarketHasOpenOrders",
+      "msg": "Market still contains open orders"
+    },
+    {
+      "code": 6037,
+      "name": "MarketVaultNotEmpty",
+      "msg": "Market vaults must be empty before closing"
+    },
+    {
+      "code": 6038,
+      "name": "InvalidVaultAuthority",
+      "msg": "Invalid market vault authority"
     }
   ],
   "types": [
@@ -1178,6 +1376,13 @@
             }
           },
           {
+            "name": "open_order_count",
+            "docs": [
+              "Number of orders still eligible for matching or cancellation."
+            ],
+            "type": "u64"
+          },
+          {
             "name": "bump",
             "type": "u8"
           }
@@ -1236,6 +1441,13 @@
           },
           {
             "name": "remaining_quantity",
+            "type": "u64"
+          },
+          {
+            "name": "locked_collateral",
+            "docs": [
+              "Base atoms for asks or quote atoms for bids currently held in custody."
+            ],
             "type": "u64"
           },
           {
