@@ -98,4 +98,13 @@ pub enum MarketError {
 
     #[msg("Order notional is below one quote-mint unit")]
     OrderNotionalTooSmall,
+
+    #[msg("Collateral mint does not match the order side")]
+    InvalidCollateralMint,
+
+    #[msg("Trader does not own the collateral token account")]
+    InvalidCollateralOwner,
+
+    #[msg("Insufficient collateral balance")]
+    InsufficientCollateral,
 }

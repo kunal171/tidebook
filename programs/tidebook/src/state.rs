@@ -64,6 +64,8 @@ pub struct Order {
     pub price: u64,
     pub quantity: u64,
     pub remaining_quantity: u64,
+    /// Base atoms for asks or quote atoms for bids currently held in custody.
+    pub locked_collateral: u64,
     pub status: OrderStatus,
     pub bump: u8,
 }

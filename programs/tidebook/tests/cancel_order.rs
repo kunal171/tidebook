@@ -7,7 +7,9 @@ use {
         solana_program::{instruction::Instruction, program_pack::Pack, system_program},
         AccountDeserialize, AccountSerialize, InstructionData, ToAccountMetas,
     },
-    anchor_spl::token::spl_token::state::Mint as SplMint,
+    anchor_spl::token::spl_token::state::{
+        Account as SplTokenAccount, AccountState, Mint as SplMint,
+    },
     litesvm::LiteSVM,
     solana_account::Account,
     solana_keypair::Keypair,
@@ -72,6 +74,38 @@ fn create_test_mint(svm: &mut LiteSVM, decimals: u8) -> Pubkey {
     mint
 }
 
+fn create_test_token_account(
+    svm: &mut LiteSVM,
+    mint: Pubkey,
+    owner: Pubkey,
+    amount: u64,
+) -> Pubkey {
+    let address = Pubkey::new_unique();
+    let token_state = SplTokenAccount {
+        mint,
+        owner,
+        amount,
+        state: AccountState::Initialized,
+        ..SplTokenAccount::default()
+    };
+    let mut data = vec![0_u8; SplTokenAccount::LEN];
+    SplTokenAccount::pack(token_state, &mut data).unwrap();
+
+    svm.set_account(
+        address,
+        Account {
+            lamports: svm.minimum_balance_for_rent_exemption(SplTokenAccount::LEN),
+            data,
+            owner: anchor_spl::token::ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    )
+    .unwrap();
+
+    address
+}
+
 fn store_active_admin(svm: &mut LiteSVM, authority: Pubkey) {
     let (address, bump) = Pubkey::find_program_address(
         &[tidebook::constants::ADMIN_SEED, authority.as_ref()],
@@ -99,7 +133,7 @@ fn store_active_admin(svm: &mut LiteSVM, authority: Pubkey) {
     .unwrap();
 }
 
-fn initialize_market(svm: &mut LiteSVM, authority: &Keypair) -> Pubkey {
+fn initialize_market(svm: &mut LiteSVM, authority: &Keypair) -> (Pubkey, Pubkey, Pubkey, Pubkey) {
     let base_mint = create_test_mint(svm, 9);
     let quote_mint = create_test_mint(svm, 6);
     let (admin_record, _) = Pubkey::find_program_address(
@@ -158,10 +192,21 @@ fn initialize_market(svm: &mut LiteSVM, authority: &Keypair) -> Pubkey {
 
     let result = send_instruction(svm, authority, instruction);
     assert!(result.is_ok(), "market initialization failed: {result:?}");
-    market
+    (market, quote_mint, vault_authority, quote_vault)
 }
 
-fn place_order(svm: &mut LiteSVM, owner: &Keypair, market: Pubkey, order_id: u64) -> Pubkey {
+fn place_order(
+    svm: &mut LiteSVM,
+    owner: &Keypair,
+    market: Pubkey,
+    order_id: u64,
+    quote_mint: Pubkey,
+    vault_authority: Pubkey,
+    quote_vault: Pubkey,
+) -> Pubkey {
+    let quote_collateral = 500_000;
+    let trader_collateral =
+        create_test_token_account(svm, quote_mint, owner.pubkey(), quote_collateral);
     let (order, _) = Pubkey::find_program_address(
         &[
             tidebook::constants::ORDER_SEED,
@@ -182,6 +227,11 @@ fn place_order(svm: &mut LiteSVM, owner: &Keypair, market: Pubkey, order_id: u64
             trader: owner.pubkey(),
             market,
             order,
+            collateral_mint: quote_mint,
+            trader_collateral,
+            vault_authority,
+            market_vault: quote_vault,
+            token_program: anchor_spl::token::ID,
             system_program: system_program::ID,
         }
         .to_account_metas(None),
@@ -230,8 +280,16 @@ fn setup_open_order() -> (LiteSVM, Keypair, Pubkey, Pubkey) {
     svm.airdrop(&owner.pubkey(), 2_000_000_000).unwrap();
     store_active_admin(&mut svm, owner.pubkey());
 
-    let market = initialize_market(&mut svm, &owner);
-    let order = place_order(&mut svm, &owner, market, ORDER_ID);
+    let (market, quote_mint, vault_authority, quote_vault) = initialize_market(&mut svm, &owner);
+    let order = place_order(
+        &mut svm,
+        &owner,
+        market,
+        ORDER_ID,
+        quote_mint,
+        vault_authority,
+        quote_vault,
+    );
 
     (svm, owner, market, order)
 }
@@ -286,7 +344,7 @@ fn canceled_order_cannot_be_canceled_twice() {
 #[test]
 fn order_cannot_be_canceled_with_different_market() {
     let (mut svm, owner, original_market, order) = setup_open_order();
-    let different_market = initialize_market(&mut svm, &owner);
+    let (different_market, _, _, _) = initialize_market(&mut svm, &owner);
     assert_ne!(original_market, different_market);
     let instruction = cancel_order_instruction(owner.pubkey(), different_market, order, ORDER_ID);
 
