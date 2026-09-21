@@ -111,6 +111,26 @@ fn initialize_market(svm: &mut LiteSVM, authority: &Keypair) -> Pubkey {
         ],
         &tidebook::id(),
     );
+    let (vault_authority, _) = Pubkey::find_program_address(
+        &[tidebook::constants::VAULT_AUTHORITY_SEED, market.as_ref()],
+        &tidebook::id(),
+    );
+    let (base_vault, _) = Pubkey::find_program_address(
+        &[
+            tidebook::constants::VAULT_SEED,
+            market.as_ref(),
+            base_mint.as_ref(),
+        ],
+        &tidebook::id(),
+    );
+    let (quote_vault, _) = Pubkey::find_program_address(
+        &[
+            tidebook::constants::VAULT_SEED,
+            market.as_ref(),
+            quote_mint.as_ref(),
+        ],
+        &tidebook::id(),
+    );
     let instruction = Instruction::new_with_bytes(
         tidebook::id(),
         &tidebook::instruction::InitializeMarket {
@@ -124,6 +144,10 @@ fn initialize_market(svm: &mut LiteSVM, authority: &Keypair) -> Pubkey {
             market,
             base_mint,
             quote_mint,
+            vault_authority,
+            base_vault,
+            quote_vault,
+            token_program: anchor_spl::token::ID,
             system_program: system_program::ID,
         }
         .to_account_metas(None),

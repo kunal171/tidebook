@@ -1,12 +1,11 @@
 use anchor_lang::prelude::*;
+use anchor_spl::token::{Mint, Token, TokenAccount};
 
 use crate::{
-    constants::{ADMIN_SEED, MARKET_SEED},
+    constants::{ADMIN_SEED, MARKET_SEED, VAULT_AUTHORITY_SEED, VAULT_SEED},
     error::MarketError,
     state::{AdminRecord, AdminStatus, Market, MarketStatus},
 };
-
-use anchor_spl::token::Mint;
 
 #[derive(Accounts)]
 pub struct InitializeMarket<'info> {
@@ -46,6 +45,47 @@ pub struct InitializeMarket<'info> {
         @ MarketError::IdenticalMints
     )]
     pub quote_mint: Account<'info, Mint>,
+
+    /// CHECK: Canonical PDA that signs for both market vaults.
+    /// It stores no data.
+    #[account(
+        seeds = [
+            VAULT_AUTHORITY_SEED,
+            market.key().as_ref()
+        ],
+        bump
+    )]
+    pub vault_authority: UncheckedAccount<'info>,
+
+    #[account(
+        init,
+        payer = authority,
+        token::mint = base_mint,
+        token::authority = vault_authority,
+        seeds = [
+            VAULT_SEED,
+            market.key().as_ref(),
+            base_mint.key().as_ref()
+        ],
+        bump
+    )]
+    pub base_vault: Account<'info, TokenAccount>,
+
+    #[account(
+        init,
+        payer = authority,
+        token::mint = quote_mint,
+        token::authority = vault_authority,
+        seeds = [
+            VAULT_SEED,
+            market.key().as_ref(),
+            quote_mint.key().as_ref()
+        ],
+        bump
+    )]
+    pub quote_vault: Account<'info, TokenAccount>,
+
+    pub token_program: Program<'info, Token>,
 
     pub system_program: Program<'info, System>,
 }

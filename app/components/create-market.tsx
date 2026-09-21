@@ -7,7 +7,10 @@ import { PublicKey, SystemProgram } from "@solana/web3.js";
 import {
   deriveAdminRecordPda,
   deriveMarketPda,
+  deriveVaultAuthorityPda,
+  deriveVaultPda,
   getTidebookProgram,
+  TOKEN_PROGRAM_ID,
   transactionExplorerUrl,
 } from "../lib/tidebook";
 import { AppHeader } from "./app-header";
@@ -71,6 +74,9 @@ export function CreateMarket() {
       const lotSize = parsePositiveU64(quantityLotSize, "Quantity lot size");
 
       const market = deriveMarketPda(base, quote);
+      const vaultAuthority = deriveVaultAuthorityPda(market);
+      const baseVault = deriveVaultPda(market, base);
+      const quoteVault = deriveVaultPda(market, quote);
       const signature = await program.methods
         .initializeMarket(tickSize, lotSize)
         .accounts({
@@ -79,6 +85,10 @@ export function CreateMarket() {
           market,
           baseMint: base,
           quoteMint: quote,
+          vaultAuthority,
+          baseVault,
+          quoteVault,
+          tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
         .rpc();

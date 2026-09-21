@@ -16,6 +16,12 @@ export const PROTOCOL_CONFIG_SEED = "protocol_config";
 export const ADMIN_SEED = "admin";
 export const MARKET_SEED = "market";
 export const ORDER_SEED = "order";
+export const VAULT_AUTHORITY_SEED = "vault-authority";
+export const VAULT_SEED = "vault";
+
+export const TOKEN_PROGRAM_ID = new PublicKey(
+  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+);
 
 const BPF_LOADER_UPGRADEABLE_PROGRAM_ID = new PublicKey(
   "BPFLoaderUpgradeab1e11111111111111111111111",
@@ -110,6 +116,24 @@ interface TidebookAccounts {
   adminRecord: AccountClient<AdminRecordAccount>;
   market: AccountClient<MarketAccount>;
   order: AccountClient<OrderAccount>;
+}
+
+export function deriveVaultAuthorityPda(market: PublicKey) {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(VAULT_AUTHORITY_SEED), market.toBuffer()],
+    PROGRAM_ID,
+  )[0];
+}
+
+export function deriveVaultPda(market: PublicKey, mint: PublicKey) {
+  return PublicKey.findProgramAddressSync(
+    [
+      Buffer.from(VAULT_SEED),
+      market.toBuffer(),
+      mint.toBuffer(),
+    ],
+    PROGRAM_ID,
+  )[0];
 }
 
 export function getTidebookProgram(connection: Connection, wallet: BrowserWallet) {

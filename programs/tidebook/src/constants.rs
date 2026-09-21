@@ -20,3 +20,9 @@ pub const PROTOCOL_CONFIG_SEED: &[u8] = b"protocol_config";
 
 #[constant]
 pub const ADMIN_SEED: &[u8] = b"admin";
+
+#[constant]
+pub const VAULT_AUTHORITY_SEED: &[u8] = b"vault-authority";
+
+#[constant]
+pub const VAULT_SEED: &[u8] = b"vault";

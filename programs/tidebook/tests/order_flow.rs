@@ -4,7 +4,7 @@ use {
         solana_program::{instruction::Instruction, program_pack::Pack, system_program},
         AccountDeserialize, AccountSerialize, InstructionData, ToAccountMetas,
     },
-    anchor_spl::token::spl_token::state::Mint as SplMint,
+    anchor_spl::token::spl_token::state::{Account as SplTokenAccount, Mint as SplMint},
     litesvm::LiteSVM,
     solana_account::Account,
     solana_keypair::Keypair,
@@ -22,6 +22,36 @@ const TEST_PRICE_TICK_SIZE: u64 = 10_000;
 const TEST_QUANTITY_LOT_SIZE: u64 = 1_000_000;
 const TEST_ORDER_PRICE: u64 = 100_000_000;
 const TEST_ORDER_QUANTITY: u64 = 5_000_000;
+
+fn derive_market_vault_addresses(
+    program_id: &Pubkey,
+    market: &Pubkey,
+    base_mint: &Pubkey,
+    quote_mint: &Pubkey,
+) -> (Pubkey, Pubkey, Pubkey) {
+    let (vault_authority, _) = Pubkey::find_program_address(
+        &[tidebook::constants::VAULT_AUTHORITY_SEED, market.as_ref()],
+        program_id,
+    );
+    let (base_vault, _) = Pubkey::find_program_address(
+        &[
+            tidebook::constants::VAULT_SEED,
+            market.as_ref(),
+            base_mint.as_ref(),
+        ],
+        program_id,
+    );
+    let (quote_vault, _) = Pubkey::find_program_address(
+        &[
+            tidebook::constants::VAULT_SEED,
+            market.as_ref(),
+            quote_mint.as_ref(),
+        ],
+        program_id,
+    );
+
+    (vault_authority, base_vault, quote_vault)
+}
 
 fn send_initialize_market(
     svm: &mut LiteSVM,
@@ -61,6 +91,8 @@ fn send_initialize_market_with_config(
         &[tidebook::constants::ADMIN_SEED, payer.pubkey().as_ref()],
         &program_id,
     );
+    let (vault_authority, base_vault, quote_vault) =
+        derive_market_vault_addresses(&program_id, &market, &base_mint, &quote_mint);
 
     let instruction = Instruction::new_with_bytes(
         program_id,
@@ -75,6 +107,10 @@ fn send_initialize_market_with_config(
             market,
             base_mint,
             quote_mint,
+            vault_authority,
+            base_vault,
+            quote_vault,
+            token_program: anchor_spl::token::ID,
             system_program: system_program::ID,
         }
         .to_account_metas(None),
@@ -589,6 +625,10 @@ fn zero_price_tick_size_is_rejected() {
 
     assert!(result.is_err(), "zero price tick size was accepted");
     assert!(svm.get_account(&market).is_none());
+    let (_, base_vault, quote_vault) =
+        derive_market_vault_addresses(&tidebook::id(), &market, &base_mint, &quote_mint);
+    assert!(svm.get_account(&base_vault).is_none());
+    assert!(svm.get_account(&quote_vault).is_none());
 }
 
 #[test]
@@ -616,6 +656,10 @@ fn zero_quantity_lot_size_is_rejected() {
 
     assert!(result.is_err(), "zero quantity lot size was accepted");
     assert!(svm.get_account(&market).is_none());
+    let (_, base_vault, quote_vault) =
+        derive_market_vault_addresses(&tidebook::id(), &market, &base_mint, &quote_mint);
+    assert!(svm.get_account(&base_vault).is_none());
+    assert!(svm.get_account(&quote_vault).is_none());
 }
 
 #[test]
@@ -674,4 +718,126 @@ fn market_stores_price_configuration() {
     assert_eq!(state.quote_decimals, 6);
     assert_eq!(state.price_tick_size, TEST_PRICE_TICK_SIZE);
     assert_eq!(state.quantity_lot_size, TEST_QUANTITY_LOT_SIZE);
+}
+
+#[test]
+fn market_initialization_creates_empty_canonical_vaults() {
+    let payer = Keypair::new();
+    let mut svm = LiteSVM::new();
+    svm.add_program(tidebook::id(), PROGRAM_BYTES).unwrap();
+    svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
+    store_admin_record(
+        &mut svm,
+        payer.pubkey(),
+        tidebook::state::AdminStatus::Active,
+    );
+    let base_mint = create_test_mint(&mut svm, 9);
+    let quote_mint = create_test_mint(&mut svm, 6);
+
+    let (market, result) = send_initialize_market(&mut svm, &payer, base_mint, quote_mint);
+    assert!(result.is_ok(), "initialization failed: {result:?}");
+
+    let (vault_authority, base_vault, quote_vault) =
+        derive_market_vault_addresses(&tidebook::id(), &market, &base_mint, &quote_mint);
+    let base_account = svm.get_account(&base_vault).unwrap();
+    let quote_account = svm.get_account(&quote_vault).unwrap();
+    assert_eq!(base_account.owner, anchor_spl::token::ID);
+    assert_eq!(quote_account.owner, anchor_spl::token::ID);
+
+    let base_state = SplTokenAccount::unpack(&base_account.data).unwrap();
+    let quote_state = SplTokenAccount::unpack(&quote_account.data).unwrap();
+    assert_eq!(base_state.mint, base_mint);
+    assert_eq!(quote_state.mint, quote_mint);
+    assert_eq!(base_state.owner, vault_authority);
+    assert_eq!(quote_state.owner, vault_authority);
+    assert_eq!(base_state.amount, 0);
+    assert_eq!(quote_state.amount, 0);
+}
+
+#[test]
+fn market_and_vaults_cannot_be_initialized_twice() {
+    let payer = Keypair::new();
+    let mut svm = LiteSVM::new();
+    svm.add_program(tidebook::id(), PROGRAM_BYTES).unwrap();
+    svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
+    store_admin_record(
+        &mut svm,
+        payer.pubkey(),
+        tidebook::state::AdminStatus::Active,
+    );
+    let base_mint = create_test_mint(&mut svm, 9);
+    let quote_mint = create_test_mint(&mut svm, 6);
+
+    let (_, first) = send_initialize_market(&mut svm, &payer, base_mint, quote_mint);
+    assert!(first.is_ok(), "first initialization failed: {first:?}");
+
+    svm.expire_blockhash();
+    let (_, second) = send_initialize_market(&mut svm, &payer, base_mint, quote_mint);
+    assert!(second.is_err(), "market and vaults initialized twice");
+}
+
+#[test]
+fn noncanonical_vault_address_is_rejected() {
+    let payer = Keypair::new();
+    let mut svm = LiteSVM::new();
+    let program_id = tidebook::id();
+    svm.add_program(program_id, PROGRAM_BYTES).unwrap();
+    svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
+    store_admin_record(
+        &mut svm,
+        payer.pubkey(),
+        tidebook::state::AdminStatus::Active,
+    );
+    let base_mint = create_test_mint(&mut svm, 9);
+    let quote_mint = create_test_mint(&mut svm, 6);
+    let (market, _) = Pubkey::find_program_address(
+        &[
+            tidebook::constants::MARKET_SEED,
+            base_mint.as_ref(),
+            quote_mint.as_ref(),
+        ],
+        &program_id,
+    );
+    let (admin_record, _) = Pubkey::find_program_address(
+        &[tidebook::constants::ADMIN_SEED, payer.pubkey().as_ref()],
+        &program_id,
+    );
+    let (vault_authority, _base_vault, quote_vault) =
+        derive_market_vault_addresses(&program_id, &market, &base_mint, &quote_mint);
+    let noncanonical_base_vault = Pubkey::new_unique();
+    let instruction = Instruction::new_with_bytes(
+        program_id,
+        &tidebook::instruction::InitializeMarket {
+            price_tick_size: TEST_PRICE_TICK_SIZE,
+            quantity_lot_size: TEST_QUANTITY_LOT_SIZE,
+        }
+        .data(),
+        tidebook::accounts::InitializeMarket {
+            authority: payer.pubkey(),
+            admin_record,
+            market,
+            base_mint,
+            quote_mint,
+            vault_authority,
+            base_vault: noncanonical_base_vault,
+            quote_vault,
+            token_program: anchor_spl::token::ID,
+            system_program: system_program::ID,
+        }
+        .to_account_metas(None),
+    );
+    let message = Message::new_with_blockhash(
+        &[instruction],
+        Some(&payer.pubkey()),
+        &svm.latest_blockhash(),
+    );
+    let transaction =
+        VersionedTransaction::try_new(VersionedMessage::Legacy(message), &[&payer]).unwrap();
+
+    let result = svm.send_transaction(transaction);
+
+    assert!(result.is_err(), "noncanonical base vault was accepted");
+    assert!(svm.get_account(&market).is_none());
+    assert!(svm.get_account(&noncanonical_base_vault).is_none());
+    assert!(svm.get_account(&quote_vault).is_none());
 }
