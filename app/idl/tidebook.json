@@ -93,6 +93,193 @@
       ]
     },
     {
+      "name": "append_limit_order",
+      "docs": [
+        "Appends an order behind the current tail of an existing price level."
+      ],
+      "discriminator": [
+        39,
+        101,
+        59,
+        141,
+        61,
+        45,
+        40,
+        55
+      ],
+      "accounts": [
+        {
+          "name": "trader",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "order",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  114,
+                  100,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "account",
+                "path": "market.next_order_id",
+                "account": "Market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "price_level",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  105,
+                  99,
+                  101,
+                  95,
+                  108,
+                  101,
+                  118,
+                  101,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "arg",
+                "path": "side"
+              },
+              {
+                "kind": "arg",
+                "path": "price"
+              }
+            ]
+          }
+        },
+        {
+          "name": "previous_order",
+          "writable": true
+        },
+        {
+          "name": "collateral_mint",
+          "docs": [
+            "Mint used as collateral: base for asks and quote for bids."
+          ]
+        },
+        {
+          "name": "trader_collateral",
+          "writable": true
+        },
+        {
+          "name": "vault_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116,
+                  45,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "market_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "account",
+                "path": "collateral_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "side",
+          "type": {
+            "defined": {
+              "name": "OrderSide"
+            }
+          }
+        },
+        {
+          "name": "price",
+          "type": "u64"
+        },
+        {
+          "name": "quantity",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "cancel_limit_order",
       "docs": [
         "Lets an order owner cancel an open order, including while paused."
@@ -161,7 +348,23 @@
             "seeds": [
               {
                 "kind": "const",
-                "value": [118, 97, 117, 108, 116, 45, 97, 117, 116, 104, 111, 114, 105, 116, 121]
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116,
+                  45,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
               },
               {
                 "kind": "account",
@@ -177,7 +380,13 @@
             "seeds": [
               {
                 "kind": "const",
-                "value": [118, 97, 117, 108, 116]
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
               },
               {
                 "kind": "account",
@@ -236,7 +445,23 @@
             "seeds": [
               {
                 "kind": "const",
-                "value": [118, 97, 117, 108, 116, 45, 97, 117, 116, 104, 111, 114, 105, 116, 121]
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116,
+                  45,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
               },
               {
                 "kind": "account",
@@ -252,7 +477,13 @@
             "seeds": [
               {
                 "kind": "const",
-                "value": [118, 97, 117, 108, 116]
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
               },
               {
                 "kind": "account",
@@ -273,7 +504,13 @@
             "seeds": [
               {
                 "kind": "const",
-                "value": [118, 97, 117, 108, 116]
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
               },
               {
                 "kind": "account",
@@ -818,6 +1055,42 @@
           }
         },
         {
+          "name": "price_level",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  105,
+                  99,
+                  101,
+                  95,
+                  108,
+                  101,
+                  118,
+                  101,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "arg",
+                "path": "side"
+              },
+              {
+                "kind": "arg",
+                "path": "price"
+              }
+            ]
+          }
+        },
+        {
           "name": "collateral_mint",
           "docs": [
             "Mint selected as collateral:",
@@ -834,7 +1107,23 @@
             "seeds": [
               {
                 "kind": "const",
-                "value": [118, 97, 117, 108, 116, 45, 97, 117, 116, 104, 111, 114, 105, 116, 121]
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116,
+                  45,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
               },
               {
                 "kind": "account",
@@ -850,7 +1139,13 @@
             "seeds": [
               {
                 "kind": "const",
-                "value": [118, 97, 117, 108, 116]
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
               },
               {
                 "kind": "account",
@@ -1041,6 +1336,19 @@
         86,
         28,
         51
+      ]
+    },
+    {
+      "name": "PriceLevel",
+      "discriminator": [
+        236,
+        106,
+        90,
+        162,
+        188,
+        41,
+        219,
+        186
       ]
     },
     {
@@ -1252,6 +1560,51 @@
       "code": 6038,
       "name": "InvalidVaultAuthority",
       "msg": "Invalid market vault authority"
+    },
+    {
+      "code": 6039,
+      "name": "PriceLevelInsertionNotImplemented",
+      "msg": "Price-level insertion for a non-empty market side is not implemented"
+    },
+    {
+      "code": 6040,
+      "name": "PriceLevelMarketMismatch",
+      "msg": "Price level belongs to a different market"
+    },
+    {
+      "code": 6041,
+      "name": "PriceLevelSideMismatch",
+      "msg": "Price-level side does not match the order side"
+    },
+    {
+      "code": 6042,
+      "name": "PriceLevelPriceMismatch",
+      "msg": "Price-level price does not match the order price"
+    },
+    {
+      "code": 6043,
+      "name": "InvalidPriceLevelTail",
+      "msg": "Supplied order is not the current price-level tail"
+    },
+    {
+      "code": 6044,
+      "name": "OrderPriceLevelMismatch",
+      "msg": "Order does not belong to the supplied price level"
+    },
+    {
+      "code": 6045,
+      "name": "PriceLevelOrderCountOverflow",
+      "msg": "Price-level order count overflow"
+    },
+    {
+      "code": 6046,
+      "name": "PriceLevelQuantityOverflow",
+      "msg": "Price-level quantity overflow"
+    },
+    {
+      "code": 6047,
+      "name": "OrderIdOverflow",
+      "msg": "Order ID counter overflow"
     }
   ],
   "types": [
@@ -1406,7 +1759,7 @@
     {
       "name": "Order",
       "docs": [
-        "One immutable order submission and its mutable lifecycle state."
+        "One order submission and its mutable queue and lifecycle state."
       ],
       "type": {
         "kind": "struct",
@@ -1434,6 +1787,31 @@
           {
             "name": "price",
             "type": "u64"
+          },
+          {
+            "name": "price_level",
+            "docs": [
+              "Canonical price-level PDA containing this order."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "previous_order",
+            "docs": [
+              "Older order at the same price."
+            ],
+            "type": {
+              "option": "pubkey"
+            }
+          },
+          {
+            "name": "next_order",
+            "docs": [
+              "Newer order at the same price."
+            ],
+            "type": {
+              "option": "pubkey"
+            }
           },
           {
             "name": "quantity",
@@ -1497,6 +1875,106 @@
       }
     },
     {
+      "name": "PriceLevel",
+      "docs": [
+        "One active price in a market-side order-book index."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "docs": [
+              "Market containing this price level."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "side",
+            "docs": [
+              "Bid or ask side."
+            ],
+            "type": {
+              "defined": {
+                "name": "OrderSide"
+              }
+            }
+          },
+          {
+            "name": "price",
+            "docs": [
+              "Tick-aligned price shared by every order in this queue."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "better_price",
+            "docs": [
+              "Adjacent price with higher matching priority."
+            ],
+            "type": {
+              "option": "u64"
+            }
+          },
+          {
+            "name": "worse_price",
+            "docs": [
+              "Adjacent price with lower matching priority."
+            ],
+            "type": {
+              "option": "u64"
+            }
+          },
+          {
+            "name": "first_order",
+            "docs": [
+              "Oldest open order at this price."
+            ],
+            "type": {
+              "option": "pubkey"
+            }
+          },
+          {
+            "name": "last_order",
+            "docs": [
+              "Newest open order at this price."
+            ],
+            "type": {
+              "option": "pubkey"
+            }
+          },
+          {
+            "name": "total_remaining_quantity",
+            "docs": [
+              "Sum of remaining base quantity across queued orders."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "order_count",
+            "docs": [
+              "Number of open orders at this price."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "rent_payer",
+            "docs": [
+              "Wallet that receives rent when this level is closed."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "Canonical price-level PDA bump."
+            ],
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
       "name": "ProtocolConfig",
       "docs": [
         "Singleton governance state created by the program upgrade authority."
@@ -1555,6 +2033,14 @@
       ],
       "type": "bytes",
       "value": "[111, 114, 100, 101, 114]"
+    },
+    {
+      "name": "PRICE_LEVEL_SEED",
+      "docs": [
+        "Namespace for one active market-side-price queue."
+      ],
+      "type": "bytes",
+      "value": "[112, 114, 105, 99, 101, 95, 108, 101, 118, 101, 108]"
     },
     {
       "name": "PROTOCOL_CONFIG_SEED",

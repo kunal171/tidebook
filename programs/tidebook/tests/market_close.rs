@@ -326,6 +326,12 @@ fn place_order(context: &mut TestContext, side: OrderSide) -> OpenOrderFixture {
         ],
         &tidebook::id(),
     );
+    let (price_level, _) = tidebook::derive_price_level_pda(
+        &tidebook::id(),
+        &context.market.market,
+        side,
+        TEST_ORDER_PRICE,
+    );
     let instruction = Instruction::new_with_bytes(
         tidebook::id(),
         &tidebook::instruction::PlaceLimitOrder {
@@ -338,6 +344,7 @@ fn place_order(context: &mut TestContext, side: OrderSide) -> OpenOrderFixture {
             trader: context.authority.pubkey(),
             market: context.market.market,
             order,
+            price_level,
             collateral_mint,
             trader_collateral: owner_collateral,
             vault_authority: context.market.vault_authority,

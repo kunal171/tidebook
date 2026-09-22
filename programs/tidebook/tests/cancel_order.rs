@@ -252,6 +252,12 @@ fn place_order(
         ],
         &tidebook::id(),
     );
+    let (price_level, _) = tidebook::derive_price_level_pda(
+        &tidebook::id(),
+        &market_fixture.market,
+        side,
+        TEST_ORDER_PRICE,
+    );
     let instruction = Instruction::new_with_bytes(
         tidebook::id(),
         &tidebook::instruction::PlaceLimitOrder {
@@ -264,6 +270,7 @@ fn place_order(
             trader: owner.pubkey(),
             market: market_fixture.market,
             order,
+            price_level,
             collateral_mint,
             trader_collateral,
             vault_authority: market_fixture.vault_authority,

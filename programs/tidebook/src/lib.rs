@@ -88,4 +88,16 @@ pub mod tidebook {
     pub fn cancel_limit_order(ctx: Context<CancelLimitOrder>, order_id: u64) -> Result<()> {
         crate::instructions::cancel_limit_order::handle_cancel_limit_order(ctx, order_id)
     }
+
+    /// Appends an order behind the current tail of an existing price level.
+    pub fn append_limit_order(
+        ctx: Context<AppendLimitOrder>,
+        side: OrderSide,
+        price: u64,
+        quantity: u64,
+    ) -> Result<()> {
+        crate::instructions::append_limit_order::handle_append_limit_order(
+            ctx, side, price, quantity,
+        )
+    }
 }

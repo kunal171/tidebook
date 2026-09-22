@@ -190,6 +190,7 @@ fn send_place_limit_order_with_collateral(
         ],
         &tidebook::id(),
     );
+    let (price_level, _) = tidebook::derive_price_level_pda(&tidebook::id(), &market, side, price);
     let instruction = Instruction::new_with_bytes(
         tidebook::id(),
         &tidebook::instruction::PlaceLimitOrder {
@@ -202,6 +203,73 @@ fn send_place_limit_order_with_collateral(
             trader: payer.pubkey(),
             market,
             order,
+            price_level,
+            collateral_mint,
+            trader_collateral,
+            vault_authority,
+            market_vault,
+            token_program: anchor_spl::token::ID,
+            system_program: system_program::ID,
+        }
+        .to_account_metas(None),
+    );
+    let message = Message::new_with_blockhash(
+        &[instruction],
+        Some(&payer.pubkey()),
+        &svm.latest_blockhash(),
+    );
+    let transaction =
+        VersionedTransaction::try_new(VersionedMessage::Legacy(message), &[payer]).unwrap();
+
+    (order, svm.send_transaction(transaction))
+}
+
+fn send_append_limit_order(
+    svm: &mut LiteSVM,
+    payer: &Keypair,
+    market: Pubkey,
+    side: tidebook::state::OrderSide,
+    price: u64,
+    quantity: u64,
+    previous_order: Pubkey,
+) -> (Pubkey, litesvm::types::TransactionResult) {
+    let market_state = load_market(svm, market);
+    let order_id = market_state.next_order_id;
+    let (order, _) = Pubkey::find_program_address(
+        &[
+            tidebook::constants::ORDER_SEED,
+            market.as_ref(),
+            order_id.to_le_bytes().as_ref(),
+        ],
+        &tidebook::id(),
+    );
+    let (price_level, _) = tidebook::derive_price_level_pda(&tidebook::id(), &market, side, price);
+    let (vault_authority, base_vault, quote_vault) = derive_market_vault_addresses(
+        &tidebook::id(),
+        &market,
+        &market_state.base_mint,
+        &market_state.quote_mint,
+    );
+    let (collateral_mint, market_vault) = match side {
+        tidebook::state::OrderSide::Bid => (market_state.quote_mint, quote_vault),
+        tidebook::state::OrderSide::Ask => (market_state.base_mint, base_vault),
+    };
+    let trader_collateral =
+        create_test_token_account(svm, collateral_mint, payer.pubkey(), u64::MAX);
+    let instruction = Instruction::new_with_bytes(
+        tidebook::id(),
+        &tidebook::instruction::AppendLimitOrder {
+            side,
+            price,
+            quantity,
+        }
+        .data(),
+        tidebook::accounts::AppendLimitOrder {
+            trader: payer.pubkey(),
+            market,
+            order,
+            price_level,
+            previous_order,
             collateral_mint,
             trader_collateral,
             vault_authority,
@@ -374,6 +442,13 @@ fn load_order(svm: &LiteSVM, address: Pubkey) -> tidebook::state::Order {
     let account = svm.get_account(&address).unwrap();
     let mut data: &[u8] = &account.data;
     tidebook::state::Order::try_deserialize(&mut data).unwrap()
+}
+
+fn load_price_level(svm: &LiteSVM, address: Pubkey) -> tidebook::state::PriceLevel {
+    let account = svm.get_account(&address).unwrap();
+    let mut data: &[u8] = &account.data;
+
+    tidebook::state::PriceLevel::try_deserialize(&mut data).unwrap()
 }
 
 #[test]
@@ -1172,4 +1247,221 @@ fn noncanonical_vault_address_is_rejected() {
     assert!(svm.get_account(&market).is_none());
     assert!(svm.get_account(&noncanonical_base_vault).is_none());
     assert!(svm.get_account(&quote_vault).is_none());
+}
+
+#[test]
+fn first_bid_creates_best_price_level_and_fifo_queue() {
+    let ActiveMarketFixture {
+        mut svm,
+        payer,
+        market,
+        ..
+    } = setup_active_market(9, TEST_PRICE_TICK_SIZE, TEST_QUANTITY_LOT_SIZE);
+
+    let (order, result) = send_place_limit_order(
+        &mut svm,
+        &payer,
+        market,
+        TEST_ORDER_PRICE,
+        TEST_ORDER_QUANTITY,
+    );
+
+    assert!(result.is_ok(), "bid placement failed: {result:?}");
+
+    let (price_level, expected_bump) = tidebook::derive_price_level_pda(
+        &tidebook::id(),
+        &market,
+        tidebook::state::OrderSide::Bid,
+        TEST_ORDER_PRICE,
+    );
+
+    let market_state = load_market(&svm, market);
+    let level_state = load_price_level(&svm, price_level);
+    let order_state = load_order(&svm, order);
+
+    assert_eq!(market_state.best_bid, Some(TEST_ORDER_PRICE));
+    assert_eq!(market_state.best_ask, None);
+
+    assert_eq!(level_state.market, market);
+    assert_eq!(level_state.side, tidebook::state::OrderSide::Bid);
+    assert_eq!(level_state.price, TEST_ORDER_PRICE);
+    assert_eq!(level_state.better_price, None);
+    assert_eq!(level_state.worse_price, None);
+    assert_eq!(level_state.first_order, Some(order));
+    assert_eq!(level_state.last_order, Some(order));
+    assert_eq!(level_state.total_remaining_quantity, TEST_ORDER_QUANTITY);
+    assert_eq!(level_state.order_count, 1);
+    assert_eq!(level_state.rent_payer, payer.pubkey());
+    assert_eq!(level_state.bump, expected_bump);
+
+    assert_eq!(order_state.price_level, price_level);
+    assert_eq!(order_state.previous_order, None);
+    assert_eq!(order_state.next_order, None);
+}
+
+#[test]
+fn first_ask_creates_best_price_level_and_fifo_queue() {
+    let ActiveMarketFixture {
+        mut svm,
+        payer,
+        market,
+        base_mint,
+        vault_authority,
+        base_vault,
+        ..
+    } = setup_active_market(9, TEST_PRICE_TICK_SIZE, TEST_QUANTITY_LOT_SIZE);
+    let trader_collateral =
+        create_test_token_account(&mut svm, base_mint, payer.pubkey(), TEST_ORDER_QUANTITY);
+
+    let (order, result) = send_place_limit_order_with_collateral(
+        &mut svm,
+        &payer,
+        market,
+        tidebook::state::OrderSide::Ask,
+        TEST_ORDER_PRICE,
+        TEST_ORDER_QUANTITY,
+        base_mint,
+        trader_collateral,
+        vault_authority,
+        base_vault,
+    );
+
+    assert!(result.is_ok(), "ask placement failed: {result:?}");
+
+    let (price_level, expected_bump) = tidebook::derive_price_level_pda(
+        &tidebook::id(),
+        &market,
+        tidebook::state::OrderSide::Ask,
+        TEST_ORDER_PRICE,
+    );
+
+    let market_state = load_market(&svm, market);
+    let level_state = load_price_level(&svm, price_level);
+    let order_state = load_order(&svm, order);
+
+    assert_eq!(market_state.best_bid, None);
+    assert_eq!(market_state.best_ask, Some(TEST_ORDER_PRICE));
+
+    assert_eq!(level_state.market, market);
+    assert_eq!(level_state.side, tidebook::state::OrderSide::Ask);
+    assert_eq!(level_state.price, TEST_ORDER_PRICE);
+    assert_eq!(level_state.better_price, None);
+    assert_eq!(level_state.worse_price, None);
+    assert_eq!(level_state.first_order, Some(order));
+    assert_eq!(level_state.last_order, Some(order));
+    assert_eq!(level_state.total_remaining_quantity, TEST_ORDER_QUANTITY);
+    assert_eq!(level_state.order_count, 1);
+    assert_eq!(level_state.rent_payer, payer.pubkey());
+    assert_eq!(level_state.bump, expected_bump);
+
+    assert_eq!(order_state.price_level, price_level);
+    assert_eq!(order_state.previous_order, None);
+    assert_eq!(order_state.next_order, None);
+}
+
+#[test]
+fn second_bid_level_is_rejected_without_changing_best_bid() {
+    let ActiveMarketFixture {
+        mut svm,
+        payer,
+        market,
+        ..
+    } = setup_active_market(9, TEST_PRICE_TICK_SIZE, TEST_QUANTITY_LOT_SIZE);
+    let first_price = TEST_ORDER_PRICE;
+    let second_price = TEST_ORDER_PRICE + TEST_PRICE_TICK_SIZE;
+
+    let (_, first_result) =
+        send_place_limit_order(&mut svm, &payer, market, first_price, TEST_ORDER_QUANTITY);
+    assert!(
+        first_result.is_ok(),
+        "first bid placement failed: {first_result:?}"
+    );
+
+    let (second_order, second_result) =
+        send_place_limit_order(&mut svm, &payer, market, second_price, TEST_ORDER_QUANTITY);
+
+    assert!(
+        second_result.is_err(),
+        "second price level was accepted before sorted insertion was implemented"
+    );
+
+    let market_state = load_market(&svm, market);
+    assert_eq!(market_state.best_bid, Some(first_price));
+    assert_eq!(market_state.next_order_id, 2);
+    assert_eq!(market_state.open_order_count, 1);
+    assert!(svm.get_account(&second_order).is_none());
+
+    let (second_level, _) = tidebook::derive_price_level_pda(
+        &tidebook::id(),
+        &market,
+        tidebook::state::OrderSide::Bid,
+        second_price,
+    );
+    assert!(svm.get_account(&second_level).is_none());
+}
+
+#[test]
+fn second_bid_at_same_price_appends_to_fifo_queue() {
+    let ActiveMarketFixture {
+        mut svm,
+        payer,
+        market,
+        ..
+    } = setup_active_market(9, TEST_PRICE_TICK_SIZE, TEST_QUANTITY_LOT_SIZE);
+
+    let (first_order, first_result) = send_place_limit_order(
+        &mut svm,
+        &payer,
+        market,
+        TEST_ORDER_PRICE,
+        TEST_ORDER_QUANTITY,
+    );
+    assert!(
+        first_result.is_ok(),
+        "first order placement failed: {first_result:?}"
+    );
+
+    let (second_order, second_result) = send_append_limit_order(
+        &mut svm,
+        &payer,
+        market,
+        tidebook::state::OrderSide::Bid,
+        TEST_ORDER_PRICE,
+        TEST_ORDER_QUANTITY,
+        first_order,
+    );
+    assert!(
+        second_result.is_ok(),
+        "FIFO append failed: {second_result:?}"
+    );
+
+    let (price_level, _) = tidebook::derive_price_level_pda(
+        &tidebook::id(),
+        &market,
+        tidebook::state::OrderSide::Bid,
+        TEST_ORDER_PRICE,
+    );
+    let market_state = load_market(&svm, market);
+    let level_state = load_price_level(&svm, price_level);
+    let first_state = load_order(&svm, first_order);
+    let second_state = load_order(&svm, second_order);
+
+    assert_eq!(market_state.best_bid, Some(TEST_ORDER_PRICE));
+    assert_eq!(market_state.next_order_id, 3);
+    assert_eq!(market_state.open_order_count, 2);
+
+    assert_eq!(level_state.first_order, Some(first_order));
+    assert_eq!(level_state.last_order, Some(second_order));
+    assert_eq!(level_state.order_count, 2);
+    assert_eq!(
+        level_state.total_remaining_quantity,
+        TEST_ORDER_QUANTITY * 2
+    );
+
+    assert_eq!(first_state.previous_order, None);
+    assert_eq!(first_state.next_order, Some(second_order));
+
+    assert_eq!(second_state.previous_order, Some(first_order));
+    assert_eq!(second_state.next_order, None);
+    assert_eq!(second_state.price_level, price_level);
 }

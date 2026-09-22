@@ -122,4 +122,31 @@ pub enum MarketError {
 
     #[msg("Invalid market vault authority")]
     InvalidVaultAuthority,
+
+    #[msg("Price-level insertion for a non-empty market side is not implemented")]
+    PriceLevelInsertionNotImplemented,
+
+    #[msg("Price level belongs to a different market")]
+    PriceLevelMarketMismatch,
+
+    #[msg("Price-level side does not match the order side")]
+    PriceLevelSideMismatch,
+
+    #[msg("Price-level price does not match the order price")]
+    PriceLevelPriceMismatch,
+
+    #[msg("Supplied order is not the current price-level tail")]
+    InvalidPriceLevelTail,
+
+    #[msg("Order does not belong to the supplied price level")]
+    OrderPriceLevelMismatch,
+
+    #[msg("Price-level order count overflow")]
+    PriceLevelOrderCountOverflow,
+
+    #[msg("Price-level quantity overflow")]
+    PriceLevelQuantityOverflow,
+
+    #[msg("Order ID counter overflow")]
+    OrderIdOverflow,
 }
