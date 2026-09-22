@@ -2,11 +2,18 @@
 
 ## Status and scope
 
-Status: **Proposed for `feature/orderbook-index`**.
+Status: **Foundation implemented; sorted levels and indexed removal remain in
+progress**.
 
 This milestone organizes resting orders by price and arrival time. It does not
 match orders, partially fill them, or settle trades. Placement and cancellation
 must keep the index correct before matching logic is allowed to depend on it.
+
+The following matching milestone will use the bounded crankless model described
+in [`crankless-settlement-design.md`](crankless-settlement-design.md). That later
+instruction will require clients to supply the relevant levels, FIFO orders,
+and maker balance PDAs. Consequently, every link established here is a security
+boundary and must be validated rather than treated as trusted client input.
 
 ## Required ordering
 
@@ -33,7 +40,7 @@ PriceLevel = ["price_level", market, side_seed, price.to_le_bytes()]
 Rust enum's in-memory discriminant. This keeps PDA derivation stable across the
 Rust program, tests, and TypeScript client.
 
-Proposed `PriceLevel` fields:
+Implemented `PriceLevel` fields:
 
 | Field | Meaning |
 | --- | --- |
@@ -52,7 +59,7 @@ Proposed `PriceLevel` fields:
 `better_price` and `worse_price` are preferred over `previous` and `next`
 because bid and ask prices sort in opposite numeric directions.
 
-The existing `Order` account gains:
+The existing `Order` account includes:
 
 | Field | Meaning |
 | --- | --- |
@@ -73,13 +80,24 @@ to the new order, sets the new order's `previous_order`, and updates the level's
 quantity and count. All collateral and queue mutations remain in one atomic
 instruction.
 
+This path is implemented by `append_limit_order`. The current integration test
+covers two bids at the same price and verifies the reciprocal order links,
+level aggregates, market counters, and unchanged best-price pointer. Ask-side,
+three-order, false-tail, and rollback coverage remain required before the FIFO
+work is considered complete.
+
 ### Place at a new level
 
-The price-level PDA is created as part of order placement. The client supplies
-the adjacent better and worse levels. The program validates both reciprocal
-links and verifies that the new price lies strictly between them. Head and tail
-insertions use the market's best-price pointer and the terminal level's empty
-link as their boundaries.
+The first level on either side is implemented: its order and price-level PDA are
+created atomically and the corresponding market best-price pointer is set. A
+second distinct price is currently rejected so it cannot overwrite the best
+pointer before sorted insertion exists.
+
+The later sorted insertion path will require the client to supply the adjacent
+better and worse levels. The program will validate reciprocal links and verify
+that the new price lies strictly between them. Head and tail insertions will use
+the market's best-price pointer and the terminal level's empty link as their
+boundaries.
 
 Creating the level separately from the order is rejected because it permits an
 empty active level if the later order transaction never succeeds.
@@ -139,6 +157,11 @@ loosely typed `remaining_accounts`.
 | Separate level-creation transaction | Simpler placement branches | Can leave an empty indexed level and introduces an avoidable race between transactions; rejected |
 | Fixed slab or crit-bit tree | Compact, fast structure used by mature order books | Considerably more complex memory management and fixed-capacity planning; deferred until measurements justify it |
 
+The chosen PDA layout is not presented as more efficient than a Phoenix-style
+in-account tree. It is selected because each state transition is inspectable and
+testable during this research phase. Its account-list, rent, and contention
+costs must be measured before treating it as a production architecture.
+
 ## Concurrency and cost
 
 Orders at different existing price levels can mutate separate level accounts,
@@ -158,11 +181,18 @@ separate future decision.
 
 ## Required test matrix
 
-Tests must be added before matching:
+Current coverage:
 
-- first bid and first ask create their respective best levels;
+- first bid and first ask create canonical best levels;
+- a second distinct bid level is rejected without changing the existing best
+  pointer, counters, or accounts;
+- a second bid at the same price appends behind the FIFO tail and updates level
+  aggregates atomically.
+
+Remaining tests required before matching:
+
 - better, worse, and middle price-level insertion for both sides;
-- two and three orders append in FIFO order at one price;
+- ask-side append and three orders preserving FIFO at one price;
 - head, middle, tail, and only-order cancellation repair reciprocal links;
 - level count and aggregate quantity update with checked arithmetic;
 - final cancellation closes the level and returns rent;
@@ -176,14 +206,17 @@ Tests must be added before matching:
 
 ## Implementation sequence
 
-1. Add stable price-level seed helpers and account layouts.
-2. Add derivation and serialization tests without changing order behavior.
-3. Extend placement for first-level creation and same-level FIFO append.
-4. Add sorted better/worse level insertion.
-5. Extend cancellation for order unlinking.
-6. Close and unlink empty levels, including best-price updates.
-7. Update the checked-in IDL, web client, architecture diagram, and invariant
+1. ~~Add stable price-level seed helpers and account layouts.~~
+2. ~~Add derivation and serialization tests.~~
+3. ~~Create the first bid/ask level and append a second same-price bid.~~
+4. Complete same-price FIFO failure paths and ask-side coverage.
+5. Add sorted better/worse level insertion.
+6. Extend cancellation for order unlinking.
+7. Close and unlink empty levels, including best-price updates.
+8. Update the checked-in IDL, web client, architecture diagram, and invariant
    list.
 
 Matching starts only after this matrix passes and the index can be treated as a
-trusted program-maintained structure.
+trusted program-maintained structure. "Trusted" here means maintained by the
+program; a matching instruction must still revalidate the supplied traversal
+path because clients may submit stale or malicious accounts.

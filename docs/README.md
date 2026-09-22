@@ -11,6 +11,9 @@ exchange functionality that is still planned.
 - [Price-level and FIFO design](price-level-fifo-design.md): proposed account
   layout, mutation rules, security invariants, tradeoffs, and test matrix for
   the order-book index milestone.
+- [Crankless matching and settlement](crankless-settlement-design.md): Phoenix
+  and OpenBook comparison, Tidebook's bounded PDA-based settlement model,
+  trader balances, matching account contract, and implementation sequence.
 - [Devnet deployment](deployment.md): stable program identity, upgrade details,
   verification, and the current IDL-upload limitation.
 - [Devnet address registry](devnet-addresses.md): program, governance, mint,
