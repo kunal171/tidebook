@@ -57,13 +57,19 @@ pub enum AdminStatus {
 
 #[account]
 #[derive(InitSpace)]
-/// One immutable order submission and its mutable lifecycle state.
+/// One order submission and its mutable queue and lifecycle state.
 pub struct Order {
     pub owner: Pubkey,
     pub market: Pubkey,
     pub order_id: u64,
     pub side: OrderSide,
     pub price: u64,
+    /// Canonical price-level PDA containing this order.
+    pub price_level: Pubkey,
+    /// Older order at the same price.
+    pub previous_order: Option<Pubkey>,
+    /// Newer order at the same price.
+    pub next_order: Option<Pubkey>,
     pub quantity: u64,
     pub remaining_quantity: u64,
     /// Base atoms for asks or quote atoms for bids currently held in custody.
@@ -88,4 +94,76 @@ pub struct AdminRecord {
     pub added_by: Pubkey,
     pub status: AdminStatus,
     pub bump: u8,
+}
+
+/// One active price in a market-side order-book index.
+#[account]
+#[derive(InitSpace)]
+pub struct PriceLevel {
+    /// Market containing this price level.
+    pub market: Pubkey,
+
+    /// Bid or ask side.
+    pub side: OrderSide,
+
+    /// Tick-aligned price shared by every order in this queue.
+    pub price: u64,
+
+    /// Adjacent price with higher matching priority.
+    pub better_price: Option<u64>,
+
+    /// Adjacent price with lower matching priority.
+    pub worse_price: Option<u64>,
+
+    /// Oldest open order at this price.
+    pub first_order: Option<Pubkey>,
+
+    /// Newest open order at this price.
+    pub last_order: Option<Pubkey>,
+
+    /// Sum of remaining base quantity across queued orders.
+    pub total_remaining_quantity: u64,
+
+    /// Number of open orders at this price.
+    pub order_count: u64,
+
+    /// Wallet that receives rent when this level is closed.
+    pub rent_payer: Pubkey,
+
+    /// Canonical price-level PDA bump.
+    pub bump: u8,
+}
+
+impl OrderSide {
+    /// Stable PDA seed independent of Rust enum representation.
+    pub const fn seed(self) -> &'static [u8] {
+        match self {
+            Self::Bid => b"bid",
+            Self::Ask => b"ask",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn order_account_size_is_stable() {
+        // Excludes Anchor's 8-byte account discriminator.
+        assert_eq!(Order::INIT_SPACE, 205);
+    }
+
+    #[test]
+    fn price_level_account_size_is_stable() {
+        // Excludes Anchor's 8-byte account discriminator.
+        assert_eq!(PriceLevel::INIT_SPACE, 174);
+    }
+
+    #[test]
+    fn order_side_seeds_are_stable_and_distinct() {
+        assert_eq!(OrderSide::Bid.seed(), b"bid");
+        assert_eq!(OrderSide::Ask.seed(), b"ask");
+        assert_ne!(OrderSide::Bid.seed(), OrderSide::Ask.seed());
+    }
 }

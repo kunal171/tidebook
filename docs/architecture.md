@@ -12,11 +12,15 @@ The current implementation establishes the account and authorization foundation:
 - create one deterministic market for a distinct SPL base/quote mint pair;
 - pause, unpause, and close a market under authority control;
 - create deterministic limit-order accounts while atomically locking collateral;
+- create the first canonical price level on each side and append a same-price
+  order behind a validated FIFO tail;
 - validate behavior with in-process LiteSVM integration tests.
 
-It does **not** yet maintain sorted price levels, match opposing orders, or
-settle trades. Orders hold collateral in market vaults, and canceling an open
-order refunds its entire locked amount to an owner-controlled token account.
+The program does **not** yet insert multiple sorted prices, unlink indexed
+orders during cancellation, match opposing orders, or settle trades. Orders
+hold collateral in market vaults, and canceling an open order refunds its entire
+locked amount to an owner-controlled token account. Price-level data must be
+treated as research-stage until cancellation maintains the same index.
 
 ## 2. System context
 
@@ -115,8 +119,8 @@ program ID. Reversing the pair produces a different address.
 | `quote_decimals` | Decimal precision read from the quote SPL mint during initialization |
 | `price_tick_size` | Smallest permitted price increment, expressed in raw price units |
 | `quantity_lot_size` | Smallest permitted quantity increment, expressed in base-mint atoms |
-| `best_bid` | Reserved summary field; currently initialized to `None` and not maintained |
-| `best_ask` | Reserved summary field; currently initialized to `None` and not maintained |
+| `best_bid` | Price of the first bid level, or `None`; sorted advancement is not implemented |
+| `best_ask` | Price of the first ask level, or `None`; sorted advancement is not implemented |
 | `bump` | Canonical market PDA bump |
 
 ### Market vault topology
@@ -150,6 +154,9 @@ seeds = ["order", market, order_id.to_le_bytes()]
 | `order_id` | Market-local monotonic order number |
 | `side` | `Bid` or `Ask` |
 | `price` | Quote-mint atoms per one whole base token; must be nonzero and aligned to the market tick size |
+| `price_level` | Canonical market/side/price level containing this order |
+| `previous_order` | Older order at the same price, if present |
+| `next_order` | Newer order at the same price, if present |
 | `quantity` | Base-mint atoms; must be nonzero and aligned to the market lot size |
 | `remaining_quantity` | Unfilled quantity; initially equals `quantity` |
 | `locked_collateral` | Base atoms for asks or quote atoms for bids currently held in the market vault |
@@ -158,6 +165,18 @@ seeds = ["order", market, order_id.to_le_bytes()]
 
 Each successful order placement increments `Market.next_order_id`. The order PDA
 therefore also provides insertion order that can later support FIFO priority.
+
+### Price-level PDA
+
+```text
+seeds = ["price_level", market, side_seed, price.to_le_bytes()]
+```
+
+A level stores its market, side, price, optional better/worse price links,
+FIFO head and tail orders, aggregate remaining quantity, order count, rent
+payer, and canonical bump. The first-level creation path initializes the queue
+with one order. `append_limit_order` validates the current tail and atomically
+links a second same-price order behind it.
 
 ## 4. Instruction architecture
 
@@ -172,7 +191,8 @@ therefore also provides insertion order that can later support FIFO priority.
 | `pause_market` | Market authority | `has_one = authority`; market is active | `Active -> Paused` |
 | `unpause_market` | Market authority | `has_one = authority`; market is paused | `Paused -> Active` |
 | `close_market` | Market authority | Market is paused; `open_order_count` is zero; both canonical vaults are empty | Closes both vaults and the market atomically, returning their rent to the authority |
-| `place_limit_order` | Trader | Market is active; price and quantity are aligned; notional is valid; trader owns the correctly minted token account; collateral vault is canonical; balance is sufficient | Transfers collateral, creates an open order, records the locked amount, and increments `next_order_id` atomically |
+| `place_limit_order` | Trader | Market is active and the selected side has no level; price and quantity are aligned; collateral accounts are canonical and funded | Atomically transfers collateral, creates the first level and order, sets the side's best-price pointer, and increments counters |
+| `append_limit_order` | Trader | Existing level is canonical for market/side/price; supplied previous order is its open tail with no successor; collateral validation matches placement | Atomically transfers collateral, creates an order, links it behind the tail, and updates level aggregates and market counters |
 | `cancel_limit_order` | Order owner | Order belongs to the supplied market and signer; status is `Open`; refund account belongs to the owner and uses the side's collateral mint; vault is canonical | Refunds `locked_collateral`, sets it to zero, and transitions `Open -> Canceled` even while paused |
 
 ### Market initialization flow
@@ -228,6 +248,35 @@ Increment Market.next_order_id
 
 This operation is atomic: if account creation or validation fails, the market
 counter and order state are not committed.
+
+### Existing-level FIFO append flow
+
+```text
+Trader
+   |
+   | append_limit_order(side, price, quantity)
+   v
+Validate canonical existing PriceLevel
+   |-- level belongs to market, side, and price
+   |-- supplied previous order equals level.last_order
+   |-- previous order belongs to the level and is Open
+   |-- previous order has no next_order
+   |-- price, quantity, collateral mint, owner, and vault are valid
+   v
+Compute checked next quantities and counters
+   |
+   v
+Transfer collateral into the canonical vault
+   |
+   |-- previous_order.next_order = new order
+   |-- new_order.previous_order = previous order
+   |-- price_level.last_order = new order
+   |-- add level quantity and order count
+   `-- increment market order ID and open-order count
+```
+
+The level's `first_order` and the market's best-price pointer remain unchanged.
+Every transfer, link, aggregate, and counter succeeds or rolls back together.
 
 ### Order cancellation flow
 
@@ -333,15 +382,26 @@ The program currently enforces:
 29. Order placement increments and cancellation decrements `open_order_count`.
 30. A market can close only while paused with no open orders or vault balances.
 31. Successful shutdown closes both canonical vaults and the market atomically.
+32. A first level is derived canonically from market, side, and price and is
+    created atomically with its first order.
+33. A second distinct price is rejected until sorted insertion is implemented,
+    preventing accidental replacement of the current best pointer.
+34. An existing-level append accepts only the level's open tail with no newer
+    successor.
+35. FIFO tail linking, level aggregates, collateral transfer, and market
+    counters are updated atomically.
 
 ## 6. Known architectural gaps
 
 These are planned features, not defects in the current research milestone:
 
-- No price-level accounts or FIFO order queues.
+- No sorted insertion of a second distinct price on either side.
+- Same-price FIFO failure paths, ask append, and three-order coverage remain.
+- Cancellation does not yet unlink orders, update aggregates, or close an empty
+  level; price-level state can therefore be stale after cancellation.
 - No matching engine or partial-fill transitions.
 - No settlement or fee accounting.
-- `best_bid` and `best_ask` are not updated.
+- Best-price pointers do not yet advance between sorted levels.
 - Order accounts are not currently closed or reclaimed.
 
 ## 7. Test architecture
@@ -361,7 +421,7 @@ The test harness:
 5. sends transactions through LiteSVM;
 6. deserializes resulting Anchor accounts and checks state.
 
-The 53-test suite currently covers:
+The 64-test suite currently covers:
 
 - upgrade-authority-only, one-time protocol initialization;
 - creation of the deployer's config and active admin record;
@@ -400,7 +460,11 @@ The 53-test suite currently covers:
 - rejection of shutdown with open bids, open asks, or residual vault balances;
 - rejection of noncanonical base and quote vaults during shutdown;
 - open-order counter transitions across placement and cancellation;
-- atomic closure of an empty paused market and both token vaults.
+- atomic closure of an empty paused market and both token vaults;
+- deterministic price-level derivation, side separation, and account sizing;
+- first bid and first ask price-level creation and best-pointer initialization;
+- safe rejection of a second distinct bid price before sorted insertion exists;
+- same-price bid FIFO append, reciprocal links, aggregates, and market counters.
 
 ## 8. Dependency boundary
 
@@ -411,12 +475,26 @@ public APIs exchange concrete `Address`, `Message`, `Transaction`, `Signer`, and
 
 ## 9. Planned evolution
 
+The proposed account model and its alternatives are documented in
+[`price-level-fifo-design.md`](price-level-fifo-design.md).
+The matching and balance model is documented separately in
+[`crankless-settlement-design.md`](crankless-settlement-design.md).
+
+The selected direction is bounded crankless PDA matching. The client will
+supply a limited sequence of program-maintained price levels, FIFO orders, and
+canonical maker balance PDAs. The program will validate the complete path and
+atomically update orders plus free/locked trader balances. Informational events
+will not represent deferred settlement work.
+
 The recommended implementation order is:
 
-1. Add price-level accounts and FIFO queues.
-2. Implement deterministic matching and partial fills.
-3. Settle base/quote transfers and fees.
-4. Add order cleanup and rent-reclamation rules.
+1. Complete same-price FIFO validation and test coverage.
+2. Add sorted multi-price insertion and indexed cancellation/removal.
+3. Add canonical per-market trader balances and atomic deposit/withdrawal.
+4. Route order collateral through free and locked balance accounting.
+5. Implement bounded deterministic matching and atomic ledger settlement.
+6. Add partial fills, remainder policy, fees, and conservation tests.
+7. Add order cleanup and rent-reclamation rules.
 
 Each phase should add its invariants and failure-path tests before the next
 state transition is introduced.

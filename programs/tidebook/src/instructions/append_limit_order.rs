@@ -1,7 +1,7 @@
-//! Validates and records a market-local limit order.
+//! Appends a limit order to an existing price level.
 //!
-//! Bid orders lock quote tokens and ask orders lock base tokens in the
-//! market's canonical vault before the order becomes visible.
+//! The current tail order is supplied explicitly and validated through
+//! reciprocal links before the FIFO queue is mutated.
 
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, TransferChecked};
@@ -14,15 +14,17 @@ use crate::{
 
 #[derive(Accounts)]
 #[instruction(side: OrderSide, price: u64, quantity: u64)]
-pub struct PlaceLimitOrder<'info> {
+pub struct AppendLimitOrder<'info> {
     #[account(mut)]
     pub trader: Signer<'info>,
 
     #[account(
         mut,
-        constraint = market.status == MarketStatus::Active @ MarketError::MarketNotActive
+        constraint = market.status == MarketStatus::Active
+            @ MarketError::MarketNotActive
     )]
     pub market: Account<'info, Market>,
+
     #[account(
         init,
         payer = trader,
@@ -37,21 +39,37 @@ pub struct PlaceLimitOrder<'info> {
     pub order: Account<'info, Order>,
 
     #[account(
-        init,
-        payer = trader,
-        space = 8 + PriceLevel::INIT_SPACE,
+        mut,
         seeds = [
             PRICE_LEVEL_SEED,
             market.key().as_ref(),
             side.seed(),
-            price.to_le_bytes().as_ref(),
+            price.to_le_bytes().as_ref()
         ],
-        bump
+        bump = price_level.bump,
+        constraint = price_level.market == market.key()
+            @ MarketError::PriceLevelMarketMismatch,
+        constraint = price_level.side == side
+            @ MarketError::PriceLevelSideMismatch,
+        constraint = price_level.price == price
+            @ MarketError::PriceLevelPriceMismatch
     )]
     pub price_level: Account<'info, PriceLevel>,
 
-    /// Mint selected as collateral:
-    /// base for asks and quote for bids.
+    #[account(
+        mut,
+        constraint = price_level.last_order == Some(previous_order.key())
+            @ MarketError::InvalidPriceLevelTail,
+        constraint = previous_order.price_level == price_level.key()
+            @ MarketError::OrderPriceLevelMismatch,
+        constraint = previous_order.status == OrderStatus::Open
+            @ MarketError::OrderNotOpen,
+        constraint = previous_order.next_order.is_none()
+            @ MarketError::InvalidPriceLevelTail
+    )]
+    pub previous_order: Account<'info, Order>,
+
+    /// Mint used as collateral: base for asks and quote for bids.
     pub collateral_mint: Account<'info, Mint>,
 
     #[account(
@@ -63,7 +81,7 @@ pub struct PlaceLimitOrder<'info> {
     )]
     pub trader_collateral: Account<'info, TokenAccount>,
 
-    /// CHECK: Seed-constrained, stateless owner of the market vaults.
+    /// CHECK: Canonical stateless authority of the market vaults.
     #[account(
         seeds = [
             VAULT_AUTHORITY_SEED,
@@ -91,8 +109,8 @@ pub struct PlaceLimitOrder<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn handle_place_limit_order(
-    ctx: Context<PlaceLimitOrder>,
+pub fn handle_append_limit_order(
+    ctx: Context<AppendLimitOrder>,
     side: OrderSide,
     price: u64,
     quantity: u64,
@@ -103,11 +121,10 @@ pub fn handle_place_limit_order(
     let market_key = ctx.accounts.market.key();
     let order_key = ctx.accounts.order.key();
     let price_level_key = ctx.accounts.price_level.key();
+    let previous_order_key = ctx.accounts.previous_order.key();
     let trader_key = ctx.accounts.trader.key();
 
-    let market = &mut ctx.accounts.market;
-    let order = &mut ctx.accounts.order;
-    let price_level = &mut ctx.accounts.price_level;
+    let market = &ctx.accounts.market;
 
     require!(
         price % market.price_tick_size == 0,
@@ -119,18 +136,6 @@ pub fn handle_place_limit_order(
         MarketError::QuantityNotOnLot
     );
 
-    let side_is_empty = match side {
-        OrderSide::Bid => market.best_bid.is_none(),
-        OrderSide::Ask => market.best_ask.is_none(),
-    };
-
-    require!(
-        side_is_empty,
-        MarketError::PriceLevelInsertionNotImplemented
-    );
-
-    // Prices are quote atoms per whole base token, while quantities are base
-    // atoms. Dividing by the base scale converts their product to quote atoms.
     let base_scale = 10_u128
         .checked_pow(u32::from(market.base_decimals))
         .ok_or(MarketError::OrderNotionalOverflow)?;
@@ -164,10 +169,29 @@ pub fn handle_place_limit_order(
         MarketError::InsufficientCollateral
     );
 
+    let next_order_id = market
+        .next_order_id
+        .checked_add(1)
+        .ok_or(MarketError::OrderIdOverflow)?;
+
     let next_open_order_count = market
         .open_order_count
         .checked_add(1)
         .ok_or(MarketError::OpenOrderCountOverflow)?;
+
+    let next_level_quantity = ctx
+        .accounts
+        .price_level
+        .total_remaining_quantity
+        .checked_add(quantity)
+        .ok_or(MarketError::PriceLevelQuantityOverflow)?;
+
+    let next_level_count = ctx
+        .accounts
+        .price_level
+        .order_count
+        .checked_add(1)
+        .ok_or(MarketError::PriceLevelOrderCountOverflow)?;
 
     token::transfer_checked(
         CpiContext::new(
@@ -183,25 +207,18 @@ pub fn handle_place_limit_order(
         ctx.accounts.collateral_mint.decimals,
     )?;
 
-    price_level.market = market_key;
-    price_level.side = side;
-    price_level.price = price;
-    price_level.better_price = None;
-    price_level.worse_price = None;
-    price_level.first_order = Some(order_key);
-    price_level.last_order = Some(order_key);
-    price_level.total_remaining_quantity = quantity;
-    price_level.order_count = 1;
-    price_level.rent_payer = trader_key;
-    price_level.bump = ctx.bumps.price_level;
+    // Link the old tail to the new order.
+    ctx.accounts.previous_order.next_order = Some(order_key);
 
+    // The new order becomes the final item in the FIFO queue.
+    let order = &mut ctx.accounts.order;
     order.owner = trader_key;
     order.market = market_key;
-    order.order_id = market.next_order_id;
+    order.order_id = ctx.accounts.market.next_order_id;
     order.side = side;
     order.price = price;
     order.price_level = price_level_key;
-    order.previous_order = None;
+    order.previous_order = Some(previous_order_key);
     order.next_order = None;
     order.quantity = quantity;
     order.remaining_quantity = quantity;
@@ -209,13 +226,14 @@ pub fn handle_place_limit_order(
     order.status = OrderStatus::Open;
     order.bump = ctx.bumps.order;
 
-    match side {
-        OrderSide::Bid => market.best_bid = Some(price),
-        OrderSide::Ask => market.best_ask = Some(price),
-    }
-    // Increment only after the order is fully initialized. Solana transaction
-    // atomicity rolls both writes back if the instruction later fails.
-    market.next_order_id += 1;
+    // The head remains unchanged; only the tail and aggregates move.
+    let price_level = &mut ctx.accounts.price_level;
+    price_level.last_order = Some(order_key);
+    price_level.total_remaining_quantity = next_level_quantity;
+    price_level.order_count = next_level_count;
+
+    let market = &mut ctx.accounts.market;
+    market.next_order_id = next_order_id;
     market.open_order_count = next_open_order_count;
 
     Ok(())

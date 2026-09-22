@@ -6,12 +6,14 @@
 pub mod constants;
 pub mod error;
 pub mod instructions;
+pub mod pda;
 pub mod state;
 
 use anchor_lang::prelude::*;
 
 pub use constants::*;
 pub use instructions::*;
+pub use pda::*;
 pub use state::*;
 
 declare_id!("BPdNF5CnV8z1EkHo7tcueR6wXmzZV2j6j4wsUTirPgWL");
@@ -85,5 +87,17 @@ pub mod tidebook {
     /// Lets an order owner cancel an open order, including while paused.
     pub fn cancel_limit_order(ctx: Context<CancelLimitOrder>, order_id: u64) -> Result<()> {
         crate::instructions::cancel_limit_order::handle_cancel_limit_order(ctx, order_id)
+    }
+
+    /// Appends an order behind the current tail of an existing price level.
+    pub fn append_limit_order(
+        ctx: Context<AppendLimitOrder>,
+        side: OrderSide,
+        price: u64,
+        quantity: u64,
+    ) -> Result<()> {
+        crate::instructions::append_limit_order::handle_append_limit_order(
+            ctx, side, price, quantity,
+        )
     }
 }
