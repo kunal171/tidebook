@@ -411,6 +411,9 @@ public APIs exchange concrete `Address`, `Message`, `Transaction`, `Signer`, and
 
 ## 9. Planned evolution
 
+The proposed account model and its alternatives are documented in
+[`price-level-fifo-design.md`](price-level-fifo-design.md).
+
 The recommended implementation order is:
 
 1. Add price-level accounts and FIFO queues.

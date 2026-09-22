@@ -8,6 +8,9 @@ exchange functionality that is still planned.
 
 - [Architecture](architecture.md): program boundaries, accounts, instructions,
   invariants, transaction flows, tests, and planned evolution.
+- [Price-level and FIFO design](price-level-fifo-design.md): proposed account
+  layout, mutation rules, security invariants, tradeoffs, and test matrix for
+  the order-book index milestone.
 - [Devnet deployment](deployment.md): stable program identity, upgrade details,
   verification, and the current IDL-upload limitation.
 - [Devnet address registry](devnet-addresses.md): program, governance, mint,
