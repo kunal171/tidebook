@@ -34,3 +34,7 @@ pub const VAULT_AUTHORITY_SEED: &[u8] = b"vault-authority";
 /// Token vault namespace; the remaining seeds are the market and asset mint.
 #[constant]
 pub const VAULT_SEED: &[u8] = b"vault";
+
+/// Namespace for one active market-side-price queue.
+#[constant]
+pub const PRICE_LEVEL_SEED: &[u8] = b"price_level";
