@@ -9,7 +9,6 @@ pub mod initialize_protocol;
 pub mod insert_limit_order;
 pub mod manage_admin;
 pub mod pause;
-pub mod place_limit_order;
 pub mod remove_admin;
 pub mod unpause;
 
@@ -22,6 +21,5 @@ pub use initialize_protocol::*;
 pub use insert_limit_order::*;
 pub use manage_admin::*;
 pub use pause::*;
-pub use place_limit_order::*;
 pub use remove_admin::*;
 pub use unpause::*;

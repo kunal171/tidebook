@@ -973,49 +973,19 @@
       "args": []
     },
     {
-      "name": "pause_market",
+      "name": "insert_limit_order",
       "docs": [
-        "Stops new order placement while preserving cancellation access."
+        "Inserts an order at a new distinct sorted price level."
       ],
       "discriminator": [
-        216,
-        238,
-        4,
-        164,
-        65,
-        11,
-        162,
-        91
-      ],
-      "accounts": [
-        {
-          "name": "authority",
-          "signer": true,
-          "relations": [
-            "market"
-          ]
-        },
-        {
-          "name": "market",
-          "writable": true
-        }
-      ],
-      "args": []
-    },
-    {
-      "name": "place_limit_order",
-      "docs": [
-        "Creates an open, market-local limit order after grid validation."
-      ],
-      "discriminator": [
-        108,
-        176,
-        33,
-        186,
-        146,
-        229,
-        1,
-        197
+        143,
+        250,
+        64,
+        181,
+        147,
+        157,
+        114,
+        193
       ],
       "accounts": [
         {
@@ -1093,8 +1063,7 @@
         {
           "name": "collateral_mint",
           "docs": [
-            "Mint selected as collateral:",
-            "base for asks and quote for bids."
+            "Mint selected as collateral: base for asks and quote for bids."
           ]
         },
         {
@@ -1165,6 +1134,22 @@
         {
           "name": "system_program",
           "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "better_level",
+          "docs": [
+            "Adjacent level with higher matching priority, or `None` for a new best."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "worse_level",
+          "docs": [
+            "Adjacent level with lower matching priority, or `None` for a new worst."
+          ],
+          "writable": true,
+          "optional": true
         }
       ],
       "args": [
@@ -1185,6 +1170,36 @@
           "type": "u64"
         }
       ]
+    },
+    {
+      "name": "pause_market",
+      "docs": [
+        "Stops new order placement while preserving cancellation access."
+      ],
+      "discriminator": [
+        216,
+        238,
+        4,
+        164,
+        65,
+        11,
+        162,
+        91
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "market",
+          "writable": true
+        }
+      ],
+      "args": []
     },
     {
       "name": "remove_admin",
@@ -1564,7 +1579,7 @@
     {
       "code": 6039,
       "name": "PriceLevelInsertionNotImplemented",
-      "msg": "Price-level insertion for a non-empty market side is not implemented"
+      "msg": "Middle and new-worst price-level insertion is not implemented"
     },
     {
       "code": 6040,
@@ -1605,6 +1620,26 @@
       "code": 6047,
       "name": "OrderIdOverflow",
       "msg": "Order ID counter overflow"
+    },
+    {
+      "code": 6048,
+      "name": "InvalidPriceLevelNeighbors",
+      "msg": "Invalid combination of better and worse price-level neighbors"
+    },
+    {
+      "code": 6049,
+      "name": "BestPriceLevelMismatch",
+      "msg": "Supplied level is not the market's current best level"
+    },
+    {
+      "code": 6050,
+      "name": "InvalidPriceLevelOrdering",
+      "msg": "New price does not have better priority than the current best price"
+    },
+    {
+      "code": 6051,
+      "name": "NoncanonicalPriceLevel",
+      "msg": "Supplied price-level account is not canonical"
     }
   ],
   "types": [

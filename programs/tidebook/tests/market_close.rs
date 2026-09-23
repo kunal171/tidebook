@@ -334,13 +334,13 @@ fn place_order(context: &mut TestContext, side: OrderSide) -> OpenOrderFixture {
     );
     let instruction = Instruction::new_with_bytes(
         tidebook::id(),
-        &tidebook::instruction::PlaceLimitOrder {
+        &tidebook::instruction::InsertLimitOrder {
             side,
             price: TEST_ORDER_PRICE,
             quantity: TEST_ORDER_QUANTITY,
         }
         .data(),
-        tidebook::accounts::PlaceLimitOrder {
+        tidebook::accounts::InsertLimitOrder {
             trader: context.authority.pubkey(),
             market: context.market.market,
             order,
@@ -351,6 +351,8 @@ fn place_order(context: &mut TestContext, side: OrderSide) -> OpenOrderFixture {
             market_vault,
             token_program: anchor_spl::token::ID,
             system_program: system_program::ID,
+            better_level: None,
+            worse_level: None,
         }
         .to_account_metas(None),
     );

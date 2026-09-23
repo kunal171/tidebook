@@ -40,16 +40,6 @@ pub mod tidebook {
         crate::instructions::pause::handle_pause_market(ctx)
     }
 
-    /// Creates an open, market-local limit order after grid validation.
-    pub fn place_limit_order(
-        ctx: Context<PlaceLimitOrder>,
-        side: OrderSide,
-        price: u64,
-        quantity: u64,
-    ) -> Result<()> {
-        crate::instructions::place_limit_order::handle_place_limit_order(ctx, side, price, quantity)
-    }
-
     /// Returns a paused market to active trading state.
     pub fn unpause_market(ctx: Context<UnpauseMarket>) -> Result<()> {
         crate::instructions::unpause::handle_unpause_market(ctx)

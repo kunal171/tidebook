@@ -260,13 +260,13 @@ fn place_order(
     );
     let instruction = Instruction::new_with_bytes(
         tidebook::id(),
-        &tidebook::instruction::PlaceLimitOrder {
+        &tidebook::instruction::InsertLimitOrder {
             side,
             price: TEST_ORDER_PRICE,
             quantity: TEST_ORDER_QUANTITY,
         }
         .data(),
-        tidebook::accounts::PlaceLimitOrder {
+        tidebook::accounts::InsertLimitOrder {
             trader: owner.pubkey(),
             market: market_fixture.market,
             order,
@@ -277,6 +277,8 @@ fn place_order(
             market_vault,
             token_program: anchor_spl::token::ID,
             system_program: system_program::ID,
+            better_level: None,
+            worse_level: None,
         }
         .to_account_metas(None),
     );

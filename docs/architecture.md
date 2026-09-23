@@ -12,11 +12,12 @@ The current implementation establishes the account and authorization foundation:
 - create one deterministic market for a distinct SPL base/quote mint pair;
 - pause, unpause, and close a market under authority control;
 - create deterministic limit-order accounts while atomically locking collateral;
-- create the first canonical price level on each side and append a same-price
-  order behind a validated FIFO tail;
+- create the first canonical price level on each side, insert a better-priced
+  level ahead of the current best, and append a same-price order behind a
+  validated FIFO tail;
 - validate behavior with in-process LiteSVM integration tests.
 
-The program does **not** yet insert multiple sorted prices, unlink indexed
+The program does **not** yet insert middle or worst prices, unlink indexed
 orders during cancellation, match opposing orders, or settle trades. Orders
 hold collateral in market vaults, and canceling an open order refunds its entire
 locked amount to an owner-controlled token account. Price-level data must be
@@ -191,7 +192,7 @@ links a second same-price order behind it.
 | `pause_market` | Market authority | `has_one = authority`; market is active | `Active -> Paused` |
 | `unpause_market` | Market authority | `has_one = authority`; market is paused | `Paused -> Active` |
 | `close_market` | Market authority | Market is paused; `open_order_count` is zero; both canonical vaults are empty | Closes both vaults and the market atomically, returning their rent to the authority |
-| `place_limit_order` | Trader | Market is active and the selected side has no level; price and quantity are aligned; collateral accounts are canonical and funded | Atomically transfers collateral, creates the first level and order, sets the side's best-price pointer, and increments counters |
+| `insert_limit_order` | Trader | Market is active; price and quantity are aligned; collateral accounts are canonical and funded; either the side is empty with no neighbors, or the supplied worse level is the canonical current best and the new price is better | Atomically transfers collateral, creates a new level and its first order, links a previous best when present, updates the best-price pointer, and increments counters |
 | `append_limit_order` | Trader | Existing level is canonical for market/side/price; supplied previous order is its open tail with no successor; collateral validation matches placement | Atomically transfers collateral, creates an order, links it behind the tail, and updates level aggregates and market counters |
 | `cancel_limit_order` | Order owner | Order belongs to the supplied market and signer; status is `Open`; refund account belongs to the owner and uses the side's collateral mint; vault is canonical | Refunds `locked_collateral`, sets it to zero, and transitions `Open -> Canceled` even while paused |
 
@@ -219,14 +220,18 @@ Create Market PDA as Active
    `-- set both token-account authorities to the vault-authority PDA
 ```
 
-### Limit-order placement flow
+### New-level insertion flow
 
 ```text
 Trader
    |
-   | place_limit_order(side, price, quantity)
+   | insert_limit_order(side, price, quantity)
    v
 Validate active Market + nonzero values
+   |-- empty side requires better = None and worse = None
+   |-- non-empty side currently requires better = None
+   |-- supplied worse level must be the canonical current best
+   |-- new bid must be higher; new ask must be lower
    |-- price % price_tick_size == 0
    |-- quantity % quantity_lot_size == 0
    |-- checked quote notional > 0
@@ -238,6 +243,9 @@ Validate active Market + nonzero values
    | derive ["order", market, next_order_id]
    v
 Transfer collateral into the canonical market vault
+   |
+   v
+Initialize PriceLevel PDA; link the prior best when present
    |
    v
 Create Order PDA as Open and record locked_collateral
@@ -384,18 +392,21 @@ The program currently enforces:
 31. Successful shutdown closes both canonical vaults and the market atomically.
 32. A first level is derived canonically from market, side, and price and is
     created atomically with its first order.
-33. A second distinct price is rejected until sorted insertion is implemented,
-    preventing accidental replacement of the current best pointer.
-34. An existing-level append accepts only the level's open tail with no newer
+33. Empty-side insertion requires no neighbors; new-best insertion on a non-empty
+    side requires the canonical previous best as its worse neighbor.
+34. Middle and new-worst insertion remain rejected until both-neighbor and
+    terminal-link validation are implemented.
+35. An existing-level append accepts only the level's open tail with no newer
     successor.
-35. FIFO tail linking, level aggregates, collateral transfer, and market
+36. FIFO tail linking, level aggregates, collateral transfer, and market
     counters are updated atomically.
 
 ## 6. Known architectural gaps
 
 These are planned features, not defects in the current research milestone:
 
-- No sorted insertion of a second distinct price on either side.
+- New-best insertion is implemented; middle and new-worst insertion are not yet
+  implemented.
 - Cancellation does not yet unlink orders, update aggregates, or close an empty
   level; price-level state can therefore be stale after cancellation.
 - No matching engine or partial-fill transitions.
@@ -420,7 +431,7 @@ The test harness:
 5. sends transactions through LiteSVM;
 6. deserializes resulting Anchor accounts and checks state.
 
-The 70-test suite currently covers:
+The 73-test suite currently covers:
 
 - upgrade-authority-only, one-time protocol initialization;
 - creation of the deployer's config and active admin record;
@@ -462,7 +473,9 @@ The 70-test suite currently covers:
 - atomic closure of an empty paused market and both token vaults;
 - deterministic price-level derivation, side separation, and account sizing;
 - first bid and first ask price-level creation and best-pointer initialization;
-- safe rejection of a second distinct bid price before sorted insertion exists;
+- empty-side bid and ask insertion with no neighbors, plus atomic rejection of an unexpected neighbor;
+- new-best bid and ask insertion with reciprocal links to previous bests;
+- rejection of a missing current-best neighbor on a non-empty side;
 - same-price bid and ask FIFO append, reciprocal links, aggregates, and market
   counters;
 - three-order FIFO chaining;
