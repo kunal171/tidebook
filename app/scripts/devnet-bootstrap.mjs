@@ -98,48 +98,84 @@ const order = derivePda([
   market.toBuffer(),
   orderId.toArrayLike(Buffer, "le", 8),
 ]);
-const orderAccounts = {
+const vaultAuthority = derivePda([
+  Buffer.from("vault-authority"),
+  market.toBuffer(),
+]);
+const collateralMint = marketState.quoteMint;
+const marketVault = derivePda([
+  Buffer.from("vault"),
+  market.toBuffer(),
+  collateralMint.toBuffer(),
+]);
+const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+  payer.publicKey,
+  { mint: collateralMint },
+  "confirmed",
+);
+const traderCollateral = tokenAccounts.value.find(({ account }) => {
+  if (!("parsed" in account.data)) return false;
+
+  const amount = account.data.parsed?.info?.tokenAmount?.amount;
+  return typeof amount === "string" && new BN(amount).gtn(0);
+})?.pubkey;
+
+if (!traderCollateral) {
+  throw new Error(
+    "No funded quote token account found for " + collateralMint.toBase58(),
+  );
+}
+
+const priceLevelFor = (price) =>
+  derivePda([
+    Buffer.from("price_level"),
+    market.toBuffer(),
+    Buffer.from("bid"),
+    price.toArrayLike(Buffer, "le", 8),
+  ]);
+const orderAccountsFor = (price) => ({
   trader: payer.publicKey,
   market,
   order,
+  priceLevel: priceLevelFor(price),
+  collateralMint,
+  traderCollateral,
+  vaultAuthority,
+  marketVault,
+  tokenProgram: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
   systemProgram: SystemProgram.programId,
-};
+  betterLevel: programId,
+  worseLevel: programId,
+});
 
 async function expectRejected(label, operation) {
   try {
     const signature = await operation();
-    throw new Error(`${label} unexpectedly succeeded: ${signature}`);
+    throw new Error(label + " unexpectedly succeeded: " + signature);
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
-    if (message.startsWith(`${label} unexpectedly succeeded`)) throw cause;
+    if (message.startsWith(label + " unexpectedly succeeded")) throw cause;
     return message.split("\n")[0];
   }
 }
 
+const offTickPrice = ORDER_PRICE.addn(1);
 const offTickError = await expectRejected("off-tick order", () =>
   program.methods
-    .placeLimitOrder(
-      { bid: {} },
-      ORDER_PRICE.addn(1),
-      ORDER_QUANTITY,
-    )
-    .accounts(orderAccounts)
+    .insertLimitOrder({ bid: {} }, offTickPrice, ORDER_QUANTITY)
+    .accounts(orderAccountsFor(offTickPrice))
     .rpc(),
 );
 const offLotError = await expectRejected("off-lot order", () =>
   program.methods
-    .placeLimitOrder(
-      { bid: {} },
-      ORDER_PRICE,
-      ORDER_QUANTITY.addn(1),
-    )
-    .accounts(orderAccounts)
+    .insertLimitOrder({ bid: {} }, ORDER_PRICE, ORDER_QUANTITY.addn(1))
+    .accounts(orderAccountsFor(ORDER_PRICE))
     .rpc(),
 );
 
 const placeOrderSignature = await program.methods
-  .placeLimitOrder({ bid: {} }, ORDER_PRICE, ORDER_QUANTITY)
-  .accounts(orderAccounts)
+  .insertLimitOrder({ bid: {} }, ORDER_PRICE, ORDER_QUANTITY)
+  .accounts(orderAccountsFor(ORDER_PRICE))
   .rpc();
 const cancelOrderSignature = await program.methods
   .cancelLimitOrder(orderId)
@@ -147,6 +183,11 @@ const cancelOrderSignature = await program.methods
     owner: payer.publicKey,
     market,
     order,
+    collateralMint,
+    ownerCollateral: traderCollateral,
+    vaultAuthority,
+    marketVault,
+    tokenProgram: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
   })
   .rpc();
 

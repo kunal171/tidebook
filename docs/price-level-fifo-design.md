@@ -88,16 +88,17 @@ after failure.
 
 ### Place at a new level
 
-The first level on either side is implemented: its order and price-level PDA are
-created atomically and the corresponding market best-price pointer is set. A
-second distinct price is currently rejected so it cannot overwrite the best
-pointer before sorted insertion exists.
+`insert_limit_order` owns both first-level creation and sorted new-level
+insertion. For an empty side, the client supplies no neighbors. For a non-empty
+side, the implemented branch inserts only a new best: `better_level` is absent
+and `worse_level` must be the canonical current best. A bid must be higher than
+the old best bid; an ask must be lower than the old best ask. The instruction
+updates the old best's reciprocal link and the market best pointer atomically
+with collateral transfer and order creation.
 
-The later sorted insertion path will require the client to supply the adjacent
-better and worse levels. The program will validate reciprocal links and verify
-that the new price lies strictly between them. Head and tail insertions will use
-the market's best-price pointer and the terminal level's empty link as their
-boundaries.
+Middle and new-worst insertion remain deferred. They will require the client to
+supply canonical adjacent levels, and the program must validate strict ordering
+and reciprocal links before mutation.
 
 Creating the level separately from the order is rejected because it permits an
 empty active level if the later order transaction never succeeds.
@@ -184,8 +185,10 @@ separate future decision.
 Current coverage:
 
 - first bid and first ask create canonical best levels;
-- a second distinct bid level is rejected without changing the existing best
-  pointer, counters, or accounts;
+- an empty bid or ask side accepts no-neighbor insertion and rejects an unexpected neighbor;
+- omitting the current-best neighbor on a non-empty side is rejected without
+  changing pointers, counters, or accounts;
+- better bid and ask levels insert before and link back to their previous bests;
 - a second bid at the same price appends behind the FIFO tail and updates level
   aggregates atomically;
 - bid and ask append paths preserve the same queue invariants;
@@ -195,7 +198,7 @@ Current coverage:
 
 Remaining tests required before matching:
 
-- better, worse, and middle price-level insertion for both sides;
+- worse and middle insertion for both sides;
 - head, middle, tail, and only-order cancellation repair reciprocal links;
 - level count and aggregate quantity update with checked arithmetic;
 - final cancellation closes the level and returns rent;

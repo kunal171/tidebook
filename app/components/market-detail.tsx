@@ -16,6 +16,7 @@ import {
   accountExplorerUrl,
   decodeMarketStatus,
   deriveOrderPda,
+  derivePriceLevelPda,
   deriveVaultAuthorityPda,
   formatAtomicAmount,
   findOwnedTokenAccount,
@@ -181,20 +182,79 @@ export function MarketDetail({ address }: { address: string }) {
       const vaultAuthority = deriveVaultAuthorityPda(marketAddress);
       const marketVault = deriveVaultPda(marketAddress, collateralMint);
 
-      const signature = await signedProgram.methods
-        .placeLimitOrder(orderSide, rawPrice, rawQuantity)
-        .accounts({
-          trader: wallet.publicKey,
-          market: marketAddress,
-          order,
-          collateralMint,
-          traderCollateral,
-          vaultAuthority,
-          marketVault,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-        })
-        .rpc();
+      const priceLevel = derivePriceLevelPda(
+        marketAddress,
+        side,
+        rawPrice,
+      );
+      const priceLevelState = await getTidebookAccounts(
+        signedProgram,
+      ).priceLevel.fetchNullable(priceLevel);
+
+      let signature: string;
+
+      if (priceLevelState) {
+        if (!priceLevelState.lastOrder) {
+          throw new Error("Existing price level has no FIFO tail");
+        }
+
+        signature = await signedProgram.methods
+          .appendLimitOrder(orderSide, rawPrice, rawQuantity)
+          .accounts({
+            trader: wallet.publicKey,
+            market: marketAddress,
+            order,
+            priceLevel,
+            previousOrder: priceLevelState.lastOrder,
+            collateralMint,
+            traderCollateral,
+            vaultAuthority,
+            marketVault,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc();
+      } else {
+        const currentBest = side === "bid" ? market.bestBid : market.bestAsk;
+        let worseLevel: PublicKey | null = null;
+
+        if (currentBest) {
+          const becomesBest =
+            side === "bid"
+              ? rawPrice.gt(currentBest)
+              : rawPrice.lt(currentBest);
+
+          if (!becomesBest) {
+            throw new Error(
+              "This price needs middle or worst level insertion, which is the next order-book milestone",
+            );
+          }
+
+          worseLevel = derivePriceLevelPda(
+            marketAddress,
+            side,
+            currentBest,
+          );
+        }
+
+        signature = await signedProgram.methods
+          .insertLimitOrder(orderSide, rawPrice, rawQuantity)
+          .accountsPartial({
+            trader: wallet.publicKey,
+            market: marketAddress,
+            order,
+            priceLevel,
+            collateralMint,
+            traderCollateral,
+            vaultAuthority,
+            marketVault,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+            betterLevel: signedProgram.programId,
+            worseLevel: worseLevel ?? signedProgram.programId,
+          })
+          .rpc();
+      }
 
       setResult({ signature, order });
       setPrice("");

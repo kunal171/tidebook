@@ -123,7 +123,7 @@ pub enum MarketError {
     #[msg("Invalid market vault authority")]
     InvalidVaultAuthority,
 
-    #[msg("Price-level insertion for a non-empty market side is not implemented")]
+    #[msg("Middle and new-worst price-level insertion is not implemented")]
     PriceLevelInsertionNotImplemented,
 
     #[msg("Price level belongs to a different market")]
@@ -149,4 +149,16 @@ pub enum MarketError {
 
     #[msg("Order ID counter overflow")]
     OrderIdOverflow,
+
+    #[msg("Invalid combination of better and worse price-level neighbors")]
+    InvalidPriceLevelNeighbors,
+
+    #[msg("Supplied level is not the market's current best level")]
+    BestPriceLevelMismatch,
+
+    #[msg("New price does not have better priority than the current best price")]
+    InvalidPriceLevelOrdering,
+
+    #[msg("Supplied price-level account is not canonical")]
+    NoncanonicalPriceLevel,
 }

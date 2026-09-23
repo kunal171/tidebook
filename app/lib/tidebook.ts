@@ -16,6 +16,7 @@ export const PROTOCOL_CONFIG_SEED = "protocol_config";
 export const ADMIN_SEED = "admin";
 export const MARKET_SEED = "market";
 export const ORDER_SEED = "order";
+export const PRICE_LEVEL_SEED = "price_level";
 export const VAULT_AUTHORITY_SEED = "vault-authority";
 export const VAULT_SEED = "vault";
 
@@ -85,6 +86,20 @@ export interface MarketView extends MarketAccount {
   address: PublicKey;
 }
 
+export interface PriceLevelAccount {
+  market: PublicKey;
+  side: { bid?: object; ask?: object };
+  price: BN;
+  betterPrice: BN | null;
+  worsePrice: BN | null;
+  firstOrder: PublicKey | null;
+  lastOrder: PublicKey | null;
+  totalRemainingQuantity: BN;
+  orderCount: number;
+  rentPayer: PublicKey;
+  bump: number;
+}
+
 export interface OrderAccount {
   owner: PublicKey;
   market: PublicKey;
@@ -118,6 +133,7 @@ interface TidebookAccounts {
   protocolConfig: AccountClient<ProtocolConfigAccount>;
   adminRecord: AccountClient<AdminRecordAccount>;
   market: AccountClient<MarketAccount>;
+  priceLevel: AccountClient<PriceLevelAccount>;
   order: AccountClient<OrderAccount>;
 }
 
@@ -176,6 +192,22 @@ export function deriveAdminRecordPda(authority: PublicKey) {
 export function deriveMarketPda(baseMint: PublicKey, quoteMint: PublicKey) {
   return PublicKey.findProgramAddressSync(
     [Buffer.from(MARKET_SEED), baseMint.toBuffer(), quoteMint.toBuffer()],
+    PROGRAM_ID,
+  )[0];
+}
+
+export function derivePriceLevelPda(
+  market: PublicKey,
+  side: OrderSide,
+  price: BN,
+) {
+  return PublicKey.findProgramAddressSync(
+    [
+      Buffer.from(PRICE_LEVEL_SEED),
+      market.toBuffer(),
+      Buffer.from(side),
+      price.toArrayLike(Buffer, "le", 8),
+    ],
     PROGRAM_ID,
   )[0];
 }

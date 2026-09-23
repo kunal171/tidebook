@@ -136,7 +136,7 @@ fn send_initialize_market_with_config(
     (market, result)
 }
 
-fn send_place_limit_order(
+fn send_initial_limit_order(
     svm: &mut LiteSVM,
     payer: &Keypair,
     market: Pubkey,
@@ -154,7 +154,7 @@ fn send_place_limit_order(
         &market_state.quote_mint,
     );
 
-    send_place_limit_order_with_collateral(
+    send_initial_limit_order_with_collateral(
         svm,
         payer,
         market,
@@ -169,7 +169,7 @@ fn send_place_limit_order(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn send_place_limit_order_with_collateral(
+fn send_initial_limit_order_with_collateral(
     svm: &mut LiteSVM,
     payer: &Keypair,
     market: Pubkey,
@@ -193,13 +193,13 @@ fn send_place_limit_order_with_collateral(
     let (price_level, _) = tidebook::derive_price_level_pda(&tidebook::id(), &market, side, price);
     let instruction = Instruction::new_with_bytes(
         tidebook::id(),
-        &tidebook::instruction::PlaceLimitOrder {
+        &tidebook::instruction::InsertLimitOrder {
             side,
             price,
             quantity,
         }
         .data(),
-        tidebook::accounts::PlaceLimitOrder {
+        tidebook::accounts::InsertLimitOrder {
             trader: payer.pubkey(),
             market,
             order,
@@ -210,6 +210,8 @@ fn send_place_limit_order_with_collateral(
             market_vault,
             token_program: anchor_spl::token::ID,
             system_program: system_program::ID,
+            better_level: None,
+            worse_level: None,
         }
         .to_account_metas(None),
     );
@@ -308,6 +310,75 @@ fn send_append_limit_order_with_accounts(
             market_vault,
             token_program: anchor_spl::token::ID,
             system_program: system_program::ID,
+        }
+        .to_account_metas(None),
+    );
+    let message = Message::new_with_blockhash(
+        &[instruction],
+        Some(&payer.pubkey()),
+        &svm.latest_blockhash(),
+    );
+    let transaction =
+        VersionedTransaction::try_new(VersionedMessage::Legacy(message), &[payer]).unwrap();
+
+    (order, svm.send_transaction(transaction))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn send_insert_limit_order(
+    svm: &mut LiteSVM,
+    payer: &Keypair,
+    market: Pubkey,
+    side: tidebook::state::OrderSide,
+    price: u64,
+    quantity: u64,
+    better_level: Option<Pubkey>,
+    worse_level: Option<Pubkey>,
+) -> (Pubkey, litesvm::types::TransactionResult) {
+    let market_state = load_market(svm, market);
+    let order_id = market_state.next_order_id;
+    let (order, _) = Pubkey::find_program_address(
+        &[
+            tidebook::constants::ORDER_SEED,
+            market.as_ref(),
+            order_id.to_le_bytes().as_ref(),
+        ],
+        &tidebook::id(),
+    );
+    let (price_level, _) = tidebook::derive_price_level_pda(&tidebook::id(), &market, side, price);
+    let (vault_authority, base_vault, quote_vault) = derive_market_vault_addresses(
+        &tidebook::id(),
+        &market,
+        &market_state.base_mint,
+        &market_state.quote_mint,
+    );
+    let (collateral_mint, market_vault) = match side {
+        tidebook::state::OrderSide::Bid => (market_state.quote_mint, quote_vault),
+        tidebook::state::OrderSide::Ask => (market_state.base_mint, base_vault),
+    };
+    let trader_collateral =
+        create_test_token_account(svm, collateral_mint, payer.pubkey(), u64::MAX);
+    let instruction = Instruction::new_with_bytes(
+        tidebook::id(),
+        &tidebook::instruction::InsertLimitOrder {
+            side,
+            price,
+            quantity,
+        }
+        .data(),
+        tidebook::accounts::InsertLimitOrder {
+            trader: payer.pubkey(),
+            market,
+            order,
+            price_level,
+            collateral_mint,
+            trader_collateral,
+            vault_authority,
+            market_vault,
+            token_program: anchor_spl::token::ID,
+            system_program: system_program::ID,
+            better_level,
+            worse_level,
         }
         .to_account_metas(None),
     );
@@ -535,7 +606,7 @@ fn market_and_order_flow() {
     assert_eq!(market_state.status, tidebook::state::MarketStatus::Active);
     assert_eq!(market_state.next_order_id, 1);
 
-    let (order, result) = send_place_limit_order(
+    let (order, result) = send_initial_limit_order(
         &mut svm,
         &payer,
         market,
@@ -579,7 +650,7 @@ fn ask_order_locks_base_collateral() {
     let trader_base =
         create_test_token_account(&mut svm, base_mint, payer.pubkey(), starting_balance);
 
-    let (order, result) = send_place_limit_order_with_collateral(
+    let (order, result) = send_initial_limit_order_with_collateral(
         &mut svm,
         &payer,
         market,
@@ -620,7 +691,7 @@ fn bid_order_locks_quote_collateral() {
     let trader_quote =
         create_test_token_account(&mut svm, quote_mint, payer.pubkey(), starting_balance);
 
-    let (order, result) = send_place_limit_order_with_collateral(
+    let (order, result) = send_initial_limit_order_with_collateral(
         &mut svm,
         &payer,
         market,
@@ -659,7 +730,7 @@ fn wrong_collateral_mint_is_rejected_atomically() {
     let trader_base =
         create_test_token_account(&mut svm, base_mint, payer.pubkey(), TEST_ORDER_QUANTITY);
 
-    let (order, result) = send_place_limit_order_with_collateral(
+    let (order, result) = send_initial_limit_order_with_collateral(
         &mut svm,
         &payer,
         market,
@@ -695,7 +766,7 @@ fn token_account_owned_by_another_wallet_is_rejected() {
     let trader_quote =
         create_test_token_account(&mut svm, quote_mint, other_owner, required_collateral);
 
-    let (order, result) = send_place_limit_order_with_collateral(
+    let (order, result) = send_initial_limit_order_with_collateral(
         &mut svm,
         &payer,
         market,
@@ -733,7 +804,7 @@ fn insufficient_collateral_is_rejected_atomically() {
     let trader_quote =
         create_test_token_account(&mut svm, quote_mint, payer.pubkey(), available_collateral);
 
-    let (order, result) = send_place_limit_order_with_collateral(
+    let (order, result) = send_initial_limit_order_with_collateral(
         &mut svm,
         &payer,
         market,
@@ -769,7 +840,7 @@ fn noncanonical_order_vault_is_rejected() {
         create_test_token_account(&mut svm, quote_mint, payer.pubkey(), required_collateral);
     let noncanonical_vault = create_test_token_account(&mut svm, quote_mint, vault_authority, 0);
 
-    let (order, result) = send_place_limit_order_with_collateral(
+    let (order, result) = send_initial_limit_order_with_collateral(
         &mut svm,
         &payer,
         market,
@@ -892,7 +963,7 @@ fn place_order_fails_when_market_is_paused() {
     let trader_balance_before = token_balance(&svm, trader_quote);
     let vault_balance_before = token_balance(&svm, quote_vault);
 
-    let (order, result) = send_place_limit_order_with_collateral(
+    let (order, result) = send_initial_limit_order_with_collateral(
         &mut svm,
         &payer,
         market,
@@ -1122,7 +1193,7 @@ fn off_tick_price_is_rejected() {
         ..
     } = setup_active_market(9, TEST_PRICE_TICK_SIZE, TEST_QUANTITY_LOT_SIZE);
 
-    let (order, result) = send_place_limit_order(
+    let (order, result) = send_initial_limit_order(
         &mut svm,
         &payer,
         market,
@@ -1143,7 +1214,7 @@ fn off_lot_quantity_is_rejected() {
         ..
     } = setup_active_market(9, TEST_PRICE_TICK_SIZE, TEST_QUANTITY_LOT_SIZE);
 
-    let (order, result) = send_place_limit_order(
+    let (order, result) = send_initial_limit_order(
         &mut svm,
         &payer,
         market,
@@ -1164,7 +1235,7 @@ fn zero_quote_notional_is_rejected() {
         ..
     } = setup_active_market(9, 1, 1);
 
-    let (order, result) = send_place_limit_order(&mut svm, &payer, market, 1, 1);
+    let (order, result) = send_initial_limit_order(&mut svm, &payer, market, 1, 1);
 
     assert!(result.is_err(), "zero quote notional was accepted");
     assert!(svm.get_account(&order).is_none());
@@ -1315,7 +1386,7 @@ fn first_bid_creates_best_price_level_and_fifo_queue() {
         ..
     } = setup_active_market(9, TEST_PRICE_TICK_SIZE, TEST_QUANTITY_LOT_SIZE);
 
-    let (order, result) = send_place_limit_order(
+    let (order, result) = send_initial_limit_order(
         &mut svm,
         &payer,
         market,
@@ -1370,7 +1441,7 @@ fn first_ask_creates_best_price_level_and_fifo_queue() {
     let trader_collateral =
         create_test_token_account(&mut svm, base_mint, payer.pubkey(), TEST_ORDER_QUANTITY);
 
-    let (order, result) = send_place_limit_order_with_collateral(
+    let (order, result) = send_initial_limit_order_with_collateral(
         &mut svm,
         &payer,
         market,
@@ -1428,14 +1499,14 @@ fn second_bid_level_is_rejected_without_changing_best_bid() {
     let second_price = TEST_ORDER_PRICE + TEST_PRICE_TICK_SIZE;
 
     let (_, first_result) =
-        send_place_limit_order(&mut svm, &payer, market, first_price, TEST_ORDER_QUANTITY);
+        send_initial_limit_order(&mut svm, &payer, market, first_price, TEST_ORDER_QUANTITY);
     assert!(
         first_result.is_ok(),
         "first bid placement failed: {first_result:?}"
     );
 
     let (second_order, second_result) =
-        send_place_limit_order(&mut svm, &payer, market, second_price, TEST_ORDER_QUANTITY);
+        send_initial_limit_order(&mut svm, &payer, market, second_price, TEST_ORDER_QUANTITY);
 
     assert!(
         second_result.is_err(),
@@ -1466,7 +1537,7 @@ fn second_bid_at_same_price_appends_to_fifo_queue() {
         ..
     } = setup_active_market(9, TEST_PRICE_TICK_SIZE, TEST_QUANTITY_LOT_SIZE);
 
-    let (first_order, first_result) = send_place_limit_order(
+    let (first_order, first_result) = send_initial_limit_order(
         &mut svm,
         &payer,
         market,
@@ -1532,7 +1603,7 @@ fn three_bids_at_same_price_preserve_fifo_order() {
         ..
     } = setup_active_market(9, TEST_PRICE_TICK_SIZE, TEST_QUANTITY_LOT_SIZE);
 
-    let (first_order, first_result) = send_place_limit_order(
+    let (first_order, first_result) = send_initial_limit_order(
         &mut svm,
         &payer,
         market,
@@ -1619,7 +1690,7 @@ fn stale_tail_is_rejected_without_mutating_fifo_or_collateral() {
         ..
     } = setup_active_market(9, TEST_PRICE_TICK_SIZE, TEST_QUANTITY_LOT_SIZE);
 
-    let (first_order, first_result) = send_place_limit_order(
+    let (first_order, first_result) = send_initial_limit_order(
         &mut svm,
         &payer,
         market,
@@ -1714,7 +1785,7 @@ fn second_ask_at_same_price_appends_to_fifo_queue() {
     } = setup_active_market(9, TEST_PRICE_TICK_SIZE, TEST_QUANTITY_LOT_SIZE);
     let first_collateral =
         create_test_token_account(&mut svm, base_mint, payer.pubkey(), TEST_ORDER_QUANTITY);
-    let (first_order, first_result) = send_place_limit_order_with_collateral(
+    let (first_order, first_result) = send_initial_limit_order_with_collateral(
         &mut svm,
         &payer,
         market,
@@ -1783,7 +1854,7 @@ fn append_is_rejected_while_market_is_paused_without_mutation() {
         quote_vault,
         ..
     } = setup_active_market(9, TEST_PRICE_TICK_SIZE, TEST_QUANTITY_LOT_SIZE);
-    let (first_order, first_result) = send_place_limit_order(
+    let (first_order, first_result) = send_initial_limit_order(
         &mut svm,
         &payer,
         market,
@@ -1852,7 +1923,7 @@ fn insufficient_append_collateral_rolls_back_fifo_and_counters() {
         quote_vault,
         ..
     } = setup_active_market(9, TEST_PRICE_TICK_SIZE, TEST_QUANTITY_LOT_SIZE);
-    let (first_order, first_result) = send_place_limit_order(
+    let (first_order, first_result) = send_initial_limit_order(
         &mut svm,
         &payer,
         market,
@@ -1926,7 +1997,7 @@ fn opposite_side_price_level_is_rejected_without_mutation() {
         base_vault,
         quote_vault,
     } = setup_active_market(9, TEST_PRICE_TICK_SIZE, TEST_QUANTITY_LOT_SIZE);
-    let (bid_order, bid_result) = send_place_limit_order(
+    let (bid_order, bid_result) = send_initial_limit_order(
         &mut svm,
         &payer,
         market,
@@ -1937,7 +2008,7 @@ fn opposite_side_price_level_is_rejected_without_mutation() {
 
     let ask_collateral =
         create_test_token_account(&mut svm, base_mint, payer.pubkey(), TEST_ORDER_QUANTITY);
-    let (_, ask_result) = send_place_limit_order_with_collateral(
+    let (_, ask_result) = send_initial_limit_order_with_collateral(
         &mut svm,
         &payer,
         market,
@@ -2004,4 +2075,224 @@ fn opposite_side_price_level_is_rejected_without_mutation() {
     assert_eq!(bid_after.next_order, None);
     assert!(svm.get_account(&rejected_order).is_none());
     assert_eq!(token_balance(&svm, quote_vault), vault_balance_before);
+}
+
+#[test]
+fn better_bid_becomes_new_best_and_links_previous_best_as_worse() {
+    let ActiveMarketFixture {
+        mut svm,
+        payer,
+        market,
+        quote_vault,
+        ..
+    } = setup_active_market(9, TEST_PRICE_TICK_SIZE, TEST_QUANTITY_LOT_SIZE);
+    let original_price = TEST_ORDER_PRICE;
+    let better_price = TEST_ORDER_PRICE + TEST_PRICE_TICK_SIZE;
+
+    let (original_order, original_result) = send_initial_limit_order(
+        &mut svm,
+        &payer,
+        market,
+        original_price,
+        TEST_ORDER_QUANTITY,
+    );
+    assert!(
+        original_result.is_ok(),
+        "original bid placement failed: {original_result:?}"
+    );
+    let (original_level, _) = tidebook::derive_price_level_pda(
+        &tidebook::id(),
+        &market,
+        tidebook::state::OrderSide::Bid,
+        original_price,
+    );
+
+    let (new_order, insert_result) = send_insert_limit_order(
+        &mut svm,
+        &payer,
+        market,
+        tidebook::state::OrderSide::Bid,
+        better_price,
+        TEST_ORDER_QUANTITY,
+        None,
+        Some(original_level),
+    );
+    assert!(
+        insert_result.is_ok(),
+        "better bid insertion failed: {insert_result:?}"
+    );
+
+    let (new_level, expected_bump) = tidebook::derive_price_level_pda(
+        &tidebook::id(),
+        &market,
+        tidebook::state::OrderSide::Bid,
+        better_price,
+    );
+    let market_state = load_market(&svm, market);
+    let new_level_state = load_price_level(&svm, new_level);
+    let original_level_state = load_price_level(&svm, original_level);
+    let original_order_state = load_order(&svm, original_order);
+    let new_order_state = load_order(&svm, new_order);
+
+    assert_eq!(market_state.best_bid, Some(better_price));
+    assert_eq!(market_state.best_ask, None);
+    assert_eq!(market_state.next_order_id, 3);
+    assert_eq!(market_state.open_order_count, 2);
+
+    assert_eq!(new_level_state.market, market);
+    assert_eq!(new_level_state.side, tidebook::state::OrderSide::Bid);
+    assert_eq!(new_level_state.price, better_price);
+    assert_eq!(new_level_state.better_price, None);
+    assert_eq!(new_level_state.worse_price, Some(original_price));
+    assert_eq!(new_level_state.first_order, Some(new_order));
+    assert_eq!(new_level_state.last_order, Some(new_order));
+    assert_eq!(
+        new_level_state.total_remaining_quantity,
+        TEST_ORDER_QUANTITY
+    );
+    assert_eq!(new_level_state.order_count, 1);
+    assert_eq!(new_level_state.rent_payer, payer.pubkey());
+    assert_eq!(new_level_state.bump, expected_bump);
+
+    assert_eq!(original_level_state.better_price, Some(better_price));
+    assert_eq!(original_level_state.worse_price, None);
+    assert_eq!(original_level_state.first_order, Some(original_order));
+    assert_eq!(original_level_state.last_order, Some(original_order));
+    assert_eq!(original_level_state.order_count, 1);
+
+    assert_eq!(original_order_state.price_level, original_level);
+    assert_eq!(original_order_state.previous_order, None);
+    assert_eq!(original_order_state.next_order, None);
+    assert_eq!(new_order_state.price_level, new_level);
+    assert_eq!(new_order_state.previous_order, None);
+    assert_eq!(new_order_state.next_order, None);
+    assert_eq!(
+        token_balance(&svm, quote_vault),
+        original_order_state.locked_collateral + new_order_state.locked_collateral
+    );
+}
+
+#[test]
+fn better_ask_becomes_new_best_and_links_previous_best_as_worse() {
+    let ActiveMarketFixture {
+        mut svm,
+        payer,
+        market,
+        base_mint,
+        vault_authority,
+        base_vault,
+        ..
+    } = setup_active_market(9, TEST_PRICE_TICK_SIZE, TEST_QUANTITY_LOT_SIZE);
+    let original_price = TEST_ORDER_PRICE;
+    let better_price = TEST_ORDER_PRICE - TEST_PRICE_TICK_SIZE;
+    let trader_base =
+        create_test_token_account(&mut svm, base_mint, payer.pubkey(), TEST_ORDER_QUANTITY);
+
+    let (_, original_result) = send_initial_limit_order_with_collateral(
+        &mut svm,
+        &payer,
+        market,
+        tidebook::state::OrderSide::Ask,
+        original_price,
+        TEST_ORDER_QUANTITY,
+        base_mint,
+        trader_base,
+        vault_authority,
+        base_vault,
+    );
+    assert!(
+        original_result.is_ok(),
+        "original ask placement failed: {original_result:?}"
+    );
+    let (original_level, _) = tidebook::derive_price_level_pda(
+        &tidebook::id(),
+        &market,
+        tidebook::state::OrderSide::Ask,
+        original_price,
+    );
+
+    let (new_order, insert_result) = send_insert_limit_order(
+        &mut svm,
+        &payer,
+        market,
+        tidebook::state::OrderSide::Ask,
+        better_price,
+        TEST_ORDER_QUANTITY,
+        None,
+        Some(original_level),
+    );
+    assert!(
+        insert_result.is_ok(),
+        "better ask insertion failed: {insert_result:?}"
+    );
+
+    let (new_level, _) = tidebook::derive_price_level_pda(
+        &tidebook::id(),
+        &market,
+        tidebook::state::OrderSide::Ask,
+        better_price,
+    );
+    let market_state = load_market(&svm, market);
+    let new_level_state = load_price_level(&svm, new_level);
+    let original_level_state = load_price_level(&svm, original_level);
+    let new_order_state = load_order(&svm, new_order);
+
+    assert_eq!(market_state.best_bid, None);
+    assert_eq!(market_state.best_ask, Some(better_price));
+    assert_eq!(market_state.next_order_id, 3);
+    assert_eq!(market_state.open_order_count, 2);
+    assert_eq!(new_level_state.better_price, None);
+    assert_eq!(new_level_state.worse_price, Some(original_price));
+    assert_eq!(new_level_state.first_order, Some(new_order));
+    assert_eq!(new_level_state.last_order, Some(new_order));
+    assert_eq!(original_level_state.better_price, Some(better_price));
+    assert_eq!(original_level_state.worse_price, None);
+    assert_eq!(new_order_state.price_level, new_level);
+    assert_eq!(new_order_state.locked_collateral, TEST_ORDER_QUANTITY);
+    assert_eq!(token_balance(&svm, base_vault), TEST_ORDER_QUANTITY * 2);
+}
+
+#[test]
+fn empty_side_rejects_an_unexpected_neighbor_without_mutation() {
+    let ActiveMarketFixture {
+        mut svm,
+        payer,
+        market,
+        ..
+    } = setup_active_market(9, TEST_PRICE_TICK_SIZE, TEST_QUANTITY_LOT_SIZE);
+
+    let (_, bid_result) = send_initial_limit_order(
+        &mut svm,
+        &payer,
+        market,
+        TEST_ORDER_PRICE,
+        TEST_ORDER_QUANTITY,
+    );
+    assert!(bid_result.is_ok(), "bid placement failed: {bid_result:?}");
+    let (bid_level, _) = tidebook::derive_price_level_pda(
+        &tidebook::id(),
+        &market,
+        tidebook::state::OrderSide::Bid,
+        TEST_ORDER_PRICE,
+    );
+    let rejected_ask_price = TEST_ORDER_PRICE - TEST_PRICE_TICK_SIZE;
+
+    let (rejected_order, result) = send_insert_limit_order(
+        &mut svm,
+        &payer,
+        market,
+        tidebook::state::OrderSide::Ask,
+        rejected_ask_price,
+        TEST_ORDER_QUANTITY,
+        None,
+        Some(bid_level),
+    );
+
+    assert!(result.is_err(), "empty ask side accepted a worse neighbor");
+    let market_state = load_market(&svm, market);
+    assert_eq!(market_state.best_bid, Some(TEST_ORDER_PRICE));
+    assert_eq!(market_state.best_ask, None);
+    assert_eq!(market_state.next_order_id, 2);
+    assert_eq!(market_state.open_order_count, 1);
+    assert!(svm.get_account(&rejected_order).is_none());
 }
