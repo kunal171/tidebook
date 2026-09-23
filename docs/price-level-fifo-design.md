@@ -80,11 +80,11 @@ to the new order, sets the new order's `previous_order`, and updates the level's
 quantity and count. All collateral and queue mutations remain in one atomic
 instruction.
 
-This path is implemented by `append_limit_order`. The current integration test
-covers two bids at the same price and verifies the reciprocal order links,
-level aggregates, market counters, and unchanged best-price pointer. Ask-side,
-three-order, false-tail, and rollback coverage remain required before the FIFO
-work is considered complete.
+This path is implemented by `append_limit_order`. Integration tests cover bid
+and ask append, a three-order FIFO chain, stale-tail and opposite-side level
+rejection, paused-market rejection, insufficient collateral, and atomic
+preservation of links, aggregates, counters, order accounts, and vault balances
+after failure.
 
 ### Place at a new level
 
@@ -187,12 +187,15 @@ Current coverage:
 - a second distinct bid level is rejected without changing the existing best
   pointer, counters, or accounts;
 - a second bid at the same price appends behind the FIFO tail and updates level
-  aggregates atomically.
+  aggregates atomically;
+- bid and ask append paths preserve the same queue invariants;
+- three bids preserve reciprocal `A <-> B <-> C` FIFO links;
+- stale tails, opposite-side levels, paused markets, and insufficient collateral
+  are rejected without mutating state or vault balances.
 
 Remaining tests required before matching:
 
 - better, worse, and middle price-level insertion for both sides;
-- ask-side append and three orders preserving FIFO at one price;
 - head, middle, tail, and only-order cancellation repair reciprocal links;
 - level count and aggregate quantity update with checked arithmetic;
 - final cancellation closes the level and returns rent;
@@ -209,7 +212,7 @@ Remaining tests required before matching:
 1. ~~Add stable price-level seed helpers and account layouts.~~
 2. ~~Add derivation and serialization tests.~~
 3. ~~Create the first bid/ask level and append a second same-price bid.~~
-4. Complete same-price FIFO failure paths and ask-side coverage.
+4. ~~Complete same-price FIFO failure paths and ask-side coverage.~~
 5. Add sorted better/worse level insertion.
 6. Extend cancellation for order unlinking.
 7. Close and unlink empty levels, including best-price updates.

@@ -396,7 +396,6 @@ The program currently enforces:
 These are planned features, not defects in the current research milestone:
 
 - No sorted insertion of a second distinct price on either side.
-- Same-price FIFO failure paths, ask append, and three-order coverage remain.
 - Cancellation does not yet unlink orders, update aggregates, or close an empty
   level; price-level state can therefore be stale after cancellation.
 - No matching engine or partial-fill transitions.
@@ -421,7 +420,7 @@ The test harness:
 5. sends transactions through LiteSVM;
 6. deserializes resulting Anchor accounts and checks state.
 
-The 64-test suite currently covers:
+The 70-test suite currently covers:
 
 - upgrade-authority-only, one-time protocol initialization;
 - creation of the deployer's config and active admin record;
@@ -464,7 +463,11 @@ The 64-test suite currently covers:
 - deterministic price-level derivation, side separation, and account sizing;
 - first bid and first ask price-level creation and best-pointer initialization;
 - safe rejection of a second distinct bid price before sorted insertion exists;
-- same-price bid FIFO append, reciprocal links, aggregates, and market counters.
+- same-price bid and ask FIFO append, reciprocal links, aggregates, and market
+  counters;
+- three-order FIFO chaining;
+- atomic rejection of stale tails, opposite-side levels, paused-market append,
+  and insufficient append collateral.
 
 ## 8. Dependency boundary
 
@@ -488,13 +491,12 @@ will not represent deferred settlement work.
 
 The recommended implementation order is:
 
-1. Complete same-price FIFO validation and test coverage.
-2. Add sorted multi-price insertion and indexed cancellation/removal.
-3. Add canonical per-market trader balances and atomic deposit/withdrawal.
-4. Route order collateral through free and locked balance accounting.
-5. Implement bounded deterministic matching and atomic ledger settlement.
-6. Add partial fills, remainder policy, fees, and conservation tests.
-7. Add order cleanup and rent-reclamation rules.
+1. Add sorted multi-price insertion and indexed cancellation/removal.
+2. Add canonical per-market trader balances and atomic deposit/withdrawal.
+3. Route order collateral through free and locked balance accounting.
+4. Implement bounded deterministic matching and atomic ledger settlement.
+5. Add partial fills, remainder policy, fees, and conservation tests.
+6. Add order cleanup and rent-reclamation rules.
 
 Each phase should add its invariants and failure-path tests before the next
 state transition is introduced.
