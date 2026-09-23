@@ -100,4 +100,16 @@ pub mod tidebook {
             ctx, side, price, quantity,
         )
     }
+
+    /// Inserts an order at a new distinct sorted price level.
+    pub fn insert_limit_order(
+        ctx: Context<InsertLimitOrder>,
+        side: OrderSide,
+        price: u64,
+        quantity: u64,
+    ) -> Result<()> {
+        crate::instructions::insert_limit_order::handle_insert_limit_order(
+            ctx, side, price, quantity,
+        )
+    }
 }
