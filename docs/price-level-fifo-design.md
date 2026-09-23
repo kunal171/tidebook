@@ -89,16 +89,13 @@ after failure.
 ### Place at a new level
 
 `insert_limit_order` owns both first-level creation and sorted new-level
-insertion. For an empty side, the client supplies no neighbors. For a non-empty
-side, the implemented branch inserts only a new best: `better_level` is absent
-and `worse_level` must be the canonical current best. A bid must be higher than
-the old best bid; an ask must be lower than the old best ask. The instruction
-updates the old best's reciprocal link and the market best pointer atomically
-with collateral transfer and order creation.
-
-Middle and new-worst insertion remain deferred. They will require the client to
-supply canonical adjacent levels, and the program must validate strict ordering
-and reciprocal links before mutation.
+insertion. For an empty side, the client supplies no neighbors. New-best insertion supplies
+only the canonical current best as the worse neighbor. Middle insertion supplies
+two canonical levels whose reciprocal links prove adjacency. New-worst insertion
+supplies only the terminal better level, whose worse link must be empty. Bid
+prices must strictly descend and ask prices must strictly ascend across every
+link. The instruction rewires the supplied neighbors atomically with collateral
+transfer, level creation, order creation, and market counters.
 
 Creating the level separately from the order is rejected because it permits an
 empty active level if the later order transaction never succeeds.
@@ -188,7 +185,10 @@ Current coverage:
 - an empty bid or ask side accepts no-neighbor insertion and rejects an unexpected neighbor;
 - omitting the current-best neighbor on a non-empty side is rejected without
   changing pointers, counters, or accounts;
-- better bid and ask levels insert before and link back to their previous bests;
+- better, middle, and worse bid and ask levels preserve strict ordering and
+  reciprocal links;
+- malformed, stale, cross-market, cross-side, and noncanonical neighbor hints
+  roll back without changing links, counters, orders, or vault balances;
 - a second bid at the same price appends behind the FIFO tail and updates level
   aggregates atomically;
 - bid and ask append paths preserve the same queue invariants;
@@ -198,7 +198,6 @@ Current coverage:
 
 Remaining tests required before matching:
 
-- worse and middle insertion for both sides;
 - head, middle, tail, and only-order cancellation repair reciprocal links;
 - level count and aggregate quantity update with checked arithmetic;
 - final cancellation closes the level and returns rent;
@@ -216,7 +215,7 @@ Remaining tests required before matching:
 2. ~~Add derivation and serialization tests.~~
 3. ~~Create the first bid/ask level and append a second same-price bid.~~
 4. ~~Complete same-price FIFO failure paths and ask-side coverage.~~
-5. Add sorted better/worse level insertion.
+5. ~~Add sorted better, middle, and worse level insertion.~~
 6. Extend cancellation for order unlinking.
 7. Close and unlink empty levels, including best-price updates.
 8. Update the checked-in IDL, web client, architecture diagram, and invariant

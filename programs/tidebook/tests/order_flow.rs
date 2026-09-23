@@ -1,6 +1,11 @@
 //! LiteSVM integration coverage for market creation, canonical vaults, market
 //! lifecycle transitions, and limit-order validation.
 
+// LiteSVM intentionally returns rich transaction-failure metadata. Boxing it in
+// every test helper would add indirection without reducing production account or
+// instruction size, so this integration-test boundary permits the large error.
+#![allow(clippy::result_large_err)]
+
 use {
     anchor_lang::{
         prelude::Pubkey,
@@ -393,6 +398,34 @@ fn send_insert_limit_order(
     (order, svm.send_transaction(transaction))
 }
 
+/// Inserts a level and fails the test immediately if the setup transaction is
+/// rejected. Returning both PDAs keeps multi-level topology tests readable.
+#[allow(clippy::too_many_arguments)]
+fn insert_level_successfully(
+    svm: &mut LiteSVM,
+    payer: &Keypair,
+    market: Pubkey,
+    side: tidebook::state::OrderSide,
+    price: u64,
+    better_level: Option<Pubkey>,
+    worse_level: Option<Pubkey>,
+) -> (Pubkey, Pubkey) {
+    let (order, result) = send_insert_limit_order(
+        svm,
+        payer,
+        market,
+        side,
+        price,
+        TEST_ORDER_QUANTITY,
+        better_level,
+        worse_level,
+    );
+    assert!(result.is_ok(), "price-level insertion failed: {result:?}");
+
+    let (level, _) = tidebook::derive_price_level_pda(&tidebook::id(), &market, side, price);
+    (order, level)
+}
+
 fn send_pause_market(
     svm: &mut LiteSVM,
     authority: &Keypair,
@@ -480,6 +513,26 @@ fn store_admin_record(svm: &mut LiteSVM, authority: Pubkey, status: tidebook::st
         status,
         bump,
     };
+    let mut data = Vec::new();
+    state.try_serialize(&mut data).unwrap();
+
+    svm.set_account(
+        address,
+        Account {
+            lamports: svm.minimum_balance_for_rent_exemption(data.len()),
+            data,
+            owner: tidebook::id(),
+            executable: false,
+            rent_epoch: 0,
+        },
+    )
+    .unwrap();
+}
+
+/// Stores a program-owned price-level account at an arbitrary address. This is
+/// used only to prove that handler-side PDA validation rejects structurally
+/// valid account data placed at a noncanonical key.
+fn store_price_level_at(svm: &mut LiteSVM, address: Pubkey, state: tidebook::state::PriceLevel) {
     let mut data = Vec::new();
     state.try_serialize(&mut data).unwrap();
 
@@ -2294,5 +2347,477 @@ fn empty_side_rejects_an_unexpected_neighbor_without_mutation() {
     assert_eq!(market_state.best_ask, None);
     assert_eq!(market_state.next_order_id, 2);
     assert_eq!(market_state.open_order_count, 1);
+    assert!(svm.get_account(&rejected_order).is_none());
+}
+
+#[test]
+fn bid_levels_support_middle_and_new_worst_insertion() {
+    let ActiveMarketFixture {
+        mut svm,
+        payer,
+        market,
+        ..
+    } = setup_active_market(9, TEST_PRICE_TICK_SIZE, TEST_QUANTITY_LOT_SIZE);
+    let side = tidebook::state::OrderSide::Bid;
+    let first_price = TEST_ORDER_PRICE;
+    let best_price = first_price + 3 * TEST_PRICE_TICK_SIZE;
+    let middle_price = first_price + 2 * TEST_PRICE_TICK_SIZE;
+    let worst_price = first_price - TEST_PRICE_TICK_SIZE;
+
+    let (_, first_level) =
+        insert_level_successfully(&mut svm, &payer, market, side, first_price, None, None);
+    let (_, best_level) = insert_level_successfully(
+        &mut svm,
+        &payer,
+        market,
+        side,
+        best_price,
+        None,
+        Some(first_level),
+    );
+    let (middle_order, middle_level) = insert_level_successfully(
+        &mut svm,
+        &payer,
+        market,
+        side,
+        middle_price,
+        Some(best_level),
+        Some(first_level),
+    );
+    let (worst_order, worst_level) = insert_level_successfully(
+        &mut svm,
+        &payer,
+        market,
+        side,
+        worst_price,
+        Some(first_level),
+        None,
+    );
+
+    let market_state = load_market(&svm, market);
+    let best = load_price_level(&svm, best_level);
+    let middle = load_price_level(&svm, middle_level);
+    let first = load_price_level(&svm, first_level);
+    let worst = load_price_level(&svm, worst_level);
+
+    assert_eq!(market_state.best_bid, Some(best_price));
+    assert_eq!(market_state.next_order_id, 5);
+    assert_eq!(market_state.open_order_count, 4);
+    assert_eq!(best.better_price, None);
+    assert_eq!(best.worse_price, Some(middle_price));
+    assert_eq!(middle.better_price, Some(best_price));
+    assert_eq!(middle.worse_price, Some(first_price));
+    assert_eq!(first.better_price, Some(middle_price));
+    assert_eq!(first.worse_price, Some(worst_price));
+    assert_eq!(worst.better_price, Some(first_price));
+    assert_eq!(worst.worse_price, None);
+    assert_eq!(load_order(&svm, middle_order).price_level, middle_level);
+    assert_eq!(load_order(&svm, worst_order).price_level, worst_level);
+}
+
+#[test]
+fn ask_levels_support_middle_and_new_worst_insertion() {
+    let ActiveMarketFixture {
+        mut svm,
+        payer,
+        market,
+        ..
+    } = setup_active_market(9, TEST_PRICE_TICK_SIZE, TEST_QUANTITY_LOT_SIZE);
+    let side = tidebook::state::OrderSide::Ask;
+    let first_price = TEST_ORDER_PRICE;
+    let best_price = first_price - 3 * TEST_PRICE_TICK_SIZE;
+    let middle_price = first_price - 2 * TEST_PRICE_TICK_SIZE;
+    let worst_price = first_price + TEST_PRICE_TICK_SIZE;
+
+    let (_, first_level) =
+        insert_level_successfully(&mut svm, &payer, market, side, first_price, None, None);
+    let (_, best_level) = insert_level_successfully(
+        &mut svm,
+        &payer,
+        market,
+        side,
+        best_price,
+        None,
+        Some(first_level),
+    );
+    let (middle_order, middle_level) = insert_level_successfully(
+        &mut svm,
+        &payer,
+        market,
+        side,
+        middle_price,
+        Some(best_level),
+        Some(first_level),
+    );
+    let (worst_order, worst_level) = insert_level_successfully(
+        &mut svm,
+        &payer,
+        market,
+        side,
+        worst_price,
+        Some(first_level),
+        None,
+    );
+
+    let market_state = load_market(&svm, market);
+    let best = load_price_level(&svm, best_level);
+    let middle = load_price_level(&svm, middle_level);
+    let first = load_price_level(&svm, first_level);
+    let worst = load_price_level(&svm, worst_level);
+
+    assert_eq!(market_state.best_ask, Some(best_price));
+    assert_eq!(market_state.next_order_id, 5);
+    assert_eq!(market_state.open_order_count, 4);
+    assert_eq!(best.better_price, None);
+    assert_eq!(best.worse_price, Some(middle_price));
+    assert_eq!(middle.better_price, Some(best_price));
+    assert_eq!(middle.worse_price, Some(first_price));
+    assert_eq!(first.better_price, Some(middle_price));
+    assert_eq!(first.worse_price, Some(worst_price));
+    assert_eq!(worst.better_price, Some(first_price));
+    assert_eq!(worst.worse_price, None);
+    assert_eq!(load_order(&svm, middle_order).price_level, middle_level);
+    assert_eq!(load_order(&svm, worst_order).price_level, worst_level);
+}
+
+#[test]
+fn invalid_middle_and_worst_neighbors_roll_back_atomically() {
+    let ActiveMarketFixture {
+        mut svm,
+        payer,
+        market,
+        quote_vault,
+        ..
+    } = setup_active_market(9, TEST_PRICE_TICK_SIZE, TEST_QUANTITY_LOT_SIZE);
+    let side = tidebook::state::OrderSide::Bid;
+    let first_price = TEST_ORDER_PRICE;
+    let best_price = first_price + 3 * TEST_PRICE_TICK_SIZE;
+    let worst_price = first_price - TEST_PRICE_TICK_SIZE;
+
+    let (_, first_level) =
+        insert_level_successfully(&mut svm, &payer, market, side, first_price, None, None);
+    let (_, best_level) = insert_level_successfully(
+        &mut svm,
+        &payer,
+        market,
+        side,
+        best_price,
+        None,
+        Some(first_level),
+    );
+    let (_, worst_level) = insert_level_successfully(
+        &mut svm,
+        &payer,
+        market,
+        side,
+        worst_price,
+        Some(first_level),
+        None,
+    );
+
+    let vault_before = token_balance(&svm, quote_vault);
+
+    // These levels are canonical but not adjacent because `first_level` sits
+    // between them. The reciprocal-link check must reject the skipped node.
+    let skipped_price = first_price + 2 * TEST_PRICE_TICK_SIZE;
+    let (skipped_order, skipped_result) = send_insert_limit_order(
+        &mut svm,
+        &payer,
+        market,
+        side,
+        skipped_price,
+        TEST_ORDER_QUANTITY,
+        Some(best_level),
+        Some(worst_level),
+    );
+    assert!(
+        skipped_result.is_err(),
+        "nonadjacent neighbors were accepted"
+    );
+
+    // The supplied levels are adjacent, but the proposed price is outside
+    // their strict interval and therefore cannot be placed between them.
+    let unordered_price = first_price - 2 * TEST_PRICE_TICK_SIZE;
+    let (unordered_order, unordered_result) = send_insert_limit_order(
+        &mut svm,
+        &payer,
+        market,
+        side,
+        unordered_price,
+        TEST_ORDER_QUANTITY,
+        Some(best_level),
+        Some(first_level),
+    );
+    assert!(
+        unordered_result.is_err(),
+        "out-of-range middle price was accepted"
+    );
+
+    // A new-worst insertion must extend the actual terminal node, not merely
+    // any canonical level with a lower-priority proposed price.
+    let false_worst_price = first_price - 3 * TEST_PRICE_TICK_SIZE;
+    let (false_worst_order, false_worst_result) = send_insert_limit_order(
+        &mut svm,
+        &payer,
+        market,
+        side,
+        false_worst_price,
+        TEST_ORDER_QUANTITY,
+        Some(first_level),
+        None,
+    );
+    assert!(
+        false_worst_result.is_err(),
+        "nonterminal level was accepted as the worst boundary"
+    );
+
+    let market_state = load_market(&svm, market);
+    let best = load_price_level(&svm, best_level);
+    let first = load_price_level(&svm, first_level);
+    let worst = load_price_level(&svm, worst_level);
+    assert_eq!(market_state.best_bid, Some(best_price));
+    assert_eq!(market_state.next_order_id, 4);
+    assert_eq!(market_state.open_order_count, 3);
+    assert_eq!(best.worse_price, Some(first_price));
+    assert_eq!(first.better_price, Some(best_price));
+    assert_eq!(first.worse_price, Some(worst_price));
+    assert_eq!(worst.better_price, Some(first_price));
+    assert_eq!(worst.worse_price, None);
+    assert_eq!(token_balance(&svm, quote_vault), vault_before);
+    assert!(svm.get_account(&skipped_order).is_none());
+    assert!(svm.get_account(&unordered_order).is_none());
+    assert!(svm.get_account(&false_worst_order).is_none());
+}
+
+#[test]
+fn insert_rejects_neighbors_from_wrong_side_and_market() {
+    let ActiveMarketFixture {
+        mut svm,
+        payer,
+        market,
+        quote_vault,
+        ..
+    } = setup_active_market(9, TEST_PRICE_TICK_SIZE, TEST_QUANTITY_LOT_SIZE);
+    let bid = tidebook::state::OrderSide::Bid;
+    let ask = tidebook::state::OrderSide::Ask;
+
+    let (_, bid_level) =
+        insert_level_successfully(&mut svm, &payer, market, bid, TEST_ORDER_PRICE, None, None);
+    let (_, ask_level) =
+        insert_level_successfully(&mut svm, &payer, market, ask, TEST_ORDER_PRICE, None, None);
+    let vault_before = token_balance(&svm, quote_vault);
+
+    let wrong_side_price = TEST_ORDER_PRICE - TEST_PRICE_TICK_SIZE;
+    let (wrong_side_order, wrong_side_result) = send_insert_limit_order(
+        &mut svm,
+        &payer,
+        market,
+        bid,
+        wrong_side_price,
+        TEST_ORDER_QUANTITY,
+        Some(ask_level),
+        None,
+    );
+    assert!(
+        wrong_side_result.is_err(),
+        "ask level was accepted on bid side"
+    );
+
+    // Create a second valid market and level. Valid ownership and serialization
+    // are not enough: a neighbor is scoped to exactly one market-side list.
+    let other_base = create_test_mint(&mut svm, 9);
+    let other_quote = create_test_mint(&mut svm, 6);
+    let (other_market, initialize_result) =
+        send_initialize_market(&mut svm, &payer, other_base, other_quote);
+    assert!(initialize_result.is_ok(), "second market setup failed");
+    let (_, other_level) = insert_level_successfully(
+        &mut svm,
+        &payer,
+        other_market,
+        bid,
+        TEST_ORDER_PRICE,
+        None,
+        None,
+    );
+
+    let wrong_market_price = TEST_ORDER_PRICE - 2 * TEST_PRICE_TICK_SIZE;
+    let (wrong_market_order, wrong_market_result) = send_insert_limit_order(
+        &mut svm,
+        &payer,
+        market,
+        bid,
+        wrong_market_price,
+        TEST_ORDER_QUANTITY,
+        Some(other_level),
+        None,
+    );
+    assert!(
+        wrong_market_result.is_err(),
+        "level from another market was accepted"
+    );
+
+    let market_state = load_market(&svm, market);
+    let bid_state = load_price_level(&svm, bid_level);
+    assert_eq!(market_state.best_bid, Some(TEST_ORDER_PRICE));
+    assert_eq!(market_state.best_ask, Some(TEST_ORDER_PRICE));
+    assert_eq!(market_state.next_order_id, 3);
+    assert_eq!(market_state.open_order_count, 2);
+    assert_eq!(bid_state.better_price, None);
+    assert_eq!(bid_state.worse_price, None);
+    assert_eq!(token_balance(&svm, quote_vault), vault_before);
+    assert!(svm.get_account(&wrong_side_order).is_none());
+    assert!(svm.get_account(&wrong_market_order).is_none());
+}
+
+#[test]
+fn insert_rejects_noncanonical_neighbor_atomically() {
+    let ActiveMarketFixture {
+        mut svm,
+        payer,
+        market,
+        quote_vault,
+        ..
+    } = setup_active_market(9, TEST_PRICE_TICK_SIZE, TEST_QUANTITY_LOT_SIZE);
+    let side = tidebook::state::OrderSide::Bid;
+    let (_, best_level) =
+        insert_level_successfully(&mut svm, &payer, market, side, TEST_ORDER_PRICE, None, None);
+    let vault_before = token_balance(&svm, quote_vault);
+
+    // The data looks like a terminal level owned by Tidebook, but its address
+    // is not derived from (market, side, price). The handler must not trust it.
+    let fake_level = Pubkey::new_unique();
+    let fake_price = TEST_ORDER_PRICE - TEST_PRICE_TICK_SIZE;
+    store_price_level_at(
+        &mut svm,
+        fake_level,
+        tidebook::state::PriceLevel {
+            market,
+            side,
+            price: fake_price,
+            better_price: Some(TEST_ORDER_PRICE),
+            worse_price: None,
+            first_order: None,
+            last_order: None,
+            total_remaining_quantity: 0,
+            order_count: 0,
+            rent_payer: payer.pubkey(),
+            bump: 0,
+        },
+    );
+
+    let rejected_price = fake_price - TEST_PRICE_TICK_SIZE;
+    let (rejected_order, result) = send_insert_limit_order(
+        &mut svm,
+        &payer,
+        market,
+        side,
+        rejected_price,
+        TEST_ORDER_QUANTITY,
+        Some(fake_level),
+        None,
+    );
+    assert!(result.is_err(), "noncanonical neighbor was accepted");
+
+    let market_state = load_market(&svm, market);
+    let best = load_price_level(&svm, best_level);
+    assert_eq!(market_state.best_bid, Some(TEST_ORDER_PRICE));
+    assert_eq!(market_state.next_order_id, 2);
+    assert_eq!(market_state.open_order_count, 1);
+    assert_eq!(best.better_price, None);
+    assert_eq!(best.worse_price, None);
+    assert_eq!(token_balance(&svm, quote_vault), vault_before);
+    assert!(svm.get_account(&rejected_order).is_none());
+}
+
+#[test]
+fn edge_insertions_reject_wrong_priority_and_stale_best_atomically() {
+    let ActiveMarketFixture {
+        mut svm,
+        payer,
+        market,
+        quote_vault,
+        ..
+    } = setup_active_market(9, TEST_PRICE_TICK_SIZE, TEST_QUANTITY_LOT_SIZE);
+    let side = tidebook::state::OrderSide::Bid;
+    let first_price = TEST_ORDER_PRICE;
+    let best_price = first_price + 2 * TEST_PRICE_TICK_SIZE;
+
+    let (_, first_level) =
+        insert_level_successfully(&mut svm, &payer, market, side, first_price, None, None);
+    let (_, best_level) = insert_level_successfully(
+        &mut svm,
+        &payer,
+        market,
+        side,
+        best_price,
+        None,
+        Some(first_level),
+    );
+    let vault_before = token_balance(&svm, quote_vault);
+
+    // The original level is the terminal node, but a numerically higher bid
+    // cannot be appended as the new worst; it belongs between the two levels.
+    let middle_price = first_price + TEST_PRICE_TICK_SIZE;
+    let (rejected_order, wrong_worst_result) = send_insert_limit_order(
+        &mut svm,
+        &payer,
+        market,
+        side,
+        middle_price,
+        TEST_ORDER_QUANTITY,
+        Some(first_level),
+        None,
+    );
+    assert!(
+        wrong_worst_result.is_err(),
+        "higher-priority bid was accepted as the new worst"
+    );
+
+    // Supplying the actual best as the worse neighbor still does not make a
+    // lower-priority price a valid new head.
+    let (_, wrong_best_result) = send_insert_limit_order(
+        &mut svm,
+        &payer,
+        market,
+        side,
+        middle_price,
+        TEST_ORDER_QUANTITY,
+        None,
+        Some(best_level),
+    );
+    assert!(
+        wrong_best_result.is_err(),
+        "lower-priority bid was accepted as the new best"
+    );
+
+    // A genuine better price must still name the current head, not an older
+    // canonical level left elsewhere in the same list.
+    let better_price = best_price + TEST_PRICE_TICK_SIZE;
+    let (_, stale_best_result) = send_insert_limit_order(
+        &mut svm,
+        &payer,
+        market,
+        side,
+        better_price,
+        TEST_ORDER_QUANTITY,
+        None,
+        Some(first_level),
+    );
+    assert!(
+        stale_best_result.is_err(),
+        "stale level was accepted as the current best"
+    );
+
+    let market_state = load_market(&svm, market);
+    let best = load_price_level(&svm, best_level);
+    let first = load_price_level(&svm, first_level);
+    assert_eq!(market_state.best_bid, Some(best_price));
+    assert_eq!(market_state.next_order_id, 3);
+    assert_eq!(market_state.open_order_count, 2);
+    assert_eq!(best.better_price, None);
+    assert_eq!(best.worse_price, Some(first_price));
+    assert_eq!(first.better_price, Some(best_price));
+    assert_eq!(first.worse_price, None);
+    assert_eq!(token_balance(&svm, quote_vault), vault_before);
     assert!(svm.get_account(&rejected_order).is_none());
 }

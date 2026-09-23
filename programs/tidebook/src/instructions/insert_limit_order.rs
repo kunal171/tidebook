@@ -1,8 +1,19 @@
-//! Inserts the first order at a new distinct price level.
+//! Creates a distinct price level and its first FIFO order atomically.
 //!
-//! The client supplies the optional adjacent better and worse levels. The
-//! program treats them as untrusted hints and validates ordering and reciprocal
-//! links before modifying the sorted level index.
+//! Solana programs cannot scan every account belonging to a program, so the
+//! client must discover and supply the adjacent price levels. Those accounts
+//! are only untrusted routing hints: this instruction verifies their canonical
+//! PDAs, market, side, ordering, and reciprocal links before changing state.
+//!
+//! The two optional neighbors encode all insertion positions:
+//! - no neighbors: the first level on an empty side;
+//! - only a worse neighbor: a new best level;
+//! - both neighbors: a middle level;
+//! - only a better neighbor: a new worst level.
+//!
+//! Level creation, collateral custody, neighbor rewiring, order creation, and
+//! market counters intentionally happen in one instruction. Splitting them
+//! across transactions could leave an empty or partially linked active level.
 
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, TransferChecked};
@@ -93,11 +104,14 @@ pub struct InsertLimitOrder<'info> {
 
     pub system_program: Program<'info, System>,
 
-    /// Adjacent level with higher matching priority, or `None` for a new best.
+    /// Adjacent level with higher matching priority, or `None` at the best edge.
+    ///
+    /// Optional accounts cannot carry a static seed constraint for every
+    /// insertion shape, so the handler derives and checks their PDAs manually.
     #[account(mut)]
     pub better_level: Option<Account<'info, PriceLevel>>,
 
-    /// Adjacent level with lower matching priority, or `None` for a new worst.
+    /// Adjacent level with lower matching priority, or `None` at the worst edge.
     #[account(mut)]
     pub worse_level: Option<Account<'info, PriceLevel>>,
 }
@@ -117,72 +131,110 @@ pub fn handle_insert_limit_order(
     let trader_key = ctx.accounts.trader.key();
 
     let market = &ctx.accounts.market;
+
+    // Prices and quantities are raw integers. Enforcing the market grid here
+    // prevents multiple representations of the same economic price or size
+    // and keeps later matching arithmetic deterministic.
     require!(
-        price % market.price_tick_size == 0,
+        price.is_multiple_of(market.price_tick_size),
         MarketError::PriceNotOnTick
     );
 
     require!(
-        quantity % market.quantity_lot_size == 0,
+        quantity.is_multiple_of(market.quantity_lot_size),
         MarketError::QuantityNotOnLot
     );
 
-    // This milestone supports the first level on an empty side and insertion
-    // immediately before the current best. Middle and worst insertion still
-    // require a supplied better neighbor and are intentionally rejected.
-    require!(
-        ctx.accounts.better_level.is_none(),
-        MarketError::PriceLevelInsertionNotImplemented
-    );
-
+    // The market stores only the best price for O(1) matching entry. It does
+    // not store a worst pointer; clients reach the worst by following each
+    // level's `worse_price` link off-chain.
     let current_best_price = match side {
         OrderSide::Bid => market.best_bid,
         OrderSide::Ask => market.best_ask,
     };
 
-    match (current_best_price, ctx.accounts.worse_level.as_ref()) {
-        // The side is empty, so no adjacent level may be supplied.
-        (None, None) => {}
-        // The new level becomes best and links to the previous best below it.
-        (Some(current_best_price), Some(worse_level)) => {
+    match (
+        current_best_price,
+        ctx.accounts.better_level.as_ref(),
+        ctx.accounts.worse_level.as_ref(),
+    ) {
+        // Empty side: accepting any neighbor would allow a detached list whose
+        // head disagrees with the market's best pointer.
+        (None, None, None) => {}
+
+        // New best: the sole supplied neighbor must be the level referenced by
+        // the market. Its missing better link proves it is currently the head.
+        (Some(current_best), None, Some(worse)) => {
+            validate_level(worse, market_key, side)?;
+
             require!(
-                worse_level.market == market_key,
-                MarketError::PriceLevelMarketMismatch
-            );
-            require!(
-                worse_level.side == side,
-                MarketError::PriceLevelSideMismatch
-            );
-            require!(
-                worse_level.price == current_best_price,
-                MarketError::BestPriceLevelMismatch
-            );
-            require!(
-                worse_level.better_price.is_none(),
+                worse.price == current_best,
                 MarketError::BestPriceLevelMismatch
             );
 
-            // Optional accounts do not have seed constraints in the Accounts
-            // struct, so validate the canonical address manually.
-            let (expected_worse_level, _) =
-                derive_price_level_pda(&crate::ID, &market_key, side, worse_level.price);
-            require_keys_eq!(
-                worse_level.key(),
-                expected_worse_level,
-                MarketError::NoncanonicalPriceLevel
+            require!(
+                worse.better_price.is_none(),
+                MarketError::BestPriceLevelMismatch
             );
 
-            let new_price_is_better = match side {
-                OrderSide::Bid => price > worse_level.price,
-                OrderSide::Ask => price < worse_level.price,
+            let correctly_ordered = match side {
+                OrderSide::Bid => price > worse.price,
+                OrderSide::Ask => price < worse.price,
             };
-            require!(new_price_is_better, MarketError::InvalidPriceLevelOrdering);
+
+            require!(correctly_ordered, MarketError::InvalidPriceLevelOrdering);
+        }
+
+        // Middle insertion: two canonical levels are insufficient by
+        // themselves; their reciprocal links must prove they are adjacent.
+        // Otherwise a client could skip a level and silently detach it.
+        (Some(_), Some(better), Some(worse)) => {
+            validate_level(better, market_key, side)?;
+            validate_level(worse, market_key, side)?;
+
+            require!(
+                better.worse_price == Some(worse.price),
+                MarketError::InvalidPriceLevelNeighbors
+            );
+
+            require!(
+                worse.better_price == Some(better.price),
+                MarketError::InvalidPriceLevelNeighbors
+            );
+
+            let correctly_ordered = match side {
+                OrderSide::Bid => better.price > price && price > worse.price,
+                OrderSide::Ask => better.price < price && price < worse.price,
+            };
+
+            require!(correctly_ordered, MarketError::InvalidPriceLevelOrdering);
+        }
+
+        // New worst: because Market intentionally has no worst pointer, the
+        // terminal better level proves the boundary with `worse_price = None`.
+        (Some(_), Some(better), None) => {
+            validate_level(better, market_key, side)?;
+
+            require!(
+                better.worse_price.is_none(),
+                MarketError::InvalidPriceLevelNeighbors
+            );
+
+            let correctly_ordered = match side {
+                OrderSide::Bid => better.price > price,
+                OrderSide::Ask => better.price < price,
+            };
+
+            require!(correctly_ordered, MarketError::InvalidPriceLevelOrdering);
         }
         // A neighbor was supplied for an empty side, or omitted for a
         // non-empty side. Both indicate stale or malformed client state.
         _ => return err!(MarketError::InvalidPriceLevelNeighbors),
     }
 
+    // Bid collateral is quote notional, while ask collateral is base quantity.
+    // Intermediate u128 arithmetic prevents multiplication overflow before the
+    // final checked conversion back to the SPL Token program's u64 amount.
     let base_scale = 10_u128
         .checked_pow(u32::from(market.base_decimals))
         .ok_or(MarketError::OrderNotionalOverflow)?;
@@ -227,6 +279,9 @@ pub fn handle_insert_limit_order(
         .checked_add(1)
         .ok_or(MarketError::OpenOrderCountOverflow)?;
 
+    // Transfer custody before writing the logical order state. Solana rolls
+    // the entire instruction back if any later mutation fails, so the token
+    // transfer and index update cannot commit independently.
     token::transfer_checked(
         CpiContext::new(
             ctx.accounts.token_program.key(),
@@ -241,19 +296,31 @@ pub fn handle_insert_limit_order(
         ctx.accounts.collateral_mint.decimals,
     )?;
 
-    // When the side was non-empty, the previous best now points upward to the
-    // new best. There is no neighbor to update for the first level.
-    if let Some(worse_level) = ctx.accounts.worse_level.as_mut() {
-        worse_level.better_price = Some(price);
+    // Snapshot neighbor prices before borrowing the optional accounts mutably.
+    // Storing prices rather than addresses keeps a level compact; canonical
+    // addresses are deterministically re-derived from market, side, and price.
+    let better_price = ctx.accounts.better_level.as_ref().map(|level| level.price);
+
+    let worse_price = ctx.accounts.worse_level.as_ref().map(|level| level.price);
+
+    // Splice the new level into the doubly linked price index. Each supplied
+    // neighbor was validated above, so these writes preserve reciprocity.
+    if let Some(better) = ctx.accounts.better_level.as_mut() {
+        better.worse_price = Some(price);
     }
 
-    // Initialize the new best level.
+    if let Some(worse) = ctx.accounts.worse_level.as_mut() {
+        worse.better_price = Some(price);
+    }
+
+    // A newly created level begins with a one-element FIFO queue: its first and
+    // last pointers both reference the order created by this instruction.
     let price_level = &mut ctx.accounts.price_level;
     price_level.market = market_key;
     price_level.side = side;
     price_level.price = price;
-    price_level.better_price = None;
-    price_level.worse_price = current_best_price;
+    price_level.better_price = better_price;
+    price_level.worse_price = worse_price;
     price_level.first_order = Some(order_key);
     price_level.last_order = Some(order_key);
     price_level.total_remaining_quantity = quantity;
@@ -261,7 +328,8 @@ pub fn handle_insert_limit_order(
     price_level.rent_payer = trader_key;
     price_level.bump = ctx.bumps.price_level;
 
-    // Initialize the first and only order at the new level.
+    // Orders at distinct prices are connected through PriceLevel accounts;
+    // previous/next order pointers are reserved for FIFO at this exact price.
     let order = &mut ctx.accounts.order;
     order.owner = trader_key;
     order.market = market_key;
@@ -279,13 +347,37 @@ pub fn handle_insert_limit_order(
 
     let market = &mut ctx.accounts.market;
 
-    match side {
-        OrderSide::Bid => market.best_bid = Some(price),
-        OrderSide::Ask => market.best_ask = Some(price),
+    // Only an insertion at the head changes the market entry point. Middle and
+    // worst insertions deliberately leave the best pointer untouched.
+    if ctx.accounts.better_level.is_none() {
+        match side {
+            OrderSide::Bid => market.best_bid = Some(price),
+            OrderSide::Ask => market.best_ask = Some(price),
+        }
     }
 
     market.next_order_id = next_order_id;
     market.open_order_count = next_open_order_count;
+
+    Ok(())
+}
+
+/// Validates an optional neighbor supplied by the client.
+///
+/// Account ownership and deserialization prove only that this is a Tidebook
+/// `PriceLevel`. The stored market/side fields and the re-derived PDA establish
+/// that it is the unique canonical level eligible for this particular list.
+fn validate_level(level: &Account<PriceLevel>, market: Pubkey, side: OrderSide) -> Result<()> {
+    require!(
+        level.market == market,
+        MarketError::PriceLevelMarketMismatch
+    );
+
+    require!(level.side == side, MarketError::PriceLevelSideMismatch);
+
+    let (expected, _) = derive_price_level_pda(&crate::ID, &market, side, level.price);
+
+    require_keys_eq!(level.key(), expected, MarketError::NoncanonicalPriceLevel);
 
     Ok(())
 }

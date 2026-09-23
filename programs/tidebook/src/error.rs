@@ -123,9 +123,6 @@ pub enum MarketError {
     #[msg("Invalid market vault authority")]
     InvalidVaultAuthority,
 
-    #[msg("Middle and new-worst price-level insertion is not implemented")]
-    PriceLevelInsertionNotImplemented,
-
     #[msg("Price level belongs to a different market")]
     PriceLevelMarketMismatch,
 
