@@ -2,12 +2,14 @@
 
 ## Status
 
-Status: **Architecture decision for the matching milestone; not implemented**.
+Status: **In progress.** Pure settlement planning and atomic one-maker matching
+are implemented when the taker fills completely and the maker remains open.
+Full-maker removal, bounded multi-maker traversal, and remainder handling remain.
 
 This document explains why Tidebook is targeting bounded crankless settlement,
 how that differs from Phoenix and older OpenBook designs, and which accounts a
-future matching instruction must read and write. The current price-level and
-FIFO milestone remains responsible only for maintaining a correct order index.
+matching instruction must read and write. The first implementation slice proves
+maker-price settlement and price-time priority without yet mutating queue links.
 
 ## The problem in plain language
 

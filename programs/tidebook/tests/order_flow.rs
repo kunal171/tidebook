@@ -677,6 +677,142 @@ fn load_price_level(svm: &LiteSVM, address: Pubkey) -> tidebook::state::PriceLev
     tidebook::state::PriceLevel::try_deserialize(&mut data).unwrap()
 }
 
+fn send_match_limit_order(
+    svm: &mut LiteSVM,
+    taker: &Keypair,
+    market: Pubkey,
+    maker_order: Pubkey,
+    taker_side: tidebook::state::OrderSide,
+    limit_price: u64,
+    quantity: u64,
+) -> litesvm::types::TransactionResult {
+    let maker = load_order(svm, maker_order);
+    let maker_balance =
+        tidebook::derive_trader_balance_pda(&tidebook::id(), &market, &maker.owner).0;
+    let taker_balance = ensure_trader_balance(svm, market, taker.pubkey());
+
+    let instruction = Instruction::new_with_bytes(
+        tidebook::id(),
+        &tidebook::instruction::MatchLimitOrder {
+            taker_side,
+            limit_price,
+            quantity,
+        }
+        .data(),
+        tidebook::accounts::MatchLimitOrder {
+            taker: taker.pubkey(),
+            market,
+            maker_order,
+            maker_price_level: maker.price_level,
+            maker_balance,
+            taker_balance,
+        }
+        .to_account_metas(None),
+    );
+    let message = Message::new_with_blockhash(
+        &[instruction],
+        Some(&taker.pubkey()),
+        &svm.latest_blockhash(),
+    );
+    let transaction =
+        VersionedTransaction::try_new(VersionedMessage::Legacy(message), &[taker]).unwrap();
+
+    svm.send_transaction(transaction)
+}
+
+const MATCH_PRICE: u64 = 25_000_000;
+const MATCH_MAKER_QUANTITY: u64 = 5_000_000;
+const MATCH_TAKER_QUANTITY: u64 = 2_000_000;
+
+struct MatchFixture {
+    svm: LiteSVM,
+    maker: Keypair,
+    taker: Keypair,
+    market: Pubkey,
+    maker_order: Pubkey,
+    price_level: Pubkey,
+    maker_balance: Pubkey,
+    taker_balance: Pubkey,
+}
+
+/// Creates one best maker order and replaces the broad order-flow fixture
+/// balances with small, auditable values tailored to settlement assertions.
+fn setup_partial_match(maker_side: tidebook::state::OrderSide) -> MatchFixture {
+    let ActiveMarketFixture {
+        mut svm,
+        payer: maker,
+        market,
+        ..
+    } = setup_active_market(6, 1_000_000, 1_000_000);
+
+    let (maker_order, placement_result) = send_insert_limit_order(
+        &mut svm,
+        &maker,
+        market,
+        maker_side,
+        MATCH_PRICE,
+        MATCH_MAKER_QUANTITY,
+        None,
+        None,
+    );
+    assert!(
+        placement_result.is_ok(),
+        "maker placement failed: {placement_result:?}"
+    );
+
+    let taker = Keypair::new();
+    svm.airdrop(&taker.pubkey(), 1_000_000_000).unwrap();
+
+    let maker_balance =
+        tidebook::derive_trader_balance_pda(&tidebook::id(), &market, &maker.pubkey()).0;
+    let taker_balance = ensure_trader_balance(&mut svm, market, taker.pubkey());
+    let mut maker_ledger = load_trader_balance(&svm, market, maker.pubkey());
+    let mut taker_ledger = load_trader_balance(&svm, market, taker.pubkey());
+
+    maker_ledger.base_free = 0;
+    maker_ledger.base_locked = 0;
+    maker_ledger.quote_free = 0;
+    maker_ledger.quote_locked = 0;
+    taker_ledger.base_free = 0;
+    taker_ledger.base_locked = 0;
+    taker_ledger.quote_free = 0;
+    taker_ledger.quote_locked = 0;
+
+    match maker_side {
+        tidebook::state::OrderSide::Ask => {
+            maker_ledger.base_locked = MATCH_MAKER_QUANTITY;
+            taker_ledger.quote_free = 100_000_000;
+        }
+        tidebook::state::OrderSide::Bid => {
+            maker_ledger.quote_locked = 125_000_000;
+            taker_ledger.base_free = 10_000_000;
+        }
+    }
+
+    store_trader_balance(&mut svm, maker_balance, &maker_ledger);
+    store_trader_balance(&mut svm, taker_balance, &taker_ledger);
+
+    let price_level = load_order(&svm, maker_order).price_level;
+
+    MatchFixture {
+        svm,
+        maker,
+        taker,
+        market,
+        maker_order,
+        price_level,
+        maker_balance,
+        taker_balance,
+    }
+}
+
+fn account_data_snapshot(svm: &LiteSVM, addresses: &[Pubkey]) -> Vec<Vec<u8>> {
+    addresses
+        .iter()
+        .map(|address| svm.get_account(address).unwrap().data)
+        .collect()
+}
+
 #[test]
 fn market_and_order_flow() {
     let program_id = tidebook::id();
@@ -2893,4 +3029,400 @@ fn edge_insertions_reject_wrong_priority_and_stale_best_atomically() {
     assert_eq!(first.worse_price, None);
     assert_eq!(token_balance(&svm, quote_vault), vault_before);
     assert!(svm.get_account(&rejected_order).is_none());
+}
+
+#[test]
+fn bid_taker_settles_against_partial_maker_ask() {
+    let MatchFixture {
+        mut svm,
+        taker,
+        market,
+        maker_order,
+        price_level,
+        ..
+    } = setup_partial_match(tidebook::state::OrderSide::Ask);
+
+    let result = send_match_limit_order(
+        &mut svm,
+        &taker,
+        market,
+        maker_order,
+        tidebook::state::OrderSide::Bid,
+        30_000_000,
+        MATCH_TAKER_QUANTITY,
+    );
+    assert!(result.is_ok(), "bid settlement failed: {result:?}");
+
+    let maker = load_order(&svm, maker_order);
+    let level = load_price_level(&svm, price_level);
+    let maker_balance = load_trader_balance(&svm, market, maker.owner);
+    let taker_balance = load_trader_balance(&svm, market, taker.pubkey());
+    let market_state = load_market(&svm, market);
+
+    assert_eq!(maker.remaining_quantity, 3_000_000);
+    assert_eq!(maker.locked_collateral, 3_000_000);
+    assert_eq!(maker.status, tidebook::state::OrderStatus::Open);
+    assert_eq!(level.total_remaining_quantity, 3_000_000);
+    assert_eq!(level.order_count, 1);
+    assert_eq!(level.first_order, Some(maker_order));
+    assert_eq!(level.last_order, Some(maker_order));
+    assert_eq!(maker_balance.base_locked, 3_000_000);
+    assert_eq!(maker_balance.quote_free, 50_000_000);
+    assert_eq!(taker_balance.quote_free, 50_000_000);
+    assert_eq!(taker_balance.base_free, 2_000_000);
+    assert_eq!(market_state.best_ask, Some(MATCH_PRICE));
+    assert_eq!(market_state.open_order_count, 1);
+}
+
+#[test]
+fn ask_taker_settles_against_partial_maker_bid() {
+    let MatchFixture {
+        mut svm,
+        taker,
+        market,
+        maker_order,
+        price_level,
+        ..
+    } = setup_partial_match(tidebook::state::OrderSide::Bid);
+
+    let result = send_match_limit_order(
+        &mut svm,
+        &taker,
+        market,
+        maker_order,
+        tidebook::state::OrderSide::Ask,
+        20_000_000,
+        MATCH_TAKER_QUANTITY,
+    );
+    assert!(result.is_ok(), "ask settlement failed: {result:?}");
+
+    let maker = load_order(&svm, maker_order);
+    let level = load_price_level(&svm, price_level);
+    let maker_balance = load_trader_balance(&svm, market, maker.owner);
+    let taker_balance = load_trader_balance(&svm, market, taker.pubkey());
+    let market_state = load_market(&svm, market);
+
+    assert_eq!(maker.remaining_quantity, 3_000_000);
+    assert_eq!(maker.locked_collateral, 75_000_000);
+    assert_eq!(maker.status, tidebook::state::OrderStatus::Open);
+    assert_eq!(level.total_remaining_quantity, 3_000_000);
+    assert_eq!(maker_balance.quote_locked, 75_000_000);
+    assert_eq!(maker_balance.base_free, 2_000_000);
+    assert_eq!(taker_balance.base_free, 8_000_000);
+    assert_eq!(taker_balance.quote_free, 50_000_000);
+    assert_eq!(market_state.best_bid, Some(MATCH_PRICE));
+    assert_eq!(market_state.open_order_count, 1);
+}
+
+#[test]
+fn non_crossing_match_is_rejected_without_mutation() {
+    let MatchFixture {
+        mut svm,
+        taker,
+        market,
+        maker_order,
+        price_level,
+        maker_balance,
+        taker_balance,
+        ..
+    } = setup_partial_match(tidebook::state::OrderSide::Ask);
+    let tracked = [
+        market,
+        maker_order,
+        price_level,
+        maker_balance,
+        taker_balance,
+    ];
+    let before = account_data_snapshot(&svm, &tracked);
+
+    let result = send_match_limit_order(
+        &mut svm,
+        &taker,
+        market,
+        maker_order,
+        tidebook::state::OrderSide::Bid,
+        24_000_000,
+        MATCH_TAKER_QUANTITY,
+    );
+
+    assert!(result.is_err());
+    assert_eq!(account_data_snapshot(&svm, &tracked), before);
+}
+
+#[test]
+fn insufficient_taker_free_balance_rolls_back_settlement() {
+    let MatchFixture {
+        mut svm,
+        taker,
+        market,
+        maker_order,
+        price_level,
+        maker_balance,
+        taker_balance,
+        ..
+    } = setup_partial_match(tidebook::state::OrderSide::Ask);
+    let mut taker_state = load_trader_balance(&svm, market, taker.pubkey());
+    taker_state.quote_free = 49_999_999;
+    store_trader_balance(&mut svm, taker_balance, &taker_state);
+    let tracked = [
+        market,
+        maker_order,
+        price_level,
+        maker_balance,
+        taker_balance,
+    ];
+    let before = account_data_snapshot(&svm, &tracked);
+
+    let result = send_match_limit_order(
+        &mut svm,
+        &taker,
+        market,
+        maker_order,
+        tidebook::state::OrderSide::Bid,
+        30_000_000,
+        MATCH_TAKER_QUANTITY,
+    );
+
+    assert!(result.is_err());
+    assert_eq!(account_data_snapshot(&svm, &tracked), before);
+}
+
+#[test]
+fn same_side_match_is_rejected_without_mutation() {
+    let MatchFixture {
+        mut svm,
+        taker,
+        market,
+        maker_order,
+        price_level,
+        maker_balance,
+        taker_balance,
+        ..
+    } = setup_partial_match(tidebook::state::OrderSide::Ask);
+    let tracked = [
+        market,
+        maker_order,
+        price_level,
+        maker_balance,
+        taker_balance,
+    ];
+    let before = account_data_snapshot(&svm, &tracked);
+
+    let result = send_match_limit_order(
+        &mut svm,
+        &taker,
+        market,
+        maker_order,
+        tidebook::state::OrderSide::Ask,
+        20_000_000,
+        MATCH_TAKER_QUANTITY,
+    );
+
+    assert!(result.is_err());
+    assert_eq!(account_data_snapshot(&svm, &tracked), before);
+}
+
+#[test]
+fn matching_rejects_self_trade_without_mutation() {
+    let MatchFixture {
+        mut svm,
+        maker,
+        market,
+        maker_order,
+        price_level,
+        maker_balance,
+        ..
+    } = setup_partial_match(tidebook::state::OrderSide::Ask);
+    let tracked = [market, maker_order, price_level, maker_balance];
+    let before = account_data_snapshot(&svm, &tracked);
+
+    let result = send_match_limit_order(
+        &mut svm,
+        &maker,
+        market,
+        maker_order,
+        tidebook::state::OrderSide::Bid,
+        30_000_000,
+        MATCH_TAKER_QUANTITY,
+    );
+
+    assert!(result.is_err());
+    assert_eq!(account_data_snapshot(&svm, &tracked), before);
+}
+
+#[test]
+fn matching_rejects_quantity_that_would_remove_maker() {
+    let MatchFixture {
+        mut svm,
+        taker,
+        market,
+        maker_order,
+        price_level,
+        maker_balance,
+        taker_balance,
+        ..
+    } = setup_partial_match(tidebook::state::OrderSide::Ask);
+    let tracked = [
+        market,
+        maker_order,
+        price_level,
+        maker_balance,
+        taker_balance,
+    ];
+    let before = account_data_snapshot(&svm, &tracked);
+
+    let result = send_match_limit_order(
+        &mut svm,
+        &taker,
+        market,
+        maker_order,
+        tidebook::state::OrderSide::Bid,
+        30_000_000,
+        MATCH_MAKER_QUANTITY,
+    );
+
+    assert!(result.is_err());
+    assert_eq!(account_data_snapshot(&svm, &tracked), before);
+}
+
+#[test]
+fn matching_is_rejected_while_market_is_paused() {
+    let MatchFixture {
+        mut svm,
+        maker,
+        taker,
+        market,
+        maker_order,
+        price_level,
+        maker_balance,
+        taker_balance,
+    } = setup_partial_match(tidebook::state::OrderSide::Ask);
+    let pause_result = send_pause_market(&mut svm, &maker, market);
+    assert!(pause_result.is_ok(), "pause failed: {pause_result:?}");
+    let tracked = [
+        market,
+        maker_order,
+        price_level,
+        maker_balance,
+        taker_balance,
+    ];
+    let before = account_data_snapshot(&svm, &tracked);
+
+    let result = send_match_limit_order(
+        &mut svm,
+        &taker,
+        market,
+        maker_order,
+        tidebook::state::OrderSide::Bid,
+        30_000_000,
+        MATCH_TAKER_QUANTITY,
+    );
+
+    assert!(result.is_err());
+    assert_eq!(account_data_snapshot(&svm, &tracked), before);
+}
+
+#[test]
+fn matching_cannot_skip_fifo_head() {
+    let ActiveMarketFixture {
+        mut svm,
+        payer: first_maker,
+        market,
+        ..
+    } = setup_active_market(6, 1_000_000, 1_000_000);
+    let (first_order, first_result) = send_insert_limit_order(
+        &mut svm,
+        &first_maker,
+        market,
+        tidebook::state::OrderSide::Ask,
+        MATCH_PRICE,
+        MATCH_MAKER_QUANTITY,
+        None,
+        None,
+    );
+    assert!(first_result.is_ok());
+
+    let second_maker = Keypair::new();
+    svm.airdrop(&second_maker.pubkey(), 1_000_000_000).unwrap();
+    let (second_order, second_result) = send_append_limit_order(
+        &mut svm,
+        &second_maker,
+        market,
+        tidebook::state::OrderSide::Ask,
+        MATCH_PRICE,
+        MATCH_MAKER_QUANTITY,
+        first_order,
+    );
+    assert!(second_result.is_ok());
+
+    let taker = Keypair::new();
+    svm.airdrop(&taker.pubkey(), 1_000_000_000).unwrap();
+    let result = send_match_limit_order(
+        &mut svm,
+        &taker,
+        market,
+        second_order,
+        tidebook::state::OrderSide::Bid,
+        30_000_000,
+        MATCH_TAKER_QUANTITY,
+    );
+
+    assert!(result.is_err());
+    assert_eq!(
+        load_order(&svm, second_order).remaining_quantity,
+        MATCH_MAKER_QUANTITY
+    );
+}
+
+#[test]
+fn matching_cannot_skip_better_price_level() {
+    let ActiveMarketFixture {
+        mut svm,
+        payer: maker,
+        market,
+        ..
+    } = setup_active_market(6, 1_000_000, 1_000_000);
+    let (best_order, best_result) = send_insert_limit_order(
+        &mut svm,
+        &maker,
+        market,
+        tidebook::state::OrderSide::Ask,
+        MATCH_PRICE,
+        MATCH_MAKER_QUANTITY,
+        None,
+        None,
+    );
+    assert!(best_result.is_ok());
+    let best_level = load_order(&svm, best_order).price_level;
+
+    let worse_price = 30_000_000;
+    let (worse_order, worse_result) = send_insert_limit_order(
+        &mut svm,
+        &maker,
+        market,
+        tidebook::state::OrderSide::Ask,
+        worse_price,
+        MATCH_MAKER_QUANTITY,
+        Some(best_level),
+        None,
+    );
+    assert!(worse_result.is_ok());
+
+    let taker = Keypair::new();
+    svm.airdrop(&taker.pubkey(), 1_000_000_000).unwrap();
+    let result = send_match_limit_order(
+        &mut svm,
+        &taker,
+        market,
+        worse_order,
+        tidebook::state::OrderSide::Bid,
+        35_000_000,
+        MATCH_TAKER_QUANTITY,
+    );
+
+    assert!(result.is_err());
+    assert_eq!(
+        load_order(&svm, worse_order).remaining_quantity,
+        MATCH_MAKER_QUANTITY
+    );
 }

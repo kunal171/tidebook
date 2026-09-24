@@ -119,4 +119,19 @@ pub mod tidebook {
     pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
         crate::instructions::withdraw::handle_withdraw(ctx, amount)
     }
+
+    /// Executes one complete taker fill against a maker that remains open.
+    pub fn match_limit_order(
+        ctx: Context<MatchLimitOrder>,
+        taker_side: OrderSide,
+        limit_price: u64,
+        quantity: u64,
+    ) -> Result<()> {
+        crate::instructions::match_limit_order::handle_match_limit_order(
+            ctx,
+            taker_side,
+            limit_price,
+            quantity,
+        )
+    }
 }
