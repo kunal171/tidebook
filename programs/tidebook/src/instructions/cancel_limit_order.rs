@@ -9,8 +9,8 @@ use anchor_spl::token::{self, Mint, Token, TokenAccount, TransferChecked};
 use crate::{
     constants::{ORDER_SEED, PRICE_LEVEL_SEED, VAULT_AUTHORITY_SEED, VAULT_SEED},
     error::MarketError,
-    state::{Market, Order, OrderSide, OrderStatus, PriceLevel},
     pda::derive_price_level_pda,
+    state::{Market, Order, OrderSide, OrderStatus, PriceLevel},
 };
 
 #[derive(Accounts)]
@@ -253,15 +253,13 @@ pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64)
     }
 
     if removes_price_level {
-
         require!(
             order_previous.is_none() && order_next.is_none(),
             MarketError::InvalidPriceLevelEndpoints
         );
 
         require!(
-            level_first_order == Some(order_key)
-                && level_last_order == Some(order_key),
+            level_first_order == Some(order_key) && level_last_order == Some(order_key),
             MarketError::InvalidPriceLevelEndpoints
         );
 
@@ -282,37 +280,15 @@ pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64)
             MarketError::InvalidPriceLevelRentRecipient
         );
 
-        let expected_better_level = level_better_price.map(|price| {
-            derive_price_level_pda(
-                ctx.program_id,
-                &market_key,
-                order_side,
-                price,
-            )
-            .0
-        });
+        let expected_better_level = level_better_price
+            .map(|price| derive_price_level_pda(ctx.program_id, &market_key, order_side, price).0);
 
-        let expected_worse_level = level_worse_price.map(|price| {
-            derive_price_level_pda(
-                ctx.program_id,
-                &market_key,
-                order_side,
-                price,
-            )
-            .0
-        });
+        let expected_worse_level = level_worse_price
+            .map(|price| derive_price_level_pda(ctx.program_id, &market_key, order_side, price).0);
 
-        let supplied_better_level = ctx
-            .accounts
-            .better_level
-            .as_ref()
-            .map(|level| level.key());
+        let supplied_better_level = ctx.accounts.better_level.as_ref().map(|level| level.key());
 
-        let supplied_worse_level = ctx
-            .accounts
-            .worse_level
-            .as_ref()
-            .map(|level| level.key());
+        let supplied_worse_level = ctx.accounts.worse_level.as_ref().map(|level| level.key());
 
         require!(
             supplied_better_level == expected_better_level
@@ -321,7 +297,9 @@ pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64)
         );
     }
 
-    if let Some(better_level) = ctx.accounts.better_level.as_ref() {
+    if let (Some(better_level), Some(expected_price)) =
+        (ctx.accounts.better_level.as_ref(), level_better_price)
+    {
         require_keys_eq!(
             better_level.market,
             market_key,
@@ -330,13 +308,15 @@ pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64)
 
         require!(
             better_level.side == order_side
-                && better_level.price == level_better_price.unwrap()
+                && better_level.price == expected_price
                 && better_level.worse_price == Some(level_price),
             MarketError::InvalidPriceLevelNeighbors
         );
     }
 
-    if let Some(worse_level) = ctx.accounts.worse_level.as_ref() {
+    if let (Some(worse_level), Some(expected_price)) =
+        (ctx.accounts.worse_level.as_ref(), level_worse_price)
+    {
         require_keys_eq!(
             worse_level.market,
             market_key,
@@ -345,7 +325,7 @@ pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64)
 
         require!(
             worse_level.side == order_side
-                && worse_level.price == level_worse_price.unwrap()
+                && worse_level.price == expected_price
                 && worse_level.better_price == Some(level_price),
             MarketError::InvalidPriceLevelNeighbors
         );
