@@ -221,4 +221,13 @@ pub enum MarketError {
 
     #[msg("Market vault contains insufficient tokens")]
     InsufficientVaultFunds,
+
+    #[msg("Maker and taker orders must be on opposite sides")]
+    MatchingSameSide,
+
+    #[msg("Taker limit price does not cross the maker price")]
+    OrdersDoNotCross,
+
+    #[msg("Maker order has insufficient locked collateral")]
+    InvalidMakerCollateral,
 }
