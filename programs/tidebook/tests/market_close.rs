@@ -52,6 +52,7 @@ struct TestContext {
 
 struct OpenOrderFixture {
     order: Pubkey,
+    price_level: Pubkey,
     owner_collateral: Pubkey,
     collateral_mint: Pubkey,
     market_vault: Pubkey,
@@ -366,6 +367,7 @@ fn place_order(context: &mut TestContext, side: OrderSide) -> OpenOrderFixture {
 
     OpenOrderFixture {
         order,
+        price_level,
         owner_collateral,
         collateral_mint,
         market_vault,
@@ -380,6 +382,9 @@ fn cancel_order(context: &mut TestContext, order: &OpenOrderFixture) {
             owner: context.authority.pubkey(),
             market: context.market.market,
             order: order.order,
+            price_level: order.price_level,
+            previous_order: None,
+            next_order: None,
             collateral_mint: order.collateral_mint,
             owner_collateral: order.owner_collateral,
             vault_authority: context.market.vault_authority,

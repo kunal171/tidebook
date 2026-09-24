@@ -10,12 +10,15 @@ pub const MARKET_SEED: &[u8] = b"market";
 #[constant]
 pub const ORDER_SEED: &[u8] = b"order";
 
+/// Inclusive raw-price boundary exposed to clients and future validation.
 #[constant]
 pub const MIN_PRICE: u64 = 1;
 
+/// Largest representable raw integer price.
 #[constant]
 pub const MAX_PRICE: u64 = u64::MAX;
 
+/// Largest representable raw base-asset quantity.
 #[constant]
 pub const MAX_QUANTITY: u64 = u64::MAX;
 

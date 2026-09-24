@@ -22,7 +22,7 @@ use {
     solana_signer::Signer,
     solana_transaction::versioned::VersionedTransaction,
     tidebook::state::{
-        AdminRecord, AdminStatus, Market, MarketStatus, Order, OrderSide, OrderStatus,
+        AdminRecord, AdminStatus, Market, MarketStatus, Order, OrderSide, OrderStatus, PriceLevel,
     },
 };
 
@@ -52,6 +52,7 @@ struct OpenOrderFixture {
     owner: Keypair,
     market: MarketFixture,
     order: Pubkey,
+    price_level: Pubkey,
     owner_collateral: Pubkey,
     collateral_mint: Pubkey,
     market_vault: Pubkey,
@@ -299,12 +300,62 @@ fn place_order(
     )
 }
 
+fn append_bid_order(
+    fixture: &mut OpenOrderFixture,
+    order_id: u64,
+    previous_order: Pubkey,
+) -> (Pubkey, Pubkey) {
+    let trader_collateral = create_test_token_account(
+        &mut fixture.svm,
+        fixture.market.quote_mint,
+        fixture.owner.pubkey(),
+        TEST_QUOTE_COLLATERAL,
+    );
+    let (order, _) = Pubkey::find_program_address(
+        &[
+            tidebook::constants::ORDER_SEED,
+            fixture.market.market.as_ref(),
+            order_id.to_le_bytes().as_ref(),
+        ],
+        &tidebook::id(),
+    );
+    let instruction = Instruction::new_with_bytes(
+        tidebook::id(),
+        &tidebook::instruction::AppendLimitOrder {
+            side: OrderSide::Bid,
+            price: TEST_ORDER_PRICE,
+            quantity: TEST_ORDER_QUANTITY,
+        }
+        .data(),
+        tidebook::accounts::AppendLimitOrder {
+            trader: fixture.owner.pubkey(),
+            market: fixture.market.market,
+            order,
+            price_level: fixture.price_level,
+            previous_order,
+            collateral_mint: fixture.market.quote_mint,
+            trader_collateral,
+            vault_authority: fixture.market.vault_authority,
+            market_vault: fixture.market.quote_vault,
+            token_program: anchor_spl::token::ID,
+            system_program: system_program::ID,
+        }
+        .to_account_metas(None),
+    );
+
+    let result = send_instruction(&mut fixture.svm, &fixture.owner, instruction);
+    assert!(result.is_ok(), "FIFO append failed: {result:?}");
+
+    (order, trader_collateral)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn cancel_order_instruction_with_accounts(
     signer: Pubkey,
     market: Pubkey,
     order: Pubkey,
     order_id: u64,
+    price_level: Pubkey,
     collateral_mint: Pubkey,
     owner_collateral: Pubkey,
     vault_authority: Pubkey,
@@ -317,6 +368,9 @@ fn cancel_order_instruction_with_accounts(
             owner: signer,
             market,
             order,
+            price_level,
+            previous_order: None,
+            next_order: None,
             collateral_mint,
             owner_collateral,
             vault_authority,
@@ -333,10 +387,39 @@ fn cancel_order_instruction(fixture: &OpenOrderFixture, signer: Pubkey) -> Instr
         fixture.market.market,
         fixture.order,
         ORDER_ID,
+        fixture.price_level,
         fixture.collateral_mint,
         fixture.owner_collateral,
         fixture.market.vault_authority,
         fixture.market_vault,
+    )
+}
+
+fn cancel_queued_order_instruction(
+    fixture: &OpenOrderFixture,
+    order: Pubkey,
+    order_id: u64,
+    previous_order: Option<Pubkey>,
+    next_order: Option<Pubkey>,
+    owner_collateral: Pubkey,
+) -> Instruction {
+    Instruction::new_with_bytes(
+        tidebook::id(),
+        &tidebook::instruction::CancelLimitOrder { order_id }.data(),
+        tidebook::accounts::CancelLimitOrder {
+            owner: fixture.owner.pubkey(),
+            market: fixture.market.market,
+            order,
+            price_level: fixture.price_level,
+            previous_order,
+            next_order,
+            collateral_mint: fixture.market.quote_mint,
+            owner_collateral,
+            vault_authority: fixture.market.vault_authority,
+            market_vault: fixture.market.quote_vault,
+            token_program: anchor_spl::token::ID,
+        }
+        .to_account_metas(None),
     )
 }
 
@@ -350,6 +433,12 @@ fn load_market(svm: &LiteSVM, address: Pubkey) -> Market {
     let account = svm.get_account(&address).unwrap();
     let mut data: &[u8] = &account.data;
     Market::try_deserialize(&mut data).unwrap()
+}
+
+fn load_price_level(svm: &LiteSVM, address: Pubkey) -> PriceLevel {
+    let account = svm.get_account(&address).unwrap();
+    let mut data: &[u8] = &account.data;
+    PriceLevel::try_deserialize(&mut data).unwrap()
 }
 
 fn token_balance(svm: &LiteSVM, address: Pubkey) -> u64 {
@@ -368,12 +457,15 @@ fn setup_open_order(side: OrderSide) -> OpenOrderFixture {
     let market = initialize_market(&mut svm, &owner);
     let (order, owner_collateral, collateral_mint, market_vault, locked_collateral) =
         place_order(&mut svm, &owner, &market, ORDER_ID, side);
+    let price_level =
+        tidebook::derive_price_level_pda(&tidebook::id(), &market.market, side, TEST_ORDER_PRICE).0;
 
     OpenOrderFixture {
         svm,
         owner,
         market,
         order,
+        price_level,
         owner_collateral,
         collateral_mint,
         market_vault,
@@ -403,7 +495,11 @@ fn canceling_bid_refunds_quote_collateral() {
     assert!(result.is_ok(), "order cancellation failed: {result:?}");
     let state = load_order(&fixture.svm, fixture.order);
     assert_eq!(state.status, OrderStatus::Canceled);
-    assert_eq!(state.remaining_quantity, TEST_ORDER_QUANTITY);
+    assert_eq!(state.remaining_quantity, 0);
+    assert_eq!(
+        load_price_level(&fixture.svm, fixture.price_level).order_count,
+        0
+    );
     assert_eq!(state.locked_collateral, 0);
     assert_eq!(
         token_balance(&fixture.svm, fixture.owner_collateral),
@@ -429,6 +525,157 @@ fn canceling_ask_refunds_base_collateral() {
         TEST_ORDER_QUANTITY
     );
     assert_eq!(token_balance(&fixture.svm, fixture.market_vault), 0);
+}
+
+#[test]
+fn canceling_fifo_head_promotes_the_next_order() {
+    let mut fixture = setup_open_order(OrderSide::Bid);
+    let first_order = fixture.order;
+    let (second_order, _) = append_bid_order(&mut fixture, 2, first_order);
+    let instruction = cancel_queued_order_instruction(
+        &fixture,
+        first_order,
+        1,
+        None,
+        Some(second_order),
+        fixture.owner_collateral,
+    );
+
+    let result = send_instruction(&mut fixture.svm, &fixture.owner, instruction);
+
+    assert!(result.is_ok(), "head cancellation failed: {result:?}");
+    let canceled = load_order(&fixture.svm, first_order);
+    let second = load_order(&fixture.svm, second_order);
+    let level = load_price_level(&fixture.svm, fixture.price_level);
+    assert_eq!(canceled.status, OrderStatus::Canceled);
+    assert_eq!(canceled.previous_order, None);
+    assert_eq!(canceled.next_order, None);
+    assert_eq!(second.previous_order, None);
+    assert_eq!(level.first_order, Some(second_order));
+    assert_eq!(level.last_order, Some(second_order));
+    assert_eq!(level.order_count, 1);
+    assert_eq!(level.total_remaining_quantity, TEST_ORDER_QUANTITY);
+    assert_eq!(
+        load_market(&fixture.svm, fixture.market.market).open_order_count,
+        1
+    );
+    assert_eq!(
+        token_balance(&fixture.svm, fixture.market_vault),
+        TEST_QUOTE_COLLATERAL
+    );
+}
+
+#[test]
+fn canceling_fifo_tail_promotes_the_previous_order() {
+    let mut fixture = setup_open_order(OrderSide::Bid);
+    let first_order = fixture.order;
+    let (second_order, second_collateral) = append_bid_order(&mut fixture, 2, first_order);
+    let instruction = cancel_queued_order_instruction(
+        &fixture,
+        second_order,
+        2,
+        Some(first_order),
+        None,
+        second_collateral,
+    );
+
+    let result = send_instruction(&mut fixture.svm, &fixture.owner, instruction);
+
+    assert!(result.is_ok(), "tail cancellation failed: {result:?}");
+    let first = load_order(&fixture.svm, first_order);
+    let canceled = load_order(&fixture.svm, second_order);
+    let level = load_price_level(&fixture.svm, fixture.price_level);
+    assert_eq!(first.next_order, None);
+    assert_eq!(canceled.status, OrderStatus::Canceled);
+    assert_eq!(canceled.previous_order, None);
+    assert_eq!(canceled.next_order, None);
+    assert_eq!(level.first_order, Some(first_order));
+    assert_eq!(level.last_order, Some(first_order));
+    assert_eq!(level.order_count, 1);
+    assert_eq!(level.total_remaining_quantity, TEST_ORDER_QUANTITY);
+    assert_eq!(
+        token_balance(&fixture.svm, second_collateral),
+        TEST_QUOTE_COLLATERAL
+    );
+    assert_eq!(
+        token_balance(&fixture.svm, fixture.market_vault),
+        TEST_QUOTE_COLLATERAL
+    );
+}
+
+#[test]
+fn canceling_fifo_middle_connects_its_neighbors() {
+    let mut fixture = setup_open_order(OrderSide::Bid);
+    let first_order = fixture.order;
+    let (second_order, second_collateral) = append_bid_order(&mut fixture, 2, first_order);
+    let (third_order, _) = append_bid_order(&mut fixture, 3, second_order);
+    let instruction = cancel_queued_order_instruction(
+        &fixture,
+        second_order,
+        2,
+        Some(first_order),
+        Some(third_order),
+        second_collateral,
+    );
+
+    let result = send_instruction(&mut fixture.svm, &fixture.owner, instruction);
+
+    assert!(result.is_ok(), "middle cancellation failed: {result:?}");
+    let first = load_order(&fixture.svm, first_order);
+    let canceled = load_order(&fixture.svm, second_order);
+    let third = load_order(&fixture.svm, third_order);
+    let level = load_price_level(&fixture.svm, fixture.price_level);
+    assert_eq!(first.next_order, Some(third_order));
+    assert_eq!(third.previous_order, Some(first_order));
+    assert_eq!(canceled.status, OrderStatus::Canceled);
+    assert_eq!(canceled.previous_order, None);
+    assert_eq!(canceled.next_order, None);
+    assert_eq!(level.first_order, Some(first_order));
+    assert_eq!(level.last_order, Some(third_order));
+    assert_eq!(level.order_count, 2);
+    assert_eq!(level.total_remaining_quantity, TEST_ORDER_QUANTITY * 2);
+    assert_eq!(
+        load_market(&fixture.svm, fixture.market.market).open_order_count,
+        2
+    );
+    assert_eq!(
+        token_balance(&fixture.svm, fixture.market_vault),
+        TEST_QUOTE_COLLATERAL * 2
+    );
+}
+
+#[test]
+fn omitting_a_required_fifo_neighbor_is_rejected_atomically() {
+    let mut fixture = setup_open_order(OrderSide::Bid);
+    let first_order = fixture.order;
+    let (second_order, _) = append_bid_order(&mut fixture, 2, first_order);
+    let level_before = load_price_level(&fixture.svm, fixture.price_level);
+    let instruction = cancel_order_instruction(&fixture, fixture.owner.pubkey());
+
+    let result = send_instruction(&mut fixture.svm, &fixture.owner, instruction);
+
+    assert!(
+        result.is_err(),
+        "cancellation omitted the required next order"
+    );
+    let first = load_order(&fixture.svm, first_order);
+    let second = load_order(&fixture.svm, second_order);
+    let level_after = load_price_level(&fixture.svm, fixture.price_level);
+    assert_eq!(first.status, OrderStatus::Open);
+    assert_eq!(first.next_order, Some(second_order));
+    assert_eq!(second.previous_order, Some(first_order));
+    assert_eq!(level_after.first_order, level_before.first_order);
+    assert_eq!(level_after.last_order, level_before.last_order);
+    assert_eq!(level_after.order_count, level_before.order_count);
+    assert_eq!(
+        level_after.total_remaining_quantity,
+        level_before.total_remaining_quantity
+    );
+    assert_eq!(token_balance(&fixture.svm, fixture.owner_collateral), 0);
+    assert_eq!(
+        token_balance(&fixture.svm, fixture.market_vault),
+        TEST_QUOTE_COLLATERAL * 2
+    );
 }
 
 #[test]
@@ -479,6 +726,7 @@ fn order_cannot_be_canceled_with_different_market() {
         different_market.market,
         fixture.order,
         ORDER_ID,
+        fixture.price_level,
         fixture.collateral_mint,
         fixture.owner_collateral,
         different_market.vault_authority,
@@ -544,6 +792,7 @@ fn wrong_refund_mint_is_rejected_atomically() {
         fixture.market.market,
         fixture.order,
         ORDER_ID,
+        fixture.price_level,
         fixture.market.base_mint,
         wrong_destination,
         fixture.market.vault_authority,
@@ -569,6 +818,7 @@ fn refund_account_owned_by_another_wallet_is_rejected() {
         fixture.market.market,
         fixture.order,
         ORDER_ID,
+        fixture.price_level,
         fixture.market.quote_mint,
         wrong_destination,
         fixture.market.vault_authority,
@@ -596,6 +846,7 @@ fn noncanonical_refund_vault_is_rejected() {
         fixture.market.market,
         fixture.order,
         ORDER_ID,
+        fixture.price_level,
         fixture.market.quote_mint,
         fixture.owner_collateral,
         fixture.market.vault_authority,

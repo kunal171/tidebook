@@ -1,4 +1,7 @@
 //! Reactivates a paused market under its stored market authority.
+//!
+//! The explicit Paused precondition prevents a successful no-op transaction
+//! from being mistaken for a real lifecycle transition by clients or operators.
 
 use anchor_lang::prelude::*;
 

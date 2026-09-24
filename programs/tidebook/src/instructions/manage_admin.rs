@@ -1,6 +1,8 @@
 //! Enables or disables administrator records under super-admin control.
 //!
 //! The super-admin record is protected from disabling to preserve governance.
+//! Disabling retains provenance and the PDA address; removal is a separate,
+//! explicit instruction that is permitted only after this state transition.
 
 use anchor_lang::prelude::*;
 
@@ -34,6 +36,7 @@ pub struct ManageAdmin<'info> {
     pub admin_record: Account<'info, AdminRecord>,
 }
 
+/// Moves an active role to the reversible disabled state.
 pub fn handle_disable_admin(ctx: Context<ManageAdmin>, _target_admin: Pubkey) -> Result<()> {
     require!(
         ctx.accounts.admin_record.status == AdminStatus::Active,
@@ -45,6 +48,7 @@ pub fn handle_disable_admin(ctx: Context<ManageAdmin>, _target_admin: Pubkey) ->
     Ok(())
 }
 
+/// Restores a disabled role without replacing its provenance record.
 pub fn handle_enable_admin(ctx: Context<ManageAdmin>, _target_admin: Pubkey) -> Result<()> {
     require!(
         ctx.accounts.admin_record.status == AdminStatus::Disabled,
