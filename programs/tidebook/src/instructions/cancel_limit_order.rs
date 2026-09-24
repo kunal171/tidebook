@@ -10,6 +10,7 @@ use crate::{
     constants::{ORDER_SEED, PRICE_LEVEL_SEED, VAULT_AUTHORITY_SEED, VAULT_SEED},
     error::MarketError,
     state::{Market, Order, OrderSide, OrderStatus, PriceLevel},
+    pda::derive_price_level_pda,
 };
 
 #[derive(Accounts)]
@@ -18,7 +19,7 @@ pub struct CancelLimitOrder<'info> {
     pub owner: Signer<'info>,
 
     #[account(mut)]
-    pub market: Account<'info, Market>,
+    pub market: Box<Account<'info, Market>>,
 
     #[account(
         mut,
@@ -31,7 +32,7 @@ pub struct CancelLimitOrder<'info> {
         has_one = owner @ MarketError::UnauthorizedOrderOwner,
         has_one = market @ MarketError::OrderMarketMismatch
     )]
-    pub order: Account<'info, Order>,
+    pub order: Box<Account<'info, Order>>,
 
     #[account(
         mut,
@@ -51,15 +52,27 @@ pub struct CancelLimitOrder<'info> {
         constraint = price_level.price == order.price
             @ MarketError::PriceLevelPriceMismatch,
     )]
-    pub price_level: Account<'info, PriceLevel>,
+    pub price_level: Box<Account<'info, PriceLevel>>,
 
     /// Older FIFO neighbor. None when canceling the queue head.
     #[account(mut)]
-    pub previous_order: Option<Account<'info, Order>>,
+    pub previous_order: Option<Box<Account<'info, Order>>>,
 
     /// Newer FIFO neighbor. None when canceling the queue tail.
     #[account(mut)]
-    pub next_order: Option<Account<'info, Order>>,
+    pub next_order: Option<Box<Account<'info, Order>>>,
+
+    /// Higher-priority price level, required only when this level becomes empty.
+    #[account(mut)]
+    pub better_level: Option<Box<Account<'info, PriceLevel>>>,
+
+    /// Lower-priority price level, required only when this level becomes empty.
+    #[account(mut)]
+    pub worse_level: Option<Box<Account<'info, PriceLevel>>>,
+
+    /// CHECK: Must equal the stored price-level rent payer when closing the level.
+    #[account(mut)]
+    pub level_rent_recipient: Option<UncheckedAccount<'info>>,
 
     pub collateral_mint: Account<'info, Mint>,
 
@@ -70,7 +83,7 @@ pub struct CancelLimitOrder<'info> {
         constraint = owner_collateral.mint == collateral_mint.key()
             @ MarketError::InvalidCollateralMint
     )]
-    pub owner_collateral: Account<'info, TokenAccount>,
+    pub owner_collateral: Box<Account<'info, TokenAccount>>,
 
     /// CHECK: Seed-constrained authority that signs the refund transfer.
     #[account(
@@ -93,7 +106,7 @@ pub struct CancelLimitOrder<'info> {
         token::mint = collateral_mint,
         token::authority = vault_authority
     )]
-    pub market_vault: Account<'info, TokenAccount>,
+    pub market_vault: Box<Account<'info, TokenAccount>>,
 
     pub token_program: Program<'info, Token>,
 }
@@ -116,6 +129,12 @@ pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64)
     let locked_collateral = ctx.accounts.order.locked_collateral;
 
     let price_level_key = ctx.accounts.price_level.key();
+
+    let level_price = ctx.accounts.price_level.price;
+    let level_better_price = ctx.accounts.price_level.better_price;
+    let level_worse_price = ctx.accounts.price_level.worse_price;
+    let level_first_order = ctx.accounts.price_level.first_order;
+    let level_last_order = ctx.accounts.price_level.last_order;
 
     // Optional accounts are untrusted client hints. Their presence must exactly
     // match the links stored in the program-owned order.
@@ -221,6 +240,116 @@ pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64)
         .total_remaining_quantity
         .checked_sub(order_remaining_quantity)
         .ok_or(MarketError::PriceLevelQuantityUnderflow)?;
+
+    let removes_price_level = next_level_order_count == 0;
+
+    if !removes_price_level {
+        require!(
+            ctx.accounts.better_level.is_none()
+                && ctx.accounts.worse_level.is_none()
+                && ctx.accounts.level_rent_recipient.is_none(),
+            MarketError::InvalidPriceLevelNeighbors
+        );
+    }
+
+    if removes_price_level {
+
+        require!(
+            order_previous.is_none() && order_next.is_none(),
+            MarketError::InvalidPriceLevelEndpoints
+        );
+
+        require!(
+            level_first_order == Some(order_key)
+                && level_last_order == Some(order_key),
+            MarketError::InvalidPriceLevelEndpoints
+        );
+
+        require!(
+            next_level_quantity == 0,
+            MarketError::InvalidPriceLevelAggregate
+        );
+
+        let rent_recipient = ctx
+            .accounts
+            .level_rent_recipient
+            .as_ref()
+            .ok_or(MarketError::InvalidPriceLevelRentRecipient)?;
+
+        require_keys_eq!(
+            rent_recipient.key(),
+            ctx.accounts.price_level.rent_payer,
+            MarketError::InvalidPriceLevelRentRecipient
+        );
+
+        let expected_better_level = level_better_price.map(|price| {
+            derive_price_level_pda(
+                ctx.program_id,
+                &market_key,
+                order_side,
+                price,
+            )
+            .0
+        });
+
+        let expected_worse_level = level_worse_price.map(|price| {
+            derive_price_level_pda(
+                ctx.program_id,
+                &market_key,
+                order_side,
+                price,
+            )
+            .0
+        });
+
+        let supplied_better_level = ctx
+            .accounts
+            .better_level
+            .as_ref()
+            .map(|level| level.key());
+
+        let supplied_worse_level = ctx
+            .accounts
+            .worse_level
+            .as_ref()
+            .map(|level| level.key());
+
+        require!(
+            supplied_better_level == expected_better_level
+                && supplied_worse_level == expected_worse_level,
+            MarketError::InvalidPriceLevelNeighbors
+        );
+    }
+
+    if let Some(better_level) = ctx.accounts.better_level.as_ref() {
+        require_keys_eq!(
+            better_level.market,
+            market_key,
+            MarketError::PriceLevelMarketMismatch
+        );
+
+        require!(
+            better_level.side == order_side
+                && better_level.price == level_better_price.unwrap()
+                && better_level.worse_price == Some(level_price),
+            MarketError::InvalidPriceLevelNeighbors
+        );
+    }
+
+    if let Some(worse_level) = ctx.accounts.worse_level.as_ref() {
+        require_keys_eq!(
+            worse_level.market,
+            market_key,
+            MarketError::PriceLevelMarketMismatch
+        );
+
+        require!(
+            worse_level.side == order_side
+                && worse_level.price == level_worse_price.unwrap()
+                && worse_level.better_price == Some(level_price),
+            MarketError::InvalidPriceLevelNeighbors
+        );
+    }
 
     token::transfer_checked(
         CpiContext::new_with_signer(

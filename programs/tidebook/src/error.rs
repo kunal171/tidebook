@@ -173,4 +173,13 @@ pub enum MarketError {
 
     #[msg("Supplied order account is not canonical")]
     NoncanonicalOrder,
+
+    #[msg("Price-level rent recipient does not match the stored rent payer")]
+    InvalidPriceLevelRentRecipient,
+
+    #[msg("Final order does not match the price-level queue endpoints")]
+    InvalidPriceLevelEndpoints,
+
+    #[msg("Empty price level has a nonzero remaining quantity")]
+    InvalidPriceLevelAggregate,
 }
