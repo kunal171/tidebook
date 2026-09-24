@@ -22,7 +22,8 @@ npm run build
 - Connect to Solana devnet.
 - Discover active and paused markets without connecting a wallet.
 - Create markets as an active protocol administrator.
-- Place collateralized bid and ask limit orders from owned token accounts.
+- Place collateralized bid and ask limit orders from owned token accounts,
+  including empty, best, middle, worst, and same-price FIFO insertion paths.
 - List wallet-owned orders and cancel them, including while a market is paused.
 - Pause, unpause, and safely close markets as their authority.
 - Manage protocol administrators as the super-admin.
@@ -45,8 +46,14 @@ Store that value in `app/.env.local`; the file is ignored by Git.
 - `components/solana-provider.tsx` owns the client-only wallet and RPC context.
 - `components/` contains the client-side route workspaces and transaction flows.
 - `lib/tidebook.ts` owns account types, PDA derivation, token-account discovery,
-  formatting, and Anchor program construction.
+  price-level traversal, formatting, and Anchor program construction.
 - `lib/solana.ts` owns shared network and program-identity configuration.
+
+Price-level traversal begins at the market best price and follows
+`worse_price` links, so transaction construction is currently O(number of price
+levels). Those RPC reads are advisory: the on-chain instruction revalidates all
+neighbor accounts atomically, and a stale transaction must refresh and retry.
+An indexer can later accelerate discovery without changing the program API.
 
 New routes should keep read-only structure server-rendered and move only wallet,
 transaction, state, and browser-dependent behavior behind `"use client"`.

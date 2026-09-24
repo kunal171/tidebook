@@ -143,6 +143,16 @@ the account contract more complex. If Anchor optional-account ergonomics make
 the generated clients unclear, explicit instruction variants are preferable to
 loosely typed `remaining_accounts`.
 
+The current web client locates a missing price level by walking from the
+market best price through canonical `worse_price` links. It rejects cycles,
+cross-market or cross-side links, PDA/price mismatches, broken reciprocal links,
+and non-strict ordering before constructing the instruction. This O(levels)
+RPC walk improves diagnostics but is not a security boundary: the program
+repeats all canonical-address and neighbor checks atomically because another
+transaction may mutate the book after the client reads it. A later indexer may
+provide the same better/worse accounts more efficiently without changing the
+instruction contract.
+
 ## Tradeoffs and rejected alternatives
 
 | Approach | Benefits | Costs and reason for decision |
@@ -218,8 +228,9 @@ Remaining tests required before matching:
 5. ~~Add sorted better, middle, and worse level insertion.~~
 6. Extend cancellation for order unlinking.
 7. Close and unlink empty levels, including best-price updates.
-8. Update the checked-in IDL, web client, architecture diagram, and invariant
-   list.
+8. ~~Update the checked-in IDL and web client for sorted insertion.~~
+9. Update the architecture diagram and invariant list after indexed
+   cancellation is complete.
 
 Matching starts only after this matrix passes and the index can be treated as a
 trusted program-maintained structure. "Trusted" here means maintained by the

@@ -95,9 +95,14 @@ export interface PriceLevelAccount {
   firstOrder: PublicKey | null;
   lastOrder: PublicKey | null;
   totalRemainingQuantity: BN;
-  orderCount: number;
+  orderCount: BN;
   rentPayer: PublicKey;
   bump: number;
+}
+
+export interface PriceLevelNeighbors {
+  betterLevel: PublicKey | null;
+  worseLevel: PublicKey | null;
 }
 
 export interface OrderAccount {
@@ -210,6 +215,93 @@ export function derivePriceLevelPda(
     ],
     PROGRAM_ID,
   )[0];
+}
+
+/**
+ * Walks the program-maintained price-level list to locate the insertion gap.
+ *
+ * The RPC traversal is intentionally treated as advisory: it detects malformed
+ * or cyclic client state early, while the instruction repeats all security
+ * checks atomically in case the book changes before the transaction lands.
+ * Traversal is O(number of price levels); a production client can replace it
+ * with an indexer without changing the on-chain neighbor contract.
+ */
+export async function findPriceLevelNeighbors(
+  program: Program,
+  market: PublicKey,
+  side: OrderSide,
+  price: BN,
+  bestPrice: BN | null,
+): Promise<PriceLevelNeighbors> {
+  if (!bestPrice) {
+    return { betterLevel: null, worseLevel: null };
+  }
+
+  const accounts = getTidebookAccounts(program);
+  const visited = new Set<string>();
+  let expectedBetterPrice: BN | null = null;
+  let betterLevel: PublicKey | null = null;
+  let currentPrice = bestPrice;
+
+  while (true) {
+    const currentLevel = derivePriceLevelPda(market, side, currentPrice);
+    const currentAddress = currentLevel.toBase58();
+
+    if (visited.has(currentAddress)) {
+      throw new Error("Price-level index contains a cycle");
+    }
+    visited.add(currentAddress);
+
+    const level = await accounts.priceLevel.fetchNullable(currentLevel);
+    if (!level) {
+      throw new Error(
+        "Price-level index points to missing account " + currentAddress,
+      );
+    }
+
+    const decodedSide: OrderSide = "bid" in level.side ? "bid" : "ask";
+    if (!level.market.equals(market) || decodedSide !== side) {
+      throw new Error("Price-level index crosses a market or side boundary");
+    }
+    if (!level.price.eq(currentPrice)) {
+      throw new Error("Price-level PDA and stored price do not match");
+    }
+
+    const betterLinkMatches = expectedBetterPrice
+      ? level.betterPrice?.eq(expectedBetterPrice) === true
+      : level.betterPrice === null;
+    if (!betterLinkMatches) {
+      throw new Error("Price-level index has a broken reciprocal link");
+    }
+
+    if (expectedBetterPrice) {
+      const strictlyOrdered =
+        side === "bid"
+          ? expectedBetterPrice.gt(level.price)
+          : expectedBetterPrice.lt(level.price);
+      if (!strictlyOrdered) {
+        throw new Error("Price-level index is not strictly ordered");
+      }
+    }
+
+    if (price.eq(level.price)) {
+      throw new Error("Price level appeared during traversal; refresh and retry");
+    }
+
+    const belongsBeforeCurrent =
+      side === "bid" ? price.gt(level.price) : price.lt(level.price);
+    if (belongsBeforeCurrent) {
+      return { betterLevel, worseLevel: currentLevel };
+    }
+
+    if (!level.worsePrice) {
+      return { betterLevel: currentLevel, worseLevel: null };
+    }
+
+    expectedBetterPrice = level.price;
+    betterLevel = currentLevel;
+    currentPrice = level.worsePrice;
+  }
 }
 
 export function deriveOrderPda(market: PublicKey, orderId: BN) {

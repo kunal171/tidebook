@@ -12,9 +12,8 @@ The current implementation establishes the account and authorization foundation:
 - create one deterministic market for a distinct SPL base/quote mint pair;
 - pause, unpause, and close a market under authority control;
 - create deterministic limit-order accounts while atomically locking collateral;
-- create the first canonical price level on each side, insert a better-priced
-  level ahead of the current best, and append a same-price order behind a
-  validated FIFO tail;
+- create canonical price levels at the best, middle, or worst position on each
+  side, and append same-price orders behind a validated FIFO tail;
 - validate behavior with in-process LiteSVM integration tests.
 
 The program does **not** yet unlink indexed
@@ -56,9 +55,22 @@ active on-chain record. Role-aware routes are:
 | `/orders` | Any connected wallet | List wallet-owned orders and cancel orders whose status is `Open` |
 
 The order form discovers a wallet-owned token account for the required mint and
-passes the canonical vault accounts to the program. The orders page filters
-program accounts by owner, displays locked collateral, returns it to an owned
-token account during cancellation, and refreshes after confirmation.
+passes the canonical vault accounts to the program. When the target price level
+already exists, the client appends behind its FIFO tail. Otherwise, it walks
+from the market's best price through `worse_price` links to find the exact
+better/worse insertion gap. The walk checks for cycles, broken reciprocal links,
+wrong markets or sides, and invalid price ordering before submitting.
+
+This RPC traversal is only an advisory transaction-building step. The linked
+book can change between reads and confirmation, so the on-chain instruction
+derives every PDA and revalidates the neighboring prices and reciprocal links
+atomically. A stale client transaction fails safely and can be retried after a
+refresh. The browser walk is O(number of price levels); a production indexer
+can replace it later without changing the program's neighbor-account contract.
+
+The orders page filters program accounts by owner, displays locked collateral,
+returns it to an owned token account during cancellation, and refreshes after
+confirmation.
 
 Route visibility is a user-interface concern, not an authorization boundary.
 Every privileged action must also be constrained by the Anchor program because
@@ -506,12 +518,13 @@ will not represent deferred settlement work.
 
 The recommended implementation order is:
 
-1. Add sorted multi-price insertion and indexed cancellation/removal.
-2. Add canonical per-market trader balances and atomic deposit/withdrawal.
-3. Route order collateral through free and locked balance accounting.
-4. Implement bounded deterministic matching and atomic ledger settlement.
-5. Add partial fills, remainder policy, fees, and conservation tests.
-6. Add order cleanup and rent-reclamation rules.
+1. ~~Add sorted multi-price insertion.~~
+2. Add indexed cancellation/removal.
+3. Add canonical per-market trader balances and atomic deposit/withdrawal.
+4. Route order collateral through free and locked balance accounting.
+5. Implement bounded deterministic matching and atomic ledger settlement.
+6. Add partial fills, remainder policy, fees, and conservation tests.
+7. Add order cleanup and rent-reclamation rules.
 
 Each phase should add its invariants and failure-path tests before the next
 state transition is introduced.
