@@ -1385,6 +1385,214 @@
       ]
     },
     {
+      "name": "match_limit_order",
+      "docs": [
+        "Executes one complete taker fill against a maker that remains open."
+      ],
+      "discriminator": [
+        56,
+        138,
+        3,
+        136,
+        118,
+        115,
+        142,
+        131
+      ],
+      "accounts": [
+        {
+          "name": "taker",
+          "signer": true
+        },
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.base_mint",
+                "account": "Market"
+              },
+              {
+                "kind": "account",
+                "path": "market.quote_mint",
+                "account": "Market"
+              }
+            ]
+          },
+          "relations": [
+            "maker_order"
+          ]
+        },
+        {
+          "name": "maker_order",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  114,
+                  100,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "account",
+                "path": "maker_order.order_id",
+                "account": "Order"
+              }
+            ]
+          }
+        },
+        {
+          "name": "maker_price_level",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  105,
+                  99,
+                  101,
+                  95,
+                  108,
+                  101,
+                  118,
+                  101,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "account",
+                "path": "maker_order.side",
+                "account": "Order"
+              },
+              {
+                "kind": "account",
+                "path": "maker_order.price",
+                "account": "Order"
+              }
+            ]
+          }
+        },
+        {
+          "name": "maker_balance",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  97,
+                  100,
+                  101,
+                  114,
+                  95,
+                  98,
+                  97,
+                  108,
+                  97,
+                  110,
+                  99,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "account",
+                "path": "maker_order.owner",
+                "account": "Order"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taker_balance",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  97,
+                  100,
+                  101,
+                  114,
+                  95,
+                  98,
+                  97,
+                  108,
+                  97,
+                  110,
+                  99,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "account",
+                "path": "taker"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "taker_side",
+          "type": {
+            "defined": {
+              "name": "OrderSide"
+            }
+          }
+        },
+        {
+          "name": "limit_price",
+          "type": "u64"
+        },
+        {
+          "name": "quantity",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "pause_market",
       "docs": [
         "Stops new order placement while preserving cancellation access."
@@ -2106,6 +2314,41 @@
       "code": 6071,
       "name": "InsufficientVaultFunds",
       "msg": "Market vault contains insufficient tokens"
+    },
+    {
+      "code": 6072,
+      "name": "MatchingSameSide",
+      "msg": "Maker and taker orders must be on opposite sides"
+    },
+    {
+      "code": 6073,
+      "name": "OrdersDoNotCross",
+      "msg": "Taker limit price does not cross the maker price"
+    },
+    {
+      "code": 6074,
+      "name": "InvalidMakerCollateral",
+      "msg": "Maker order has insufficient locked collateral"
+    },
+    {
+      "code": 6075,
+      "name": "SelfTradeNotAllowed",
+      "msg": "A trader cannot match against their own order"
+    },
+    {
+      "code": 6076,
+      "name": "MakerNotAtBestPrice",
+      "msg": "Matching must use the best opposing price level"
+    },
+    {
+      "code": 6077,
+      "name": "MakerNotFifoHead",
+      "msg": "Matching must consume the FIFO head order"
+    },
+    {
+      "code": 6078,
+      "name": "MakerMustRemainOpen",
+      "msg": "The first matching milestone requires the maker to remain open"
     }
   ],
   "types": [

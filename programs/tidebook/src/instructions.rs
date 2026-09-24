@@ -14,6 +14,7 @@ pub mod pause;
 pub mod remove_admin;
 pub mod unpause;
 pub mod withdraw;
+pub mod match_limit_order;
 
 pub use add_admin::*;
 pub use append_limit_order::*;
@@ -29,3 +30,4 @@ pub use pause::*;
 pub use remove_admin::*;
 pub use unpause::*;
 pub use withdraw::*;
+pub use match_limit_order::*;

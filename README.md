@@ -17,12 +17,14 @@ built incrementally with Anchor, LiteSVM, and a companion web application.
 - Append another order at an existing price behind the validated FIFO tail.
 - Cancel open orders under owner control, including while a market is paused.
 - Release collateral to free balance on cancellation and safely close empty, paused markets.
+- Atomically settle a complete taker against the best FIFO maker when that
+  maker remains partially open.
 - Exercise program behavior through LiteSVM integration tests.
 
 Sorted multi-price insertion, indexed cancellation, deposits, withdrawals, and
-internal order collateral accounting are implemented. Matching and settlement
-remain planned milestones; current orders form price-time-priority queues but
-do not yet trade with an opposing order.
+internal order collateral accounting are implemented. The first matching slice
+settles one taker against a larger best maker. Full-maker removal, bounded
+multi-maker traversal, taker remainders, and fees remain planned milestones.
 
 ## Architecture
 

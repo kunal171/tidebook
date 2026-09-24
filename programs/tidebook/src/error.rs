@@ -221,4 +221,25 @@ pub enum MarketError {
 
     #[msg("Market vault contains insufficient tokens")]
     InsufficientVaultFunds,
+
+    #[msg("Maker and taker orders must be on opposite sides")]
+    MatchingSameSide,
+
+    #[msg("Taker limit price does not cross the maker price")]
+    OrdersDoNotCross,
+
+    #[msg("Maker order has insufficient locked collateral")]
+    InvalidMakerCollateral,
+
+    #[msg("A trader cannot match against their own order")]
+    SelfTradeNotAllowed,
+
+    #[msg("Matching must use the best opposing price level")]
+    MakerNotAtBestPrice,
+
+    #[msg("Matching must consume the FIFO head order")]
+    MakerNotFifoHead,
+
+    #[msg("The first matching milestone requires the maker to remain open")]
+    MakerMustRemainOpen,
 }

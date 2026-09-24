@@ -6,6 +6,7 @@
 pub mod constants;
 pub mod error;
 pub mod instructions;
+pub mod matching;
 pub mod pda;
 pub mod state;
 
@@ -13,6 +14,7 @@ use anchor_lang::prelude::*;
 
 pub use constants::*;
 pub use instructions::*;
+pub use matching::*;
 pub use pda::*;
 pub use state::*;
 
@@ -116,5 +118,20 @@ pub mod tidebook {
     /// Withdraws free base or quote tokens to the caller's token account.
     pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
         crate::instructions::withdraw::handle_withdraw(ctx, amount)
+    }
+
+    /// Executes one complete taker fill against a maker that remains open.
+    pub fn match_limit_order(
+        ctx: Context<MatchLimitOrder>,
+        taker_side: OrderSide,
+        limit_price: u64,
+        quantity: u64,
+    ) -> Result<()> {
+        crate::instructions::match_limit_order::handle_match_limit_order(
+            ctx,
+            taker_side,
+            limit_price,
+            quantity,
+        )
     }
 }
