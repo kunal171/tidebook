@@ -47,6 +47,13 @@ struct MarketFixture {
     quote_vault: Pubkey,
 }
 
+struct DistinctBidOrder {
+    order: Pubkey,
+    price_level: Pubkey,
+    owner_collateral: Pubkey,
+    locked_collateral: u64,
+}
+
 struct OpenOrderFixture {
     svm: LiteSVM,
     owner: Keypair,
@@ -349,6 +356,73 @@ fn append_bid_order(
     (order, trader_collateral)
 }
 
+fn insert_bid_level(
+    fixture: &mut OpenOrderFixture,
+    order_id: u64,
+    price: u64,
+    better_level: Option<Pubkey>,
+    worse_level: Option<Pubkey>,
+) -> DistinctBidOrder {
+    let locked_collateral =
+        u64::try_from(u128::from(price) * u128::from(TEST_ORDER_QUANTITY) / 1_000_000_000_u128)
+            .unwrap();
+    let owner_collateral = create_test_token_account(
+        &mut fixture.svm,
+        fixture.market.quote_mint,
+        fixture.owner.pubkey(),
+        locked_collateral,
+    );
+    let (order, _) = Pubkey::find_program_address(
+        &[
+            tidebook::constants::ORDER_SEED,
+            fixture.market.market.as_ref(),
+            order_id.to_le_bytes().as_ref(),
+        ],
+        &tidebook::id(),
+    );
+    let price_level = tidebook::derive_price_level_pda(
+        &tidebook::id(),
+        &fixture.market.market,
+        OrderSide::Bid,
+        price,
+    )
+    .0;
+    let instruction = Instruction::new_with_bytes(
+        tidebook::id(),
+        &tidebook::instruction::InsertLimitOrder {
+            side: OrderSide::Bid,
+            price,
+            quantity: TEST_ORDER_QUANTITY,
+        }
+        .data(),
+        tidebook::accounts::InsertLimitOrder {
+            trader: fixture.owner.pubkey(),
+            market: fixture.market.market,
+            order,
+            price_level,
+            collateral_mint: fixture.market.quote_mint,
+            trader_collateral: owner_collateral,
+            vault_authority: fixture.market.vault_authority,
+            market_vault: fixture.market.quote_vault,
+            token_program: anchor_spl::token::ID,
+            system_program: system_program::ID,
+            better_level,
+            worse_level,
+        }
+        .to_account_metas(None),
+    );
+
+    let result = send_instruction(&mut fixture.svm, &fixture.owner, instruction);
+    assert!(result.is_ok(), "price-level insertion failed: {result:?}");
+
+    DistinctBidOrder {
+        order,
+        price_level,
+        owner_collateral,
+        locked_collateral,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn cancel_order_instruction_with_accounts(
     signer: Pubkey,
@@ -371,6 +445,9 @@ fn cancel_order_instruction_with_accounts(
             price_level,
             previous_order: None,
             next_order: None,
+            better_level: None,
+            worse_level: None,
+            level_rent_recipient: Some(signer),
             collateral_mint,
             owner_collateral,
             vault_authority,
@@ -413,6 +490,9 @@ fn cancel_queued_order_instruction(
             price_level: fixture.price_level,
             previous_order,
             next_order,
+            better_level: None,
+            worse_level: None,
+            level_rent_recipient: None,
             collateral_mint: fixture.market.quote_mint,
             owner_collateral,
             vault_authority: fixture.market.vault_authority,
@@ -421,6 +501,45 @@ fn cancel_queued_order_instruction(
         }
         .to_account_metas(None),
     )
+}
+
+fn cancel_distinct_bid_level_instruction(
+    fixture: &OpenOrderFixture,
+    order: &DistinctBidOrder,
+    order_id: u64,
+    better_level: Option<Pubkey>,
+    worse_level: Option<Pubkey>,
+) -> Instruction {
+    Instruction::new_with_bytes(
+        tidebook::id(),
+        &tidebook::instruction::CancelLimitOrder { order_id }.data(),
+        tidebook::accounts::CancelLimitOrder {
+            owner: fixture.owner.pubkey(),
+            market: fixture.market.market,
+            order: order.order,
+            price_level: order.price_level,
+            previous_order: None,
+            next_order: None,
+            better_level,
+            worse_level,
+            level_rent_recipient: Some(fixture.owner.pubkey()),
+            collateral_mint: fixture.market.quote_mint,
+            owner_collateral: order.owner_collateral,
+            vault_authority: fixture.market.vault_authority,
+            market_vault: fixture.market.quote_vault,
+            token_program: anchor_spl::token::ID,
+        }
+        .to_account_metas(None),
+    )
+}
+
+fn setup_three_bid_levels() -> (OpenOrderFixture, DistinctBidOrder, DistinctBidOrder) {
+    let mut fixture = setup_open_order(OrderSide::Bid);
+    let original_level = fixture.price_level;
+    let better = insert_bid_level(&mut fixture, 2, 110_000_000, None, Some(original_level));
+    let worse = insert_bid_level(&mut fixture, 3, 90_000_000, Some(original_level), None);
+
+    (fixture, better, worse)
 }
 
 fn load_order(svm: &LiteSVM, address: Pubkey) -> Order {
@@ -496,9 +615,13 @@ fn canceling_bid_refunds_quote_collateral() {
     let state = load_order(&fixture.svm, fixture.order);
     assert_eq!(state.status, OrderStatus::Canceled);
     assert_eq!(state.remaining_quantity, 0);
+    assert!(
+        fixture.svm.get_account(&fixture.price_level).is_none(),
+        "empty bid price level remained allocated"
+    );
     assert_eq!(
-        load_price_level(&fixture.svm, fixture.price_level).order_count,
-        0
+        load_market(&fixture.svm, fixture.market.market).best_bid,
+        None
     );
     assert_eq!(state.locked_collateral, 0);
     assert_eq!(
@@ -520,6 +643,14 @@ fn canceling_ask_refunds_base_collateral() {
     let state = load_order(&fixture.svm, fixture.order);
     assert_eq!(state.status, OrderStatus::Canceled);
     assert_eq!(state.locked_collateral, 0);
+    assert!(
+        fixture.svm.get_account(&fixture.price_level).is_none(),
+        "empty ask price level remained allocated"
+    );
+    assert_eq!(
+        load_market(&fixture.svm, fixture.market.market).best_ask,
+        None
+    );
     assert_eq!(
         token_balance(&fixture.svm, fixture.owner_collateral),
         TEST_ORDER_QUANTITY
@@ -676,6 +807,135 @@ fn omitting_a_required_fifo_neighbor_is_rejected_atomically() {
         token_balance(&fixture.svm, fixture.market_vault),
         TEST_QUOTE_COLLATERAL * 2
     );
+}
+
+#[test]
+fn canceling_the_best_price_level_promotes_the_worse_level() {
+    let (mut fixture, better, worse) = setup_three_bid_levels();
+    let original_level = fixture.price_level;
+    let instruction =
+        cancel_distinct_bid_level_instruction(&fixture, &better, 2, None, Some(original_level));
+
+    let result = send_instruction(&mut fixture.svm, &fixture.owner, instruction);
+
+    assert!(result.is_ok(), "best-level cancellation failed: {result:?}");
+    assert!(fixture.svm.get_account(&better.price_level).is_none());
+    let market = load_market(&fixture.svm, fixture.market.market);
+    let original = load_price_level(&fixture.svm, original_level);
+    let worse_state = load_price_level(&fixture.svm, worse.price_level);
+    assert_eq!(market.best_bid, Some(TEST_ORDER_PRICE));
+    assert_eq!(original.better_price, None);
+    assert_eq!(original.worse_price, Some(90_000_000));
+    assert_eq!(worse_state.better_price, Some(TEST_ORDER_PRICE));
+    assert_eq!(market.open_order_count, 2);
+    assert_eq!(
+        token_balance(&fixture.svm, better.owner_collateral),
+        better.locked_collateral
+    );
+}
+
+#[test]
+fn canceling_a_middle_price_level_connects_adjacent_levels() {
+    let (mut fixture, better, worse) = setup_three_bid_levels();
+    let original = DistinctBidOrder {
+        order: fixture.order,
+        price_level: fixture.price_level,
+        owner_collateral: fixture.owner_collateral,
+        locked_collateral: fixture.locked_collateral,
+    };
+    let instruction = cancel_distinct_bid_level_instruction(
+        &fixture,
+        &original,
+        1,
+        Some(better.price_level),
+        Some(worse.price_level),
+    );
+
+    let result = send_instruction(&mut fixture.svm, &fixture.owner, instruction);
+
+    assert!(
+        result.is_ok(),
+        "middle-level cancellation failed: {result:?}"
+    );
+    assert!(fixture.svm.get_account(&original.price_level).is_none());
+    let market = load_market(&fixture.svm, fixture.market.market);
+    let better_state = load_price_level(&fixture.svm, better.price_level);
+    let worse_state = load_price_level(&fixture.svm, worse.price_level);
+    assert_eq!(market.best_bid, Some(110_000_000));
+    assert_eq!(better_state.worse_price, Some(90_000_000));
+    assert_eq!(worse_state.better_price, Some(110_000_000));
+    assert_eq!(market.open_order_count, 2);
+    assert_eq!(
+        token_balance(&fixture.svm, original.owner_collateral),
+        original.locked_collateral
+    );
+}
+
+#[test]
+fn canceling_the_worst_price_level_clears_the_better_tail_link() {
+    let (mut fixture, better, worse) = setup_three_bid_levels();
+    let original_level = fixture.price_level;
+    let instruction =
+        cancel_distinct_bid_level_instruction(&fixture, &worse, 3, Some(original_level), None);
+
+    let result = send_instruction(&mut fixture.svm, &fixture.owner, instruction);
+
+    assert!(
+        result.is_ok(),
+        "worst-level cancellation failed: {result:?}"
+    );
+    assert!(fixture.svm.get_account(&worse.price_level).is_none());
+    let market = load_market(&fixture.svm, fixture.market.market);
+    let original = load_price_level(&fixture.svm, original_level);
+    let better_state = load_price_level(&fixture.svm, better.price_level);
+    assert_eq!(market.best_bid, Some(110_000_000));
+    assert_eq!(better_state.worse_price, Some(TEST_ORDER_PRICE));
+    assert_eq!(original.better_price, Some(110_000_000));
+    assert_eq!(original.worse_price, None);
+    assert_eq!(market.open_order_count, 2);
+    assert_eq!(
+        token_balance(&fixture.svm, worse.owner_collateral),
+        worse.locked_collateral
+    );
+}
+
+#[test]
+fn missing_price_level_neighbor_is_rejected_atomically() {
+    let (mut fixture, better, worse) = setup_three_bid_levels();
+    let original = DistinctBidOrder {
+        order: fixture.order,
+        price_level: fixture.price_level,
+        owner_collateral: fixture.owner_collateral,
+        locked_collateral: fixture.locked_collateral,
+    };
+    let instruction = cancel_distinct_bid_level_instruction(
+        &fixture,
+        &original,
+        1,
+        Some(better.price_level),
+        None,
+    );
+
+    let result = send_instruction(&mut fixture.svm, &fixture.owner, instruction);
+
+    assert!(
+        result.is_err(),
+        "cancellation omitted the worse price level"
+    );
+    let order = load_order(&fixture.svm, original.order);
+    let original_state = load_price_level(&fixture.svm, original.price_level);
+    let better_state = load_price_level(&fixture.svm, better.price_level);
+    let worse_state = load_price_level(&fixture.svm, worse.price_level);
+    assert_eq!(order.status, OrderStatus::Open);
+    assert_eq!(original_state.better_price, Some(110_000_000));
+    assert_eq!(original_state.worse_price, Some(90_000_000));
+    assert_eq!(better_state.worse_price, Some(TEST_ORDER_PRICE));
+    assert_eq!(worse_state.better_price, Some(TEST_ORDER_PRICE));
+    assert_eq!(
+        load_market(&fixture.svm, fixture.market.market).open_order_count,
+        3
+    );
+    assert_eq!(token_balance(&fixture.svm, original.owner_collateral), 0);
 }
 
 #[test]

@@ -111,6 +111,9 @@ export interface OrderAccount {
   orderId: BN;
   side: { bid?: object; ask?: object };
   price: BN;
+  priceLevel: PublicKey;
+  previousOrder: PublicKey | null;
+  nextOrder: PublicKey | null;
   quantity: BN;
   remainingQuantity: BN;
   lockedCollateral: BN;

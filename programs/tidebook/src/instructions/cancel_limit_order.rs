@@ -13,6 +13,11 @@ use crate::{
     state::{Market, Order, OrderSide, OrderStatus, PriceLevel},
 };
 
+/// Cancellation can touch two FIFO neighbors and two price-level neighbors.
+///
+/// Deserialized accounts are boxed to keep Anchor's generated parser below
+/// Solana's 4 KiB stack-frame limit. The small heap cost preserves one atomic
+/// refund, queue repair, level unlink, and account-closure instruction.
 #[derive(Accounts)]
 #[instruction(order_id: u64)]
 pub struct CancelLimitOrder<'info> {
@@ -268,6 +273,18 @@ pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64)
             MarketError::InvalidPriceLevelAggregate
         );
 
+        if level_better_price.is_none() {
+            let current_best = match order_side {
+                OrderSide::Bid => ctx.accounts.market.best_bid,
+                OrderSide::Ask => ctx.accounts.market.best_ask,
+            };
+
+            require!(
+                current_best == Some(level_price),
+                MarketError::BestPriceLevelMismatch
+            );
+        }
+
         let rent_recipient = ctx
             .accounts
             .level_rent_recipient
@@ -347,7 +364,8 @@ pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64)
     )?;
 
     // Splice the node out in O(1). Missing neighbors identify head or tail; when
-    // both are missing this leaves an empty level for the next closure milestone.
+    // both are missing, the order is the sole FIFO member and its level is
+    // unlinked and closed later in this transaction.
     if let Some(previous_order) = ctx.accounts.previous_order.as_mut() {
         previous_order.next_order = next_key;
     } else {
@@ -365,6 +383,28 @@ pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64)
     ctx.accounts.price_level.order_count = next_level_order_count;
     ctx.accounts.price_level.total_remaining_quantity = next_level_quantity;
 
+    if removes_price_level {
+        // Connect the higher-priority level directly to the lower-priority level.
+        if let Some(better_level) = ctx.accounts.better_level.as_mut() {
+            better_level.worse_price = level_worse_price;
+        } else {
+            // The removed level was the best level.
+            match order_side {
+                OrderSide::Bid => {
+                    ctx.accounts.market.best_bid = level_worse_price;
+                }
+                OrderSide::Ask => {
+                    ctx.accounts.market.best_ask = level_worse_price;
+                }
+            }
+        }
+
+        // Repair the reciprocal link from the lower-priority level.
+        if let Some(worse_level) = ctx.accounts.worse_level.as_mut() {
+            worse_level.better_price = level_better_price;
+        }
+    }
+
     // Clear queue links as well as balances so canceled orders cannot be
     // mistaken for live index members by clients or later matching code.
     {
@@ -377,6 +417,19 @@ pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64)
         order.status = OrderStatus::Canceled;
     }
     ctx.accounts.market.open_order_count = next_open_order_count;
+
+    if removes_price_level {
+        let rent_recipient = ctx
+            .accounts
+            .level_rent_recipient
+            .as_ref()
+            .ok_or(MarketError::InvalidPriceLevelRentRecipient)?
+            .to_account_info();
+
+        // The level is closed only after all links and counters are repaired.
+        // Any later error still rolls the entire transaction back atomically.
+        ctx.accounts.price_level.close(rent_recipient)?;
+    }
 
     Ok(())
 }

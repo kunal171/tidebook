@@ -6,6 +6,7 @@ import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import {
   decodeOrderSide,
   decodeOrderStatus,
+  derivePriceLevelPda,
   deriveVaultAuthorityPda,
   deriveVaultPda,
   findOwnedTokenAccount,
@@ -90,14 +91,40 @@ export function Orders() {
     setSignature(null);
 
     try {
-      const market = await getTidebookAccounts(program).market.fetchNullable(
-        order.market,
-      );
+      const accounts = getTidebookAccounts(program);
+      const [market, priceLevel] = await Promise.all([
+        accounts.market.fetchNullable(order.market),
+        accounts.priceLevel.fetchNullable(order.priceLevel),
+      ]);
+
       if (!market) {
         throw new Error("The order's market account was not found");
       }
+      if (!priceLevel) {
+        throw new Error("The order's price-level account was not found");
+      }
 
       const side = decodeOrderSide(order.side);
+      const removesPriceLevel = priceLevel.orderCount.eqn(1);
+      const betterLevel =
+        removesPriceLevel && priceLevel.betterPrice
+          ? derivePriceLevelPda(
+              order.market,
+              side,
+              priceLevel.betterPrice,
+            )
+          : null;
+      const worseLevel =
+        removesPriceLevel && priceLevel.worsePrice
+          ? derivePriceLevelPda(
+              order.market,
+              side,
+              priceLevel.worsePrice,
+            )
+          : null;
+      const levelRentRecipient = removesPriceLevel
+        ? priceLevel.rentPayer
+        : null;
       const collateralMint = side === "bid" ? market.quoteMint : market.baseMint;
       const ownerCollateral = await findOwnedTokenAccount(
         connection,
@@ -109,10 +136,16 @@ export function Orders() {
 
       const transaction = await program.methods
         .cancelLimitOrder(order.orderId)
-        .accounts({
+        .accountsPartial({
           owner: wallet.publicKey,
           market: order.market,
           order: order.address,
+          priceLevel: order.priceLevel,
+          previousOrder: order.previousOrder ?? program.programId,
+          nextOrder: order.nextOrder ?? program.programId,
+          betterLevel: betterLevel ?? program.programId,
+          worseLevel: worseLevel ?? program.programId,
+          levelRentRecipient: levelRentRecipient ?? program.programId,
           collateralMint,
           ownerCollateral,
           vaultAuthority,
