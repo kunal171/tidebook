@@ -6,6 +6,7 @@
 pub mod constants;
 pub mod error;
 pub mod instructions;
+pub mod matching;
 pub mod pda;
 pub mod state;
 
@@ -13,6 +14,7 @@ use anchor_lang::prelude::*;
 
 pub use constants::*;
 pub use instructions::*;
+pub use matching::*;
 pub use pda::*;
 pub use state::*;
 
