@@ -5,12 +5,16 @@ use anchor_lang::prelude::Pubkey;
 use crate::{constants::PRICE_LEVEL_SEED, state::OrderSide};
 
 /// Derives the unique price-level PDA for one market, side, and price.
+///
+/// Explicit side bytes and little-endian price encoding are part of the public
+/// address contract and must remain identical in Rust tests and web clients.
 pub fn derive_price_level_pda(
     program_id: &Pubkey,
     market: &Pubkey,
     side: OrderSide,
     price: u64,
 ) -> (Pubkey, u8) {
+    // Bind the byte array so every seed slice lives through PDA derivation.
     let price_bytes = price.to_le_bytes();
 
     Pubkey::find_program_address(

@@ -1,4 +1,7 @@
 //! Pauses an active market under its stored market authority.
+//!
+//! Pausing blocks new liquidity but deliberately does not block cancellation;
+//! traders must retain an exit path while market administration investigates.
 
 use anchor_lang::prelude::*;
 
@@ -20,6 +23,8 @@ pub struct PauseMarket<'info> {
 }
 
 pub fn handle_pause_market(ctx: Context<PauseMarket>) -> Result<()> {
+    // Cancellation has no Active constraint, so this transition freezes only
+    // placement and preserves owner-controlled collateral withdrawal.
     ctx.accounts.market.status = MarketStatus::Paused;
     Ok(())
 }

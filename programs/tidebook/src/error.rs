@@ -158,4 +158,28 @@ pub enum MarketError {
 
     #[msg("Supplied price-level account is not canonical")]
     NoncanonicalPriceLevel,
+
+    #[msg("Supplied FIFO order neighbor does not match the order link")]
+    InvalidOrderNeighbor,
+
+    #[msg("Supplied FIFO neighbor does not link back to the canceled order")]
+    BrokenOrderQueueLink,
+
+    #[msg("Price-level order count underflow")]
+    PriceLevelOrderCountUnderflow,
+
+    #[msg("Price-level remaining quantity underflow")]
+    PriceLevelQuantityUnderflow,
+
+    #[msg("Supplied order account is not canonical")]
+    NoncanonicalOrder,
+
+    #[msg("Price-level rent recipient does not match the stored rent payer")]
+    InvalidPriceLevelRentRecipient,
+
+    #[msg("Final order does not match the price-level queue endpoints")]
+    InvalidPriceLevelEndpoints,
+
+    #[msg("Empty price level has a nonzero remaining quantity")]
+    InvalidPriceLevelAggregate,
 }

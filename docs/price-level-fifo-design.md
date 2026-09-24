@@ -2,8 +2,7 @@
 
 ## Status and scope
 
-Status: **Foundation implemented; sorted levels and indexed removal remain in
-progress**.
+Status: **Sorted price levels, FIFO queues, and indexed removal implemented.**
 
 This milestone organizes resting orders by price and arrival time. It does not
 match orders, partially fill them, or settle trades. Placement and cancellation
@@ -138,13 +137,15 @@ itself. The client therefore supplies neighboring accounts. Those accounts are
 untrusted hints: the program must derive canonical addresses and validate
 prices and reciprocal links before mutation.
 
-Optional neighbor accounts reduce the number of instruction variants but make
-the account contract more complex. If Anchor optional-account ergonomics make
-the generated clients unclear, explicit instruction variants are preferable to
-loosely typed `remaining_accounts`.
+Optional neighbor accounts keep placement and cancellation atomic without
+loosely typed `remaining_accounts`, but they make the account contract larger.
+Cancellation may deserialize two order neighbors and two level neighbors; these
+accounts are boxed so Anchor's generated parser stays below Solana's 4 KiB
+stack-frame limit. This spends a small amount of program heap to retain a single
+auditable instruction and explicit generated-client accounts.
 
 The current web client locates a missing price level by walking from the
-market best price through canonical `worse_price` links. It rejects cycles,
+market's best price through canonical `worse_price` links. It rejects cycles,
 cross-market or cross-side links, PDA/price mismatches, broken reciprocal links,
 and non-strict ordering before constructing the instruction. This O(levels)
 RPC walk improves diagnostics but is not a security boundary: the program
@@ -206,18 +207,19 @@ Current coverage:
 - stale tails, opposite-side levels, paused markets, and insufficient collateral
   are rejected without mutating state or vault balances.
 
-Remaining tests required before matching:
+Indexed-cancellation coverage now includes:
 
-- head, middle, tail, and only-order cancellation repair reciprocal links;
-- level count and aggregate quantity update with checked arithmetic;
-- final cancellation closes the level and returns rent;
-- removing the best level advances the appropriate market pointer;
-- removing a middle level repairs both adjacent levels;
-- wrong level PDA, side, price, tail, order neighbor, level neighbor, or rent
-  recipient is rejected atomically;
-- failed collateral deposit or refund leaves every queue and level unchanged;
-- paused markets reject placement but still allow indexed cancellation;
-- market shutdown remains impossible while any indexed order is open.
+- head, middle, tail, and only-order cancellation with reciprocal FIFO repair;
+- checked level-count and aggregate-quantity updates;
+- final cancellation closing the empty level;
+- best, middle, and worst level removal with adjacent-link and best-pointer repair;
+- atomic rejection when a required order or level neighbor is omitted;
+- exact collateral refunds, repeated-cancellation prevention, and paused-market
+  cancellation;
+- market shutdown remaining impossible while indexed orders are open.
+
+Additional adversarial account substitutions and explicit rent-recipient
+rejection remain useful hardening tests before matching relies on the index.
 
 ## Implementation sequence
 
@@ -226,11 +228,11 @@ Remaining tests required before matching:
 3. ~~Create the first bid/ask level and append a second same-price bid.~~
 4. ~~Complete same-price FIFO failure paths and ask-side coverage.~~
 5. ~~Add sorted better, middle, and worse level insertion.~~
-6. Extend cancellation for order unlinking.
-7. Close and unlink empty levels, including best-price updates.
+6. <del>Extend cancellation for order unlinking.</del>
+7. <del>Close and unlink empty levels, including best-price updates.</del>
 8. ~~Update the checked-in IDL and web client for sorted insertion.~~
-9. Update the architecture diagram and invariant list after indexed
-   cancellation is complete.
+9. <del>Update the architecture diagram and invariant list after indexed
+   cancellation is complete.</del>
 
 Matching starts only after this matrix passes and the index can be treated as a
 trusted program-maintained structure. "Trusted" here means maintained by the

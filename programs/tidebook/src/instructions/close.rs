@@ -68,6 +68,8 @@ pub struct CloseMarket<'info> {
 }
 
 pub fn handle_close_market(ctx: Context<CloseMarket>) -> Result<()> {
+    // The counter protects indexed orders; checking token balances separately
+    // also catches unsolicited transfers and accounting bugs before shutdown.
     require!(
         ctx.accounts.market.open_order_count == 0,
         MarketError::MarketHasOpenOrders
@@ -90,6 +92,8 @@ pub fn handle_close_market(ctx: Context<CloseMarket>) -> Result<()> {
 
     let signer_seeds = &[vault_authority_seeds];
 
+    // Both CPIs and Anchor's later `close = authority` market cleanup are in
+    // one Solana transaction. Any failure rolls back every lamport and account.
     token::close_account(CpiContext::new_with_signer(
         ctx.accounts.token_program.key(),
         CloseAccount {

@@ -25,6 +25,9 @@
       "accounts": [
         {
           "name": "super_admin",
+          "docs": [
+            "Governance authority and rent payer for the new role record."
+          ],
           "writable": true,
           "signer": true,
           "relations": [
@@ -33,6 +36,9 @@
         },
         {
           "name": "protocol_config",
+          "docs": [
+            "Singleton config proves the signer is the immutable super-admin."
+          ],
           "pda": {
             "seeds": [
               {
@@ -60,6 +66,9 @@
         },
         {
           "name": "admin_record",
+          "docs": [
+            "Deterministic record whose creation rejects duplicate administrators."
+          ],
           "writable": true,
           "pda": {
             "seeds": [
@@ -334,6 +343,81 @@
               }
             ]
           }
+        },
+        {
+          "name": "price_level",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  105,
+                  99,
+                  101,
+                  95,
+                  108,
+                  101,
+                  118,
+                  101,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "account",
+                "path": "order.side",
+                "account": "Order"
+              },
+              {
+                "kind": "account",
+                "path": "order.price",
+                "account": "Order"
+              }
+            ]
+          }
+        },
+        {
+          "name": "previous_order",
+          "docs": [
+            "Older FIFO neighbor. None when canceling the queue head."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "next_order",
+          "docs": [
+            "Newer FIFO neighbor. None when canceling the queue tail."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "better_level",
+          "docs": [
+            "Higher-priority price level, required only when this level becomes empty."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "worse_level",
+          "docs": [
+            "Lower-priority price level, required only when this level becomes empty."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "level_rent_recipient",
+          "writable": true,
+          "optional": true
         },
         {
           "name": "collateral_mint"
@@ -960,10 +1044,16 @@
         },
         {
           "name": "program",
+          "docs": [
+            "Executable whose loader metadata anchors the authorization check."
+          ],
           "address": "BPdNF5CnV8z1EkHo7tcueR6wXmzZV2j6j4wsUTirPgWL"
         },
         {
-          "name": "program_data"
+          "name": "program_data",
+          "docs": [
+            "Loader state naming the program current upgrade authority."
+          ]
         },
         {
           "name": "system_program",
@@ -1638,6 +1728,46 @@
       "code": 6050,
       "name": "NoncanonicalPriceLevel",
       "msg": "Supplied price-level account is not canonical"
+    },
+    {
+      "code": 6051,
+      "name": "InvalidOrderNeighbor",
+      "msg": "Supplied FIFO order neighbor does not match the order link"
+    },
+    {
+      "code": 6052,
+      "name": "BrokenOrderQueueLink",
+      "msg": "Supplied FIFO neighbor does not link back to the canceled order"
+    },
+    {
+      "code": 6053,
+      "name": "PriceLevelOrderCountUnderflow",
+      "msg": "Price-level order count underflow"
+    },
+    {
+      "code": 6054,
+      "name": "PriceLevelQuantityUnderflow",
+      "msg": "Price-level remaining quantity underflow"
+    },
+    {
+      "code": 6055,
+      "name": "NoncanonicalOrder",
+      "msg": "Supplied order account is not canonical"
+    },
+    {
+      "code": 6056,
+      "name": "InvalidPriceLevelRentRecipient",
+      "msg": "Price-level rent recipient does not match the stored rent payer"
+    },
+    {
+      "code": 6057,
+      "name": "InvalidPriceLevelEndpoints",
+      "msg": "Final order does not match the price-level queue endpoints"
+    },
+    {
+      "code": 6058,
+      "name": "InvalidPriceLevelAggregate",
+      "msg": "Empty price level has a nonzero remaining quantity"
     }
   ],
   "types": [
@@ -2046,16 +2176,25 @@
     },
     {
       "name": "MAX_PRICE",
+      "docs": [
+        "Largest representable raw integer price."
+      ],
       "type": "u64",
       "value": "18446744073709551615"
     },
     {
       "name": "MAX_QUANTITY",
+      "docs": [
+        "Largest representable raw base-asset quantity."
+      ],
       "type": "u64",
       "value": "18446744073709551615"
     },
     {
       "name": "MIN_PRICE",
+      "docs": [
+        "Inclusive raw-price boundary exposed to clients and future validation."
+      ],
       "type": "u64",
       "value": "1"
     },

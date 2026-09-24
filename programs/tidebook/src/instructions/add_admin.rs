@@ -1,4 +1,7 @@
 //! Creates an active administrator record under super-admin authorization.
+//!
+//! Each role is an independent PDA keyed by the target wallet. This avoids an
+//! unbounded administrator vector and lets duplicate creation fail atomically.
 
 use anchor_lang::prelude::*;
 
@@ -12,6 +15,7 @@ use crate::{
 #[instruction(new_admin: Pubkey)]
 pub struct AddAdmin<'info> {
     #[account(mut)]
+    /// Governance authority and rent payer for the new role record.
     pub super_admin: Signer<'info>,
 
     #[account(
@@ -19,6 +23,7 @@ pub struct AddAdmin<'info> {
         bump = protocol_config.bump,
         has_one = super_admin @ MarketError::UnauthorizedSuperAdmin
     )]
+    /// Singleton config proves the signer is the immutable super-admin.
     pub protocol_config: Account<'info, ProtocolConfig>,
 
     #[account(
@@ -28,12 +33,14 @@ pub struct AddAdmin<'info> {
         seeds = [ADMIN_SEED, new_admin.as_ref()],
         bump
     )]
+    /// Deterministic record whose creation rejects duplicate administrators.
     pub admin_record: Account<'info, AdminRecord>,
 
     pub system_program: Program<'info, System>,
 }
 
 pub fn handle_add_admin(ctx: Context<AddAdmin>, new_admin: Pubkey) -> Result<()> {
+    // The all-zero key cannot sign and would create an unusable role record.
     require!(new_admin != Pubkey::default(), MarketError::InvalidAdmin);
 
     let admin_record = &mut ctx.accounts.admin_record;

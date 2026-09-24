@@ -1,6 +1,8 @@
 //! Bootstraps singleton governance from the program's upgrade authority.
 //!
-//! Initialization also creates the deployer's active administrator record.
+//! Initialization also creates the deployer's active administrator record. The
+//! transaction binds governance to the upgradeable-loader metadata, so merely
+//! possessing a deployment keypair is not sufficient without upgrade authority.
 
 use anchor_lang::prelude::*;
 
@@ -36,12 +38,14 @@ pub struct InitializeProtocol<'info> {
     #[account(
         constraint = program.programdata_address()? == Some(program_data.key())
     )]
+    /// Executable whose loader metadata anchors the authorization check.
     pub program: Program<'info, crate::program::Tidebook>,
 
     #[account(
         constraint = program_data.upgrade_authority_address == Some(deployer.key())
             @ MarketError::InvalidDeployer
     )]
+    /// Loader state naming the program current upgrade authority.
     pub program_data: Account<'info, ProgramData>,
 
     pub system_program: Program<'info, System>,
@@ -50,6 +54,8 @@ pub struct InitializeProtocol<'info> {
 pub fn handle_initialize_protocol(ctx: Context<InitializeProtocol>) -> Result<()> {
     let deployer = ctx.accounts.deployer.key();
 
+    // Config and the deployer role are initialized in one transaction so the
+    // protocol never exists without an administrator able to operate it.
     let protocol_config = &mut ctx.accounts.protocol_config;
     protocol_config.super_admin = deployer;
     protocol_config.bump = ctx.bumps.protocol_config;
