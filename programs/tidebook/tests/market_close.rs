@@ -29,11 +29,45 @@ const PROGRAM_BYTES: &[u8] = include_bytes!(concat!(
 ));
 
 const ORDER_ID: u64 = 1;
+fn trader_balance_address(market: Pubkey, owner: Pubkey) -> Pubkey {
+    tidebook::derive_trader_balance_pda(&tidebook::id(), &market, &owner).0
+}
+
+fn ensure_trader_balance(svm: &mut LiteSVM, market: Pubkey, owner: Pubkey) -> Pubkey {
+    let (address, bump) = tidebook::derive_trader_balance_pda(&tidebook::id(), &market, &owner);
+
+    if svm.get_account(&address).is_none() {
+        let state = tidebook::state::TraderBalance {
+            market,
+            owner,
+            base_free: u64::MAX / 4,
+            base_locked: 0,
+            quote_free: u64::MAX / 4,
+            quote_locked: 0,
+            bump,
+        };
+        let mut data = Vec::new();
+        state.try_serialize(&mut data).unwrap();
+        svm.set_account(
+            address,
+            Account {
+                lamports: svm.minimum_balance_for_rent_exemption(data.len()),
+                data,
+                owner: tidebook::id(),
+                executable: false,
+                rent_epoch: 0,
+            },
+        )
+        .unwrap();
+    }
+
+    address
+}
+
 const TEST_PRICE_TICK_SIZE: u64 = 10_000;
 const TEST_QUANTITY_LOT_SIZE: u64 = 1_000_000;
 const TEST_ORDER_PRICE: u64 = 100_000_000;
 const TEST_ORDER_QUANTITY: u64 = 5_000_000;
-const TEST_QUOTE_COLLATERAL: u64 = 500_000;
 
 struct MarketFixture {
     market: Pubkey,
@@ -53,9 +87,6 @@ struct TestContext {
 struct OpenOrderFixture {
     order: Pubkey,
     price_level: Pubkey,
-    owner_collateral: Pubkey,
-    collateral_mint: Pubkey,
-    market_vault: Pubkey,
 }
 
 fn send_instruction(
@@ -306,24 +337,6 @@ fn close_market_instruction(authority: Pubkey, market: &MarketFixture) -> Instru
 }
 
 fn place_order(context: &mut TestContext, side: OrderSide) -> OpenOrderFixture {
-    let (collateral_mint, market_vault, collateral_amount) = match side {
-        OrderSide::Bid => (
-            context.market.quote_mint,
-            context.market.quote_vault,
-            TEST_QUOTE_COLLATERAL,
-        ),
-        OrderSide::Ask => (
-            context.market.base_mint,
-            context.market.base_vault,
-            TEST_ORDER_QUANTITY,
-        ),
-    };
-    let owner_collateral = create_test_token_account(
-        &mut context.svm,
-        collateral_mint,
-        context.authority.pubkey(),
-        collateral_amount,
-    );
     let (order, _) = Pubkey::find_program_address(
         &[
             tidebook::constants::ORDER_SEED,
@@ -351,11 +364,11 @@ fn place_order(context: &mut TestContext, side: OrderSide) -> OpenOrderFixture {
             market: context.market.market,
             order,
             price_level,
-            collateral_mint,
-            trader_collateral: owner_collateral,
-            vault_authority: context.market.vault_authority,
-            market_vault,
-            token_program: anchor_spl::token::ID,
+            trader_balance: ensure_trader_balance(
+                &mut context.svm,
+                context.market.market,
+                context.authority.pubkey(),
+            ),
             system_program: system_program::ID,
             better_level: None,
             worse_level: None,
@@ -365,13 +378,7 @@ fn place_order(context: &mut TestContext, side: OrderSide) -> OpenOrderFixture {
     let result = send_instruction(&mut context.svm, &context.authority, instruction);
     assert!(result.is_ok(), "order placement failed: {result:?}");
 
-    OpenOrderFixture {
-        order,
-        price_level,
-        owner_collateral,
-        collateral_mint,
-        market_vault,
-    }
+    OpenOrderFixture { order, price_level }
 }
 
 fn cancel_order(context: &mut TestContext, order: &OpenOrderFixture) {
@@ -388,11 +395,10 @@ fn cancel_order(context: &mut TestContext, order: &OpenOrderFixture) {
             better_level: None,
             worse_level: None,
             level_rent_recipient: Some(context.authority.pubkey()),
-            collateral_mint: order.collateral_mint,
-            owner_collateral: order.owner_collateral,
-            vault_authority: context.market.vault_authority,
-            market_vault: order.market_vault,
-            token_program: anchor_spl::token::ID,
+            trader_balance: trader_balance_address(
+                context.market.market,
+                context.authority.pubkey(),
+            ),
         }
         .to_account_metas(None),
     );

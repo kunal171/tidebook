@@ -82,7 +82,7 @@ instruction.
 This path is implemented by `append_limit_order`. Integration tests cover bid
 and ask append, a three-order FIFO chain, stale-tail and opposite-side level
 rejection, paused-market rejection, insufficient collateral, and atomic
-preservation of links, aggregates, counters, order accounts, and vault balances
+preservation of links, aggregates, counters, order accounts, and trader balances
 after failure.
 
 ### Place at a new level
@@ -93,8 +93,8 @@ only the canonical current best as the worse neighbor. Middle insertion supplies
 two canonical levels whose reciprocal links prove adjacency. New-worst insertion
 supplies only the terminal better level, whose worse link must be empty. Bid
 prices must strictly descend and ask prices must strictly ascend across every
-link. The instruction rewires the supplied neighbors atomically with collateral
-transfer, level creation, order creation, and market counters.
+link. The instruction rewires the supplied neighbors atomically with a
+free-to-locked balance move, level creation, order creation, and market counters.
 
 Creating the level separately from the order is rejected because it permits an
 empty active level if the later order transaction never succeeds.
@@ -199,13 +199,13 @@ Current coverage:
 - better, middle, and worse bid and ask levels preserve strict ordering and
   reciprocal links;
 - malformed, stale, cross-market, cross-side, and noncanonical neighbor hints
-  roll back without changing links, counters, orders, or vault balances;
+  roll back without changing links, counters, orders, or trader balances;
 - a second bid at the same price appends behind the FIFO tail and updates level
   aggregates atomically;
 - bid and ask append paths preserve the same queue invariants;
 - three bids preserve reciprocal `A <-> B <-> C` FIFO links;
 - stale tails, opposite-side levels, paused markets, and insufficient collateral
-  are rejected without mutating state or vault balances.
+  are rejected without mutating state or trader balances.
 
 Indexed-cancellation coverage now includes:
 
@@ -214,7 +214,7 @@ Indexed-cancellation coverage now includes:
 - final cancellation closing the empty level;
 - best, middle, and worst level removal with adjacent-link and best-pointer repair;
 - atomic rejection when a required order or level neighbor is omitted;
-- exact collateral refunds, repeated-cancellation prevention, and paused-market
+- exact locked-to-free collateral release, repeated-cancellation prevention, and paused-market
   cancellation;
 - market shutdown remaining impossible while indexed orders are open.
 

@@ -11,17 +11,18 @@ The current implementation establishes the account and authorization foundation:
 - manage deterministic, independently removable administrator records;
 - create one deterministic market for a distinct SPL base/quote mint pair;
 - pause, unpause, and close a market under authority control;
-- create deterministic limit-order accounts while atomically locking collateral;
+- create canonical trader ledgers, deposit and withdraw vault-backed balances,
+  and atomically move order collateral between free and locked balances;
 - create canonical price levels at the best, middle, or worst position on each
   side, append same-price orders behind a validated FIFO tail, and unlink
   canceled orders and empty levels atomically;
 - validate behavior with in-process LiteSVM integration tests.
 
 The program does **not** yet match opposing orders, partially fill them, or
-settle trades. Orders hold collateral in market vaults, and canceling an open
-order refunds its remaining locked amount while repairing the FIFO queue and
-sorted level index. Final-order cancellation unlinks and closes the empty level
-before the transaction completes.
+settle trades. Deposited tokens remain in market vaults while `TraderBalance`
+PDAs track each owner's free and locked claims. Canceling an open order releases
+its remaining locked amount back to free balance while repairing the FIFO queue
+and sorted level index. A separate withdrawal performs the SPL token transfer.
 
 ## 2. System context
 
@@ -31,11 +32,12 @@ The program has three external roles:
 | --- | --- |
 | Super-admin | Add, disable, enable, and remove administrator records |
 | Market authority | Initialize a market, pause it, unpause it, and close it while paused |
-| Trader | Place a bid or ask limit order while the market is active |
+| Trader | Initialize a market balance, deposit/withdraw, place orders while active, and cancel owned open orders |
 
-The program reads SPL Token mints during market initialization and invokes the
-Token Program when placing an order. Ask orders deposit base tokens; bid orders
-deposit their calculated quote notional.
+The program invokes the Token Program only at custody boundaries: deposit,
+withdrawal, market-vault initialization, and safe closure. Placement reserves
+already-deposited internal balance: asks lock base quantity and bids lock their
+calculated quote notional.
 
 ### Companion web application
 
@@ -55,9 +57,11 @@ active on-chain record. Role-aware routes are:
 | `/markets/new` | Active admin or super-admin | Create a market for two SPL mints |
 | `/orders` | Any connected wallet | List wallet-owned orders and cancel orders whose status is `Open` |
 
-The order form discovers a wallet-owned token account for the required mint and
-passes the canonical vault accounts to the program. When the target price level
-already exists, the client appends behind its FIFO tail. Otherwise, it walks
+The market page derives the connected wallet's canonical `TraderBalance` PDA.
+It can initialize the ledger, deposit or withdraw either asset, and displays
+free and locked amounts. Order placement passes only that ledger, not token
+accounts or vaults. When the target price level already exists, the client appends
+behind its FIFO tail. Otherwise, it walks
 from the market's best price through `worse_price` links to find the exact
 better/worse insertion gap. The walk checks for cycles, broken reciprocal links,
 wrong markets or sides, and invalid price ordering before submitting.
@@ -70,7 +74,8 @@ refresh. The browser walk is O(number of price levels); a production indexer
 can replace it later without changing the program's neighbor-account contract.
 
 The orders page filters program accounts by owner, displays locked collateral,
-and refreshes after confirmation. For cancellation it fetches the live level,
+and refreshes after confirmation. Cancellation releases locked collateral to
+the owner's free balance without a token transfer. It fetches the live level,
 supplies the order FIFO neighbors, and, only for a final-order removal, derives
 the better/worse level PDAs and supplies the recorded rent payer. These accounts
 are transaction-building hints; the program revalidates every link atomically.
@@ -143,7 +148,8 @@ program ID. Reversing the pair produces a different address.
 
 Each market is created with one PDA authority and two canonical SPL Token
 accounts. The authority PDA stores no account data; the program signs with its
-seeds for collateral deposits, cancellation refunds, and vault closure.
+seeds for withdrawals and vault closure. Deposits are signed by the trader;
+placement and cancellation do not invoke the Token Program.
 
 ```text
 vault authority = ["vault-authority", market]
@@ -182,6 +188,17 @@ seeds = ["order", market, order_id.to_le_bytes()]
 Each successful order placement increments `Market.next_order_id`. The order PDA
 therefore also provides insertion order that can later support FIFO priority.
 
+### Trader-balance PDA
+
+```text
+seeds = ["trader_balance", market, owner]
+```
+
+Each owner has at most one ledger per market. `base_free` and `quote_free` may
+be withdrawn or reserved by a new order; `base_locked` and `quote_locked` back
+open asks and bids respectively. All four fields use checked arithmetic. The
+market vaults physically custody the tokens represented by these claims.
+
 ### Price-level PDA
 
 ```text
@@ -210,9 +227,12 @@ stored payer, and closes the level.
 | `pause_market` | Market authority | `has_one = authority`; market is active | `Active -> Paused` |
 | `unpause_market` | Market authority | `has_one = authority`; market is paused | `Paused -> Active` |
 | `close_market` | Market authority | Market is paused; `open_order_count` is zero; both canonical vaults are empty | Closes both vaults and the market atomically, returning their rent to the authority |
-| `insert_limit_order` | Trader | Market is active; grid and collateral checks pass; supplied optional neighbors are canonical, correctly ordered, and reciprocal | Atomically transfers collateral, creates a new level and its first order, splices it at the empty, best, middle, or worst position, updates the best pointer when required, and increments counters |
-| `append_limit_order` | Trader | Existing level is canonical for market/side/price; supplied previous order is its open tail with no successor; collateral validation matches placement | Atomically transfers collateral, creates an order, links it behind the tail, and updates level aggregates and market counters |
-| `cancel_limit_order` | Order owner | Order, level, FIFO neighbors, and optional level neighbors are canonical and reciprocal; status is `Open`; refund account and vault match the side | Refunds collateral and unlinks the order; final removal repairs best/adjacent levels, closes the empty level to its stored rent payer, and transitions `Open -> Canceled` even while paused |
+| `initialize_trader_balance` | Trader | Market exists; canonical market/owner ledger does not exist | Creates a zeroed `TraderBalance` PDA |
+| `deposit` | Balance owner | Mint belongs to market; source belongs to owner; ledger and vault are canonical; amount and arithmetic are valid | Transfers tokens into the vault and credits the matching free balance atomically, including while paused |
+| `withdraw` | Balance owner | Mint belongs to market; destination belongs to owner; sufficient free balance and vault backing exist | Debits free balance and transfers tokens out of the vault atomically, including while paused |
+| `insert_limit_order` | Trader | Market is active; canonical ledger has sufficient free balance; grid checks pass; optional neighbors are canonical, ordered, and reciprocal | Moves free to locked balance, creates a new level and first order, splices the level, and increments counters atomically |
+| `append_limit_order` | Trader | Existing level is canonical for market/side/price; previous order is its open tail; canonical ledger has sufficient free balance | Moves free to locked balance, creates an order behind the tail, and updates aggregates and counters atomically |
+| `cancel_limit_order` | Order owner | Order, ledger, level, FIFO neighbors, and optional level neighbors are canonical and reciprocal; status is `Open` | Moves locked to free balance and unlinks the order; final removal repairs levels, closes the empty level, and transitions `Open -> Canceled` even while paused |
 
 ### Market initialization flow
 
@@ -254,14 +274,14 @@ Validate active Market + nonzero values
    |-- price % price_tick_size == 0
    |-- quantity % quantity_lot_size == 0
    |-- checked quote notional > 0
-   |-- ask selects base mint and quantity
-   |-- bid selects quote mint and quote notional
-   |-- trader owns the collateral token account
-   |-- vault matches ["vault", market, collateral mint]
+   |-- ask selects base quantity
+   |-- bid selects quote notional
+   |-- canonical TraderBalance belongs to market and trader
+   |-- matching free balance covers the collateral
    |
    | derive ["order", market, next_order_id]
    v
-Transfer collateral into the canonical market vault
+Move collateral from free to locked internal balance
    |
    v
 Initialize PriceLevel PDA; splice both supplied neighbors
@@ -288,12 +308,12 @@ Validate canonical existing PriceLevel
    |-- supplied previous order equals level.last_order
    |-- previous order belongs to the level and is Open
    |-- previous order has no next_order
-   |-- price, quantity, collateral mint, owner, and vault are valid
+   |-- price, quantity, ledger owner, and free balance are valid
    v
 Compute checked next quantities and counters
    |
    v
-Transfer collateral into the canonical vault
+Move collateral from free to locked internal balance
    |
    |-- previous_order.next_order = new order
    |-- new_order.previous_order = previous order
@@ -314,8 +334,8 @@ Order owner
    v
 Validate ownership + Open status + canonical level
    |-- supplied FIFO neighbors exactly match and link back
-   |-- bid selects quote vault; ask selects base vault
-   |-- refund destination belongs to the order owner
+   |-- canonical TraderBalance belongs to market and owner
+   |-- bid releases quote; ask releases base
    v
 Compute checked market and level aggregate decrements
    |
@@ -324,16 +344,17 @@ Compute checked market and level aggregate decrements
                      repair adjacent links and market best
                      close the empty level
    v
-Vault-authority PDA refunds remaining collateral
+Move remaining collateral from locked to free internal balance
    |
    v
 Clear order links, quantity, and collateral; set Canceled
 ```
 
 Cancellation deliberately has no active-market requirement, preserving the
-owner's exit path while a market is paused. The refund, queue repair, aggregate
-updates, best-pointer update, and conditional level closure are one transaction;
-any failed validation or CPI rolls the complete transition back.
+owner's exit path while a market is paused. Balance release, queue repair,
+aggregate updates, best-pointer update, and conditional level closure are one
+transaction; any failed validation rolls the complete transition back. Tokens
+remain in the vault until the owner submits `withdraw`.
 
 ### Safe market shutdown flow
 
@@ -408,11 +429,11 @@ The program currently enforces:
 21. Newly initialized market vaults have zero token balances.
 22. Ask orders lock their quantity in base-mint atoms.
 23. Bid orders lock their checked quote notional in quote-mint atoms.
-24. The collateral token account must belong to the trader and use the side's expected mint.
-25. Collateral transfer, order creation, and counter increment succeed or roll back together.
-26. Only an open order can refund collateral, preventing duplicate withdrawals.
-27. Cancellation refunds to an owner-controlled account of the correct mint.
-28. Refund transfer, collateral clearing, and cancellation status update are atomic.
+24. Every trader ledger is the canonical PDA for its market and owner.
+25. Deposits and withdrawals atomically couple token movement with free-balance accounting.
+26. Placement moves only deposited free balance to locked balance; it performs no token transfer.
+27. Only an open order can release collateral, preventing duplicate balance credit.
+28. Balance release, collateral clearing, and cancellation status update are atomic.
 29. Order placement increments and cancellation decrements `open_order_count`.
 30. A market can close only while paused with no open orders or vault balances.
 31. Successful shutdown closes both canonical vaults and the market atomically.
@@ -424,12 +445,12 @@ The program currently enforces:
     ordering; new-worst insertion requires the terminal better level.
 35. An existing-level append accepts only the level's open tail with no newer
     successor.
-36. FIFO tail linking, level aggregates, collateral transfer, and market
+36. FIFO tail linking, level aggregates, free-to-locked movement, and market
     counters are updated atomically.
 37. Cancellation accepts only the exact stored FIFO neighbors with reciprocal
     links to the removed order.
 38. Cancellation decrements level quantity/count and market open-order count
-    with checked arithmetic in the same transaction as the collateral refund.
+    with checked arithmetic in the same transaction as the collateral release.
 39. A final-order cancellation accepts only canonical reciprocal level
     neighbors, repairs them, and closes the now-empty level to its rent payer.
 40. Removing a best level advances `best_bid` or `best_ask` to its worse
@@ -444,6 +465,10 @@ These are planned features, not defects in the current research milestone:
 - No settlement or fee accounting.
 - Canceled order accounts are retained as history and their rent is not yet
   reclaimed.
+- Orders created by the earlier direct-vault-transfer design do not have a
+  corresponding locked `TraderBalance` claim. This research milestone requires
+  a clean devnet redeploy/state reset; upgrading a program with live legacy
+  orders would require an explicit migration before those orders can cancel.
 
 ## 7. Test architecture
 
@@ -462,7 +487,7 @@ The test harness:
 5. sends transactions through LiteSVM;
 6. deserializes resulting Anchor accounts and checks state.
 
-The 87-test suite currently covers:
+The 111-test suite currently covers:
 
 - upgrade-authority-only, one-time protocol initialization;
 - creation of the deployer's config and active admin record;
@@ -487,14 +512,18 @@ The 87-test suite currently covers:
 - canonical base/quote vault mints, shared authority, and zero balances;
 - atomic rollback when market initialization fails;
 - rejection of noncanonical vault accounts and duplicate market initialization;
-- base collateral deposits for asks and quote collateral deposits for bids;
+- canonical trader-balance initialization and owner/market isolation;
+- atomic base and quote deposits and withdrawals, including while paused;
+- withdrawal of free balance only and rejection of insufficient vault backing;
+- end-to-end deposit, placement, cancellation, and full withdrawal with vault backing preserved;
+- base balance locking for asks and quote balance locking for bids;
 - persistence of the exact locked collateral amount;
-- rejection of the wrong collateral mint or token-account owner;
-- rejection of insufficient balances and noncanonical order vaults;
+- rejection of corrupted trader-balance owner or market data;
+- rejection of insufficient free balance and locked-balance overflow;
 - rollback of order state, counters, and token balances on failed placement;
-- exact base and quote collateral refunds for ask and bid cancellation;
-- refunds while a market is paused;
-- rejection of wrong refund mints, owners, markets, and vaults;
+- exact base and quote release to free balance on cancellation;
+- releases while a market is paused;
+- rejection of balance underflow, overflow, and wrong ledger ownership;
 - atomic preservation of locked collateral after failed cancellation;
 - prevention of repeated cancellation and duplicate refunds;
 - head, middle, tail, and only-order FIFO removal with reciprocal-link repair;
@@ -544,8 +573,8 @@ The recommended implementation order is:
 
 1. ~~Add sorted multi-price insertion.~~
 2. <del>Add indexed cancellation/removal.</del>
-3. Add canonical per-market trader balances and atomic deposit/withdrawal.
-4. Route order collateral through free and locked balance accounting.
+3. ~~Add canonical per-market trader balances and atomic deposit/withdrawal.~~
+4. ~~Route order collateral through free and locked balance accounting.~~
 5. Implement bounded deterministic matching and atomic ledger settlement.
 6. Add partial fills, remainder policy, fees, and conservation tests.
 7. Add order cleanup and rent-reclamation rules.

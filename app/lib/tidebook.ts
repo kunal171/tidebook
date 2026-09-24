@@ -17,6 +17,7 @@ export const ADMIN_SEED = "admin";
 export const MARKET_SEED = "market";
 export const ORDER_SEED = "order";
 export const PRICE_LEVEL_SEED = "price_level";
+export const TRADER_BALANCE_SEED = "trader_balance";
 export const VAULT_AUTHORITY_SEED = "vault-authority";
 export const VAULT_SEED = "vault";
 
@@ -129,6 +130,16 @@ export interface OrderView extends OrderAccount {
   address: PublicKey;
 }
 
+export interface TraderBalanceAccount {
+  market: PublicKey;
+  owner: PublicKey;
+  baseFree: BN;
+  baseLocked: BN;
+  quoteFree: BN;
+  quoteLocked: BN;
+  bump: number;
+}
+
 interface AccountClient<T> {
   fetchNullable(address: PublicKey): Promise<T | null>;
 
@@ -143,6 +154,7 @@ interface TidebookAccounts {
   market: AccountClient<MarketAccount>;
   priceLevel: AccountClient<PriceLevelAccount>;
   order: AccountClient<OrderAccount>;
+  traderBalance: AccountClient<TraderBalanceAccount>;
 }
 
 export function deriveVaultAuthorityPda(market: PublicKey) {
@@ -215,6 +227,17 @@ export function derivePriceLevelPda(
       market.toBuffer(),
       Buffer.from(side),
       price.toArrayLike(Buffer, "le", 8),
+    ],
+    PROGRAM_ID,
+  )[0];
+}
+
+export function deriveTraderBalancePda(market: PublicKey, owner: PublicKey) {
+  return PublicKey.findProgramAddressSync(
+    [
+      Buffer.from(TRADER_BALANCE_SEED),
+      market.toBuffer(),
+      owner.toBuffer(),
     ],
     PROGRAM_ID,
   )[0];

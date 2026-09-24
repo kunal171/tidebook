@@ -182,4 +182,43 @@ pub enum MarketError {
 
     #[msg("Empty price level has a nonzero remaining quantity")]
     InvalidPriceLevelAggregate,
+
+    #[msg("Deposit amount must be greater than zero")]
+    InvalidDepositAmount,
+
+    #[msg("Deposit mint is neither the market base nor quote mint")]
+    InvalidDepositMint,
+
+    #[msg("Trader balance belongs to a different market")]
+    TraderBalanceMarketMismatch,
+
+    #[msg("Trader balance belongs to a different owner")]
+    TraderBalanceOwnerMismatch,
+
+    #[msg("Free balance overflow")]
+    FreeBalanceOverflow,
+
+    #[msg("Locked balance overflow")]
+    LockedBalanceOverflow,
+
+    #[msg("Locked balance underflow")]
+    LockedBalanceUnderflow,
+
+    #[msg("Insufficient token balance for deposit")]
+    InsufficientDepositFunds,
+
+    #[msg("Withdrawal amount must be greater than zero")]
+    InvalidWithdrawalAmount,
+
+    #[msg("Withdrawal mint is neither the market base nor quote mint")]
+    InvalidWithdrawalMint,
+
+    #[msg("Insufficient free balance")]
+    InsufficientFreeBalance,
+
+    #[msg("Withdrawal destination is not owned by the trader")]
+    InvalidWithdrawalDestinationOwner,
+
+    #[msg("Market vault contains insufficient tokens")]
+    InsufficientVaultFunds,
 }

@@ -1,16 +1,15 @@
-//! Cancels an open order and refunds its remaining locked collateral.
+//! Cancels an open order and releases its collateral back to free balance.
 //!
 //! Market status is intentionally not checked so owners can cancel while a
-//! market is paused.
+//! market is paused. Tokens remain in the market vault until withdrawal.
 
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Mint, Token, TokenAccount, TransferChecked};
 
 use crate::{
-    constants::{ORDER_SEED, PRICE_LEVEL_SEED, VAULT_AUTHORITY_SEED, VAULT_SEED},
+    constants::{ORDER_SEED, PRICE_LEVEL_SEED, TRADER_BALANCE_SEED},
     error::MarketError,
     pda::derive_price_level_pda,
-    state::{Market, Order, OrderSide, OrderStatus, PriceLevel},
+    state::{Market, Order, OrderSide, OrderStatus, PriceLevel, TraderBalance},
 };
 
 /// Cancellation can touch two FIFO neighbors and two price-level neighbors.
@@ -79,41 +78,21 @@ pub struct CancelLimitOrder<'info> {
     #[account(mut)]
     pub level_rent_recipient: Option<UncheckedAccount<'info>>,
 
-    pub collateral_mint: Account<'info, Mint>,
-
-    #[account(
-        mut,
-        constraint = owner_collateral.owner == owner.key()
-            @ MarketError::InvalidCollateralOwner,
-        constraint = owner_collateral.mint == collateral_mint.key()
-            @ MarketError::InvalidCollateralMint
-    )]
-    pub owner_collateral: Box<Account<'info, TokenAccount>>,
-
-    /// CHECK: Seed-constrained authority that signs the refund transfer.
-    #[account(
-        seeds = [
-            VAULT_AUTHORITY_SEED,
-            market.key().as_ref()
-        ],
-        bump
-    )]
-    pub vault_authority: UncheckedAccount<'info>,
-
+    /// Canonical ledger receiving the released collateral.
     #[account(
         mut,
         seeds = [
-            VAULT_SEED,
+            TRADER_BALANCE_SEED,
             market.key().as_ref(),
-            collateral_mint.key().as_ref()
+            owner.key().as_ref(),
         ],
-        bump,
-        token::mint = collateral_mint,
-        token::authority = vault_authority
+        bump = trader_balance.bump,
+        constraint = trader_balance.market == market.key()
+            @ MarketError::TraderBalanceMarketMismatch,
+        constraint = trader_balance.owner == owner.key()
+            @ MarketError::TraderBalanceOwnerMismatch
     )]
-    pub market_vault: Box<Account<'info, TokenAccount>>,
-
-    pub token_program: Program<'info, Token>,
+    pub trader_balance: Box<Account<'info, TraderBalance>>,
 }
 
 pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64) -> Result<()> {
@@ -200,29 +179,38 @@ pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64)
         );
     }
 
-    let expected_mint = match order_side {
-        OrderSide::Ask => ctx.accounts.market.base_mint,
-        OrderSide::Bid => ctx.accounts.market.quote_mint,
+    let market_key = ctx.accounts.market.key();
+
+    // Cancellation releases only the amount still collateralizing this order.
+    // Tokens stay in custody, making cancellation a pure ledger and index update.
+    let (next_free_balance, next_locked_balance) = match order_side {
+        OrderSide::Ask => (
+            ctx.accounts
+                .trader_balance
+                .base_free
+                .checked_add(locked_collateral)
+                .ok_or(MarketError::FreeBalanceOverflow)?,
+            ctx.accounts
+                .trader_balance
+                .base_locked
+                .checked_sub(locked_collateral)
+                .ok_or(MarketError::LockedBalanceUnderflow)?,
+        ),
+        OrderSide::Bid => (
+            ctx.accounts
+                .trader_balance
+                .quote_free
+                .checked_add(locked_collateral)
+                .ok_or(MarketError::FreeBalanceOverflow)?,
+            ctx.accounts
+                .trader_balance
+                .quote_locked
+                .checked_sub(locked_collateral)
+                .ok_or(MarketError::LockedBalanceUnderflow)?,
+        ),
     };
 
-    require_keys_eq!(
-        ctx.accounts.collateral_mint.key(),
-        expected_mint,
-        MarketError::InvalidCollateralMint
-    );
-
-    let market_key = ctx.accounts.market.key();
-    let vault_authority_bump = [ctx.bumps.vault_authority];
-
-    let vault_authority_seeds: &[&[u8]] = &[
-        VAULT_AUTHORITY_SEED,
-        market_key.as_ref(),
-        &vault_authority_bump,
-    ];
-
-    let signer_seeds = &[vault_authority_seeds];
-
-    // Calculate all fallible counter changes before the token CPI or mutations.
+    // Calculate all fallible counter changes before applying ledger or book mutations.
     // Solana would roll back on failure regardless, but this ordering keeps the
     // state-transition boundary explicit and easy to audit.
     let next_open_order_count = ctx
@@ -348,20 +336,16 @@ pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64)
         );
     }
 
-    token::transfer_checked(
-        CpiContext::new_with_signer(
-            ctx.accounts.token_program.key(),
-            TransferChecked {
-                from: ctx.accounts.market_vault.to_account_info(),
-                mint: ctx.accounts.collateral_mint.to_account_info(),
-                to: ctx.accounts.owner_collateral.to_account_info(),
-                authority: ctx.accounts.vault_authority.to_account_info(),
-            },
-            signer_seeds,
-        ),
-        locked_collateral,
-        ctx.accounts.collateral_mint.decimals,
-    )?;
+    match order_side {
+        OrderSide::Ask => {
+            ctx.accounts.trader_balance.base_free = next_free_balance;
+            ctx.accounts.trader_balance.base_locked = next_locked_balance;
+        }
+        OrderSide::Bid => {
+            ctx.accounts.trader_balance.quote_free = next_free_balance;
+            ctx.accounts.trader_balance.quote_locked = next_locked_balance;
+        }
+    }
 
     // Splice the node out in O(1). Missing neighbors identify head or tail; when
     // both are missing, the order is the sole FIFO member and its level is

@@ -7,12 +7,9 @@ import {
   decodeOrderSide,
   decodeOrderStatus,
   derivePriceLevelPda,
-  deriveVaultAuthorityPda,
-  deriveVaultPda,
-  findOwnedTokenAccount,
+  deriveTraderBalancePda,
   getTidebookAccounts,
   getTidebookProgram,
-  TOKEN_PROGRAM_ID,
   transactionExplorerUrl,
   type OrderView,
 } from "../lib/tidebook";
@@ -92,14 +89,9 @@ export function Orders() {
 
     try {
       const accounts = getTidebookAccounts(program);
-      const [market, priceLevel] = await Promise.all([
-        accounts.market.fetchNullable(order.market),
-        accounts.priceLevel.fetchNullable(order.priceLevel),
-      ]);
-
-      if (!market) {
-        throw new Error("The order's market account was not found");
-      }
+      const priceLevel = await accounts.priceLevel.fetchNullable(
+        order.priceLevel,
+      );
       if (!priceLevel) {
         throw new Error("The order's price-level account was not found");
       }
@@ -125,14 +117,10 @@ export function Orders() {
       const levelRentRecipient = removesPriceLevel
         ? priceLevel.rentPayer
         : null;
-      const collateralMint = side === "bid" ? market.quoteMint : market.baseMint;
-      const ownerCollateral = await findOwnedTokenAccount(
-        connection,
+      const traderBalance = deriveTraderBalancePda(
+        order.market,
         wallet.publicKey,
-        collateralMint,
       );
-      const vaultAuthority = deriveVaultAuthorityPda(order.market);
-      const marketVault = deriveVaultPda(order.market, collateralMint);
 
       const transaction = await program.methods
         .cancelLimitOrder(order.orderId)
@@ -146,11 +134,7 @@ export function Orders() {
           betterLevel: betterLevel ?? program.programId,
           worseLevel: worseLevel ?? program.programId,
           levelRentRecipient: levelRentRecipient ?? program.programId,
-          collateralMint,
-          ownerCollateral,
-          vaultAuthority,
-          marketVault,
-          tokenProgram: TOKEN_PROGRAM_ID,
+          traderBalance,
         })
         .rpc();
 
@@ -287,7 +271,7 @@ export function Orders() {
 
         {signature && (
           <div className="transaction-message transaction-success">
-            Order canceled.{" "}
+            Order canceled and collateral released to your free balance.{" "}
             <a
               href={transactionExplorerUrl(signature)}
               target="_blank"

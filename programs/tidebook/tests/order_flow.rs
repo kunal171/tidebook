@@ -28,6 +28,37 @@ const PROGRAM_BYTES: &[u8] = include_bytes!(concat!(
     "/../../target/deploy/tidebook.so"
 ));
 
+fn ensure_trader_balance(svm: &mut LiteSVM, market: Pubkey, owner: Pubkey) -> Pubkey {
+    let (address, bump) = tidebook::derive_trader_balance_pda(&tidebook::id(), &market, &owner);
+
+    if svm.get_account(&address).is_none() {
+        let state = tidebook::state::TraderBalance {
+            market,
+            owner,
+            base_free: u64::MAX / 4,
+            base_locked: 0,
+            quote_free: u64::MAX / 4,
+            quote_locked: 0,
+            bump,
+        };
+        let mut data = Vec::new();
+        state.try_serialize(&mut data).unwrap();
+        svm.set_account(
+            address,
+            Account {
+                lamports: svm.minimum_balance_for_rent_exemption(data.len()),
+                data,
+                owner: tidebook::id(),
+                executable: false,
+                rent_epoch: 0,
+            },
+        )
+        .unwrap();
+    }
+
+    address
+}
+
 const TEST_PRICE_TICK_SIZE: u64 = 10_000;
 const TEST_QUANTITY_LOT_SIZE: u64 = 1_000_000;
 const TEST_ORDER_PRICE: u64 = 100_000_000;
@@ -181,11 +212,12 @@ fn send_initial_limit_order_with_collateral(
     side: tidebook::state::OrderSide,
     price: u64,
     quantity: u64,
-    collateral_mint: Pubkey,
-    trader_collateral: Pubkey,
-    vault_authority: Pubkey,
-    market_vault: Pubkey,
+    _collateral_mint: Pubkey,
+    _trader_collateral: Pubkey,
+    _vault_authority: Pubkey,
+    _market_vault: Pubkey,
 ) -> (Pubkey, litesvm::types::TransactionResult) {
+    let trader_balance = ensure_trader_balance(svm, market, payer.pubkey());
     let order_id = load_market(svm, market).next_order_id;
     let (order, _) = Pubkey::find_program_address(
         &[
@@ -209,11 +241,7 @@ fn send_initial_limit_order_with_collateral(
             market,
             order,
             price_level,
-            collateral_mint,
-            trader_collateral,
-            vault_authority,
-            market_vault,
-            token_program: anchor_spl::token::ID,
+            trader_balance,
             system_program: system_program::ID,
             better_level: None,
             worse_level: None,
@@ -281,11 +309,12 @@ fn send_append_limit_order_with_accounts(
     quantity: u64,
     previous_order: Pubkey,
     price_level: Pubkey,
-    collateral_mint: Pubkey,
-    trader_collateral: Pubkey,
-    vault_authority: Pubkey,
-    market_vault: Pubkey,
+    _collateral_mint: Pubkey,
+    _trader_collateral: Pubkey,
+    _vault_authority: Pubkey,
+    _market_vault: Pubkey,
 ) -> (Pubkey, litesvm::types::TransactionResult) {
+    let trader_balance = ensure_trader_balance(svm, market, payer.pubkey());
     let order_id = load_market(svm, market).next_order_id;
     let (order, _) = Pubkey::find_program_address(
         &[
@@ -309,11 +338,7 @@ fn send_append_limit_order_with_accounts(
             order,
             price_level,
             previous_order,
-            collateral_mint,
-            trader_collateral,
-            vault_authority,
-            market_vault,
-            token_program: anchor_spl::token::ID,
+            trader_balance,
             system_program: system_program::ID,
         }
         .to_account_metas(None),
@@ -341,6 +366,7 @@ fn send_insert_limit_order(
     worse_level: Option<Pubkey>,
 ) -> (Pubkey, litesvm::types::TransactionResult) {
     let market_state = load_market(svm, market);
+    let trader_balance = ensure_trader_balance(svm, market, payer.pubkey());
     let order_id = market_state.next_order_id;
     let (order, _) = Pubkey::find_program_address(
         &[
@@ -351,17 +377,17 @@ fn send_insert_limit_order(
         &tidebook::id(),
     );
     let (price_level, _) = tidebook::derive_price_level_pda(&tidebook::id(), &market, side, price);
-    let (vault_authority, base_vault, quote_vault) = derive_market_vault_addresses(
+    let (_vault_authority, base_vault, quote_vault) = derive_market_vault_addresses(
         &tidebook::id(),
         &market,
         &market_state.base_mint,
         &market_state.quote_mint,
     );
-    let (collateral_mint, market_vault) = match side {
+    let (collateral_mint, _market_vault) = match side {
         tidebook::state::OrderSide::Bid => (market_state.quote_mint, quote_vault),
         tidebook::state::OrderSide::Ask => (market_state.base_mint, base_vault),
     };
-    let trader_collateral =
+    let _trader_collateral =
         create_test_token_account(svm, collateral_mint, payer.pubkey(), u64::MAX);
     let instruction = Instruction::new_with_bytes(
         tidebook::id(),
@@ -376,11 +402,7 @@ fn send_insert_limit_order(
             market,
             order,
             price_level,
-            collateral_mint,
-            trader_collateral,
-            vault_authority,
-            market_vault,
-            token_program: anchor_spl::token::ID,
+            trader_balance,
             system_program: system_program::ID,
             better_level,
             worse_level,
@@ -625,6 +647,29 @@ fn load_order(svm: &LiteSVM, address: Pubkey) -> tidebook::state::Order {
     tidebook::state::Order::try_deserialize(&mut data).unwrap()
 }
 
+fn load_trader_balance(
+    svm: &LiteSVM,
+    market: Pubkey,
+    owner: Pubkey,
+) -> tidebook::state::TraderBalance {
+    let address = tidebook::derive_trader_balance_pda(&tidebook::id(), &market, &owner).0;
+    let account = svm.get_account(&address).unwrap();
+    let mut data: &[u8] = &account.data;
+    tidebook::state::TraderBalance::try_deserialize(&mut data).unwrap()
+}
+
+fn store_trader_balance(
+    svm: &mut LiteSVM,
+    address: Pubkey,
+    state: &tidebook::state::TraderBalance,
+) {
+    let mut account = svm.get_account(&address).unwrap();
+    let mut data = Vec::new();
+    state.try_serialize(&mut data).unwrap();
+    account.data = data;
+    svm.set_account(address, account).unwrap();
+}
+
 fn load_price_level(svm: &LiteSVM, address: Pubkey) -> tidebook::state::PriceLevel {
     let account = svm.get_account(&address).unwrap();
     let mut data: &[u8] = &account.data;
@@ -717,11 +762,12 @@ fn ask_order_locks_base_collateral() {
     );
 
     assert!(result.is_ok(), "ask placement failed: {result:?}");
-    assert_eq!(
-        token_balance(&svm, trader_base),
-        starting_balance - TEST_ORDER_QUANTITY
-    );
-    assert_eq!(token_balance(&svm, base_vault), TEST_ORDER_QUANTITY);
+    // Placement no longer moves SPL tokens; it reserves deposited ledger funds.
+    assert_eq!(token_balance(&svm, trader_base), starting_balance);
+    assert_eq!(token_balance(&svm, base_vault), 0);
+    let balance = load_trader_balance(&svm, market, payer.pubkey());
+    assert_eq!(balance.base_locked, TEST_ORDER_QUANTITY);
+    assert_eq!(balance.base_free, u64::MAX / 4 - TEST_ORDER_QUANTITY);
     assert_eq!(
         load_order(&svm, order).locked_collateral,
         TEST_ORDER_QUANTITY
@@ -758,11 +804,11 @@ fn bid_order_locks_quote_collateral() {
     );
 
     assert!(result.is_ok(), "bid placement failed: {result:?}");
-    assert_eq!(
-        token_balance(&svm, trader_quote),
-        starting_balance - expected_quote_collateral
-    );
-    assert_eq!(token_balance(&svm, quote_vault), expected_quote_collateral);
+    assert_eq!(token_balance(&svm, trader_quote), starting_balance);
+    assert_eq!(token_balance(&svm, quote_vault), 0);
+    let balance = load_trader_balance(&svm, market, payer.pubkey());
+    assert_eq!(balance.quote_locked, expected_quote_collateral);
+    assert_eq!(balance.quote_free, u64::MAX / 4 - expected_quote_collateral);
     assert_eq!(
         load_order(&svm, order).locked_collateral,
         expected_quote_collateral
@@ -770,7 +816,7 @@ fn bid_order_locks_quote_collateral() {
 }
 
 #[test]
-fn wrong_collateral_mint_is_rejected_atomically() {
+fn corrupted_trader_balance_market_is_rejected_atomically() {
     let ActiveMarketFixture {
         mut svm,
         payer,
@@ -782,6 +828,10 @@ fn wrong_collateral_mint_is_rejected_atomically() {
     } = setup_active_market(9, TEST_PRICE_TICK_SIZE, TEST_QUANTITY_LOT_SIZE);
     let trader_base =
         create_test_token_account(&mut svm, base_mint, payer.pubkey(), TEST_ORDER_QUANTITY);
+    let balance_address = ensure_trader_balance(&mut svm, market, payer.pubkey());
+    let mut balance = load_trader_balance(&svm, market, payer.pubkey());
+    balance.market = Pubkey::new_unique();
+    store_trader_balance(&mut svm, balance_address, &balance);
 
     let (order, result) = send_initial_limit_order_with_collateral(
         &mut svm,
@@ -796,7 +846,7 @@ fn wrong_collateral_mint_is_rejected_atomically() {
         base_vault,
     );
 
-    assert!(result.is_err(), "bid accepted base collateral");
+    assert!(result.is_err(), "corrupted balance market was accepted");
     assert!(svm.get_account(&order).is_none());
     assert_eq!(load_market(&svm, market).next_order_id, 1);
     assert_eq!(token_balance(&svm, trader_base), TEST_ORDER_QUANTITY);
@@ -804,7 +854,7 @@ fn wrong_collateral_mint_is_rejected_atomically() {
 }
 
 #[test]
-fn token_account_owned_by_another_wallet_is_rejected() {
+fn corrupted_trader_balance_owner_is_rejected() {
     let ActiveMarketFixture {
         mut svm,
         payer,
@@ -818,6 +868,10 @@ fn token_account_owned_by_another_wallet_is_rejected() {
     let required_collateral = 500_000;
     let trader_quote =
         create_test_token_account(&mut svm, quote_mint, other_owner, required_collateral);
+    let balance_address = ensure_trader_balance(&mut svm, market, payer.pubkey());
+    let mut balance = load_trader_balance(&svm, market, payer.pubkey());
+    balance.owner = other_owner;
+    store_trader_balance(&mut svm, balance_address, &balance);
 
     let (order, result) = send_initial_limit_order_with_collateral(
         &mut svm,
@@ -832,10 +886,7 @@ fn token_account_owned_by_another_wallet_is_rejected() {
         quote_vault,
     );
 
-    assert!(
-        result.is_err(),
-        "another wallet's token account was accepted"
-    );
+    assert!(result.is_err(), "corrupted balance owner was accepted");
     assert!(svm.get_account(&order).is_none());
     assert_eq!(load_market(&svm, market).next_order_id, 1);
     assert_eq!(token_balance(&svm, trader_quote), required_collateral);
@@ -856,6 +907,10 @@ fn insufficient_collateral_is_rejected_atomically() {
     let available_collateral = 499_999;
     let trader_quote =
         create_test_token_account(&mut svm, quote_mint, payer.pubkey(), available_collateral);
+    let balance_address = ensure_trader_balance(&mut svm, market, payer.pubkey());
+    let mut balance = load_trader_balance(&svm, market, payer.pubkey());
+    balance.quote_free = available_collateral;
+    store_trader_balance(&mut svm, balance_address, &balance);
 
     let (order, result) = send_initial_limit_order_with_collateral(
         &mut svm,
@@ -878,7 +933,7 @@ fn insufficient_collateral_is_rejected_atomically() {
 }
 
 #[test]
-fn noncanonical_order_vault_is_rejected() {
+fn locked_balance_overflow_is_rejected_atomically() {
     let ActiveMarketFixture {
         mut svm,
         payer,
@@ -892,6 +947,10 @@ fn noncanonical_order_vault_is_rejected() {
     let trader_quote =
         create_test_token_account(&mut svm, quote_mint, payer.pubkey(), required_collateral);
     let noncanonical_vault = create_test_token_account(&mut svm, quote_mint, vault_authority, 0);
+    let balance_address = ensure_trader_balance(&mut svm, market, payer.pubkey());
+    let mut balance = load_trader_balance(&svm, market, payer.pubkey());
+    balance.quote_locked = u64::MAX;
+    store_trader_balance(&mut svm, balance_address, &balance);
 
     let (order, result) = send_initial_limit_order_with_collateral(
         &mut svm,
@@ -906,7 +965,7 @@ fn noncanonical_order_vault_is_rejected() {
         noncanonical_vault,
     );
 
-    assert!(result.is_err(), "noncanonical market vault was accepted");
+    assert!(result.is_err(), "locked-balance overflow was accepted");
     assert!(svm.get_account(&order).is_none());
     assert_eq!(load_market(&svm, market).next_order_id, 1);
     assert_eq!(token_balance(&svm, trader_quote), required_collateral);
@@ -1895,7 +1954,11 @@ fn second_ask_at_same_price_appends_to_fifo_queue() {
     assert_eq!(first_state.next_order, Some(second_order));
     assert_eq!(second_state.previous_order, Some(first_order));
     assert_eq!(second_state.next_order, None);
-    assert_eq!(token_balance(&svm, base_vault), TEST_ORDER_QUANTITY * 2);
+    assert_eq!(token_balance(&svm, base_vault), 0);
+    assert_eq!(
+        load_trader_balance(&svm, market, payer.pubkey()).base_locked,
+        TEST_ORDER_QUANTITY * 2
+    );
 }
 
 #[test]
@@ -1997,6 +2060,11 @@ fn insufficient_append_collateral_rolls_back_fifo_and_counters() {
     let insufficient_amount = 499_999;
     let trader_collateral =
         create_test_token_account(&mut svm, quote_mint, payer.pubkey(), insufficient_amount);
+    let balance_address =
+        tidebook::derive_trader_balance_pda(&tidebook::id(), &market, &payer.pubkey()).0;
+    let mut balance = load_trader_balance(&svm, market, payer.pubkey());
+    balance.quote_free = insufficient_amount;
+    store_trader_balance(&mut svm, balance_address, &balance);
     let level_before = load_price_level(&svm, price_level);
     let vault_balance_before = token_balance(&svm, quote_vault);
 
@@ -2219,8 +2287,9 @@ fn better_bid_becomes_new_best_and_links_previous_best_as_worse() {
     assert_eq!(new_order_state.price_level, new_level);
     assert_eq!(new_order_state.previous_order, None);
     assert_eq!(new_order_state.next_order, None);
+    assert_eq!(token_balance(&svm, quote_vault), 0);
     assert_eq!(
-        token_balance(&svm, quote_vault),
+        load_trader_balance(&svm, market, payer.pubkey()).quote_locked,
         original_order_state.locked_collateral + new_order_state.locked_collateral
     );
 }
@@ -2302,7 +2371,11 @@ fn better_ask_becomes_new_best_and_links_previous_best_as_worse() {
     assert_eq!(original_level_state.worse_price, None);
     assert_eq!(new_order_state.price_level, new_level);
     assert_eq!(new_order_state.locked_collateral, TEST_ORDER_QUANTITY);
-    assert_eq!(token_balance(&svm, base_vault), TEST_ORDER_QUANTITY * 2);
+    assert_eq!(token_balance(&svm, base_vault), 0);
+    assert_eq!(
+        load_trader_balance(&svm, market, payer.pubkey()).base_locked,
+        TEST_ORDER_QUANTITY * 2
+    );
 }
 
 #[test]

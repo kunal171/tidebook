@@ -134,6 +134,38 @@ pub struct PriceLevel {
     pub bump: u8,
 }
 
+/// Canonical internal balance ledger for one trader in one market.
+///
+/// Tokens represented here physically remain in the market's SPL token vaults.
+/// `free` balances can be withdrawn or committed to new orders.
+/// `locked` balances collateralize currently open orders.
+///
+/// There is exactly one account for each `(market, owner)` pair.
+#[account]
+#[derive(InitSpace)]
+pub struct TraderBalance {
+    /// Market whose vault assets back these balances.
+    pub market: Pubkey,
+
+    /// Wallet that owns this balance record.
+    pub owner: Pubkey,
+
+    /// Base tokens available for withdrawal or new ask orders.
+    pub base_free: u64,
+
+    /// Base tokens reserved by open ask orders.
+    pub base_locked: u64,
+
+    /// Quote tokens available for withdrawal or new bid orders.
+    pub quote_free: u64,
+
+    /// Quote tokens reserved by open bid orders.
+    pub quote_locked: u64,
+
+    /// PDA bump stored for future signer and validation logic.
+    pub bump: u8,
+}
+
 impl OrderSide {
     /// Stable PDA seed independent of Rust enum representation.
     pub const fn seed(self) -> &'static [u8] {
@@ -158,6 +190,12 @@ mod tests {
     fn price_level_account_size_is_stable() {
         // Excludes Anchor's 8-byte account discriminator.
         assert_eq!(PriceLevel::INIT_SPACE, 174);
+    }
+
+    #[test]
+    fn trader_balance_account_size_is_stable() {
+        // Excludes Anchor's 8-byte account discriminator.
+        assert_eq!(TraderBalance::INIT_SPACE, 97);
     }
 
     #[test]

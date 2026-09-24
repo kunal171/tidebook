@@ -10,18 +10,19 @@ built incrementally with Anchor, LiteSVM, and a companion web application.
 - Pause, unpause, and close markets under authority control.
 - Create deterministic bid and ask limit-order PDAs.
 - Enforce fixed-point price ticks, quantity lots, and nonzero quote notional.
-- Lock quote collateral for bids and base collateral for asks in canonical vaults.
+- Maintain canonical per-trader free and locked balances backed by market vaults.
+- Deposit and withdraw base or quote tokens independently of order placement.
+- Lock quote balance for bids and base balance for asks without a token CPI per order.
 - Create canonical price-level PDAs for the first bid and ask on each market side.
 - Append another order at an existing price behind the validated FIFO tail.
 - Cancel open orders under owner control, including while a market is paused.
-- Refund collateral on cancellation and safely close empty, paused markets.
+- Release collateral to free balance on cancellation and safely close empty, paused markets.
 - Exercise program behavior through LiteSVM integration tests.
 
-Sorted multi-price insertion, indexed cancellation, matching, and settlement
-remain planned milestones. Current orders lock assets and can form a same-price
-FIFO queue, but do not yet match or settle trades. Until indexed cancellation
-is implemented, price-level state is research-stage and is not an authoritative
-view after an order has been canceled.
+Sorted multi-price insertion, indexed cancellation, deposits, withdrawals, and
+internal order collateral accounting are implemented. Matching and settlement
+remain planned milestones; current orders form price-time-priority queues but
+do not yet trade with an opposing order.
 
 ## Architecture
 

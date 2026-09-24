@@ -102,4 +102,19 @@ pub mod tidebook {
             ctx, side, price, quantity,
         )
     }
+
+    /// Creates the caller's canonical zeroed balance ledger for a market.
+    pub fn initialize_trader_balance(ctx: Context<InitializeTraderBalance>) -> Result<()> {
+        crate::instructions::initialize_trader_balance::handle_initialize_trader_balance(ctx)
+    }
+
+    /// Deposits base or quote tokens and credits the caller's free balance.
+    pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+        crate::instructions::deposit::handle_deposit(ctx, amount)
+    }
+
+    /// Withdraws free base or quote tokens to the caller's token account.
+    pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
+        crate::instructions::withdraw::handle_withdraw(ctx, amount)
+    }
 }

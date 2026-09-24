@@ -194,59 +194,30 @@
           "writable": true
         },
         {
-          "name": "collateral_mint",
+          "name": "trader_balance",
           "docs": [
-            "Mint used as collateral: base for asks and quote for bids."
-          ]
-        },
-        {
-          "name": "trader_collateral",
-          "writable": true
-        },
-        {
-          "name": "vault_authority",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  118,
-                  97,
-                  117,
-                  108,
-                  116,
-                  45,
-                  97,
-                  117,
-                  116,
-                  104,
-                  111,
-                  114,
-                  105,
-                  116,
-                  121
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "market"
-              }
-            ]
-          }
-        },
-        {
-          "name": "market_vault",
+            "Canonical internal ledger that funds and collateralizes this order."
+          ],
           "writable": true,
           "pda": {
             "seeds": [
               {
                 "kind": "const",
                 "value": [
-                  118,
+                  116,
+                  114,
                   97,
-                  117,
+                  100,
+                  101,
+                  114,
+                  95,
+                  98,
+                  97,
                   108,
-                  116
+                  97,
+                  110,
+                  99,
+                  101
                 ]
               },
               {
@@ -255,14 +226,10 @@
               },
               {
                 "kind": "account",
-                "path": "collateral_mint"
+                "path": "trader"
               }
             ]
           }
-        },
-        {
-          "name": "token_program",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
         {
           "name": "system_program",
@@ -420,56 +387,30 @@
           "optional": true
         },
         {
-          "name": "collateral_mint"
-        },
-        {
-          "name": "owner_collateral",
-          "writable": true
-        },
-        {
-          "name": "vault_authority",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  118,
-                  97,
-                  117,
-                  108,
-                  116,
-                  45,
-                  97,
-                  117,
-                  116,
-                  104,
-                  111,
-                  114,
-                  105,
-                  116,
-                  121
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "market"
-              }
-            ]
-          }
-        },
-        {
-          "name": "market_vault",
+          "name": "trader_balance",
+          "docs": [
+            "Canonical ledger receiving the released collateral."
+          ],
           "writable": true,
           "pda": {
             "seeds": [
               {
                 "kind": "const",
                 "value": [
-                  118,
+                  116,
+                  114,
                   97,
-                  117,
+                  100,
+                  101,
+                  114,
+                  95,
+                  98,
+                  97,
                   108,
-                  116
+                  97,
+                  110,
+                  99,
+                  101
                 ]
               },
               {
@@ -478,14 +419,10 @@
               },
               {
                 "kind": "account",
-                "path": "collateral_mint"
+                "path": "owner"
               }
             ]
           }
-        },
-        {
-          "name": "token_program",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         }
       ],
       "args": [
@@ -614,6 +551,147 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "deposit",
+      "docs": [
+        "Deposits base or quote tokens and credits the caller's free balance."
+      ],
+      "discriminator": [
+        242,
+        35,
+        198,
+        137,
+        82,
+        225,
+        242,
+        182
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "market"
+        },
+        {
+          "name": "trader_balance",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  97,
+                  100,
+                  101,
+                  114,
+                  95,
+                  98,
+                  97,
+                  108,
+                  97,
+                  110,
+                  99,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "deposit_mint",
+          "docs": [
+            "Base or quote mint selected for this deposit."
+          ]
+        },
+        {
+          "name": "trader_token_account",
+          "docs": [
+            "Trader-owned source token account."
+          ],
+          "writable": true
+        },
+        {
+          "name": "vault_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116,
+                  45,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "market_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "account",
+                "path": "deposit_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
     },
     {
       "name": "disable_admin",
@@ -1063,6 +1141,81 @@
       "args": []
     },
     {
+      "name": "initialize_trader_balance",
+      "docs": [
+        "Creates the caller's canonical zeroed balance ledger for a market."
+      ],
+      "discriminator": [
+        239,
+        127,
+        244,
+        198,
+        200,
+        118,
+        31,
+        144
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "docs": [
+            "Trader owns this balance record and pays its rent."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "market",
+          "docs": [
+            "Market whose vaults will eventually back these balances."
+          ]
+        },
+        {
+          "name": "trader_balance",
+          "docs": [
+            "Exactly one balance account may exist per `(market, owner)` pair."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  97,
+                  100,
+                  101,
+                  114,
+                  95,
+                  98,
+                  97,
+                  108,
+                  97,
+                  110,
+                  99,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "insert_limit_order",
       "docs": [
         "Inserts an order at a new distinct sorted price level."
@@ -1151,59 +1304,30 @@
           }
         },
         {
-          "name": "collateral_mint",
+          "name": "trader_balance",
           "docs": [
-            "Mint selected as collateral: base for asks and quote for bids."
-          ]
-        },
-        {
-          "name": "trader_collateral",
-          "writable": true
-        },
-        {
-          "name": "vault_authority",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  118,
-                  97,
-                  117,
-                  108,
-                  116,
-                  45,
-                  97,
-                  117,
-                  116,
-                  104,
-                  111,
-                  114,
-                  105,
-                  116,
-                  121
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "market"
-              }
-            ]
-          }
-        },
-        {
-          "name": "market_vault",
+            "Canonical internal ledger that funds and collateralizes this order."
+          ],
           "writable": true,
           "pda": {
             "seeds": [
               {
                 "kind": "const",
                 "value": [
-                  118,
+                  116,
+                  114,
                   97,
-                  117,
+                  100,
+                  101,
+                  114,
+                  95,
+                  98,
+                  97,
                   108,
-                  116
+                  97,
+                  110,
+                  99,
+                  101
                 ]
               },
               {
@@ -1212,14 +1336,10 @@
               },
               {
                 "kind": "account",
-                "path": "collateral_mint"
+                "path": "trader"
               }
             ]
           }
-        },
-        {
-          "name": "token_program",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
         {
           "name": "system_program",
@@ -1404,6 +1524,146 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "withdraw",
+      "docs": [
+        "Withdraws free base or quote tokens to the caller's token account."
+      ],
+      "discriminator": [
+        183,
+        18,
+        70,
+        156,
+        148,
+        109,
+        161,
+        34
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "signer": true
+        },
+        {
+          "name": "market"
+        },
+        {
+          "name": "trader_balance",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  97,
+                  100,
+                  101,
+                  114,
+                  95,
+                  98,
+                  97,
+                  108,
+                  97,
+                  110,
+                  99,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "withdrawal_mint",
+          "docs": [
+            "Base or quote mint selected for withdrawal."
+          ]
+        },
+        {
+          "name": "owner_token_account",
+          "docs": [
+            "Trader-owned destination token account."
+          ],
+          "writable": true
+        },
+        {
+          "name": "vault_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116,
+                  45,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "market_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "account",
+                "path": "withdrawal_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
     }
   ],
   "accounts": [
@@ -1470,6 +1730,19 @@
         179,
         215,
         209
+      ]
+    },
+    {
+      "name": "TraderBalance",
+      "discriminator": [
+        114,
+        83,
+        182,
+        249,
+        168,
+        164,
+        211,
+        22
       ]
     }
   ],
@@ -1768,6 +2041,71 @@
       "code": 6058,
       "name": "InvalidPriceLevelAggregate",
       "msg": "Empty price level has a nonzero remaining quantity"
+    },
+    {
+      "code": 6059,
+      "name": "InvalidDepositAmount",
+      "msg": "Deposit amount must be greater than zero"
+    },
+    {
+      "code": 6060,
+      "name": "InvalidDepositMint",
+      "msg": "Deposit mint is neither the market base nor quote mint"
+    },
+    {
+      "code": 6061,
+      "name": "TraderBalanceMarketMismatch",
+      "msg": "Trader balance belongs to a different market"
+    },
+    {
+      "code": 6062,
+      "name": "TraderBalanceOwnerMismatch",
+      "msg": "Trader balance belongs to a different owner"
+    },
+    {
+      "code": 6063,
+      "name": "FreeBalanceOverflow",
+      "msg": "Free balance overflow"
+    },
+    {
+      "code": 6064,
+      "name": "LockedBalanceOverflow",
+      "msg": "Locked balance overflow"
+    },
+    {
+      "code": 6065,
+      "name": "LockedBalanceUnderflow",
+      "msg": "Locked balance underflow"
+    },
+    {
+      "code": 6066,
+      "name": "InsufficientDepositFunds",
+      "msg": "Insufficient token balance for deposit"
+    },
+    {
+      "code": 6067,
+      "name": "InvalidWithdrawalAmount",
+      "msg": "Withdrawal amount must be greater than zero"
+    },
+    {
+      "code": 6068,
+      "name": "InvalidWithdrawalMint",
+      "msg": "Withdrawal mint is neither the market base nor quote mint"
+    },
+    {
+      "code": 6069,
+      "name": "InsufficientFreeBalance",
+      "msg": "Insufficient free balance"
+    },
+    {
+      "code": 6070,
+      "name": "InvalidWithdrawalDestinationOwner",
+      "msg": "Withdrawal destination is not owned by the trader"
+    },
+    {
+      "code": 6071,
+      "name": "InsufficientVaultFunds",
+      "msg": "Market vault contains insufficient tokens"
     }
   ],
   "types": [
@@ -2155,6 +2493,72 @@
           }
         ]
       }
+    },
+    {
+      "name": "TraderBalance",
+      "docs": [
+        "Canonical internal balance ledger for one trader in one market.",
+        "",
+        "Tokens represented here physically remain in the market's SPL token vaults.",
+        "`free` balances can be withdrawn or committed to new orders.",
+        "`locked` balances collateralize currently open orders.",
+        "",
+        "There is exactly one account for each `(market, owner)` pair."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "docs": [
+              "Market whose vault assets back these balances."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "docs": [
+              "Wallet that owns this balance record."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "base_free",
+            "docs": [
+              "Base tokens available for withdrawal or new ask orders."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "base_locked",
+            "docs": [
+              "Base tokens reserved by open ask orders."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "quote_free",
+            "docs": [
+              "Quote tokens available for withdrawal or new bid orders."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "quote_locked",
+            "docs": [
+              "Quote tokens reserved by open bid orders."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump stored for future signer and validation logic."
+            ],
+            "type": "u8"
+          }
+        ]
+      }
     }
   ],
   "constants": [
@@ -2221,6 +2625,17 @@
       ],
       "type": "bytes",
       "value": "[112, 114, 111, 116, 111, 99, 111, 108, 95, 99, 111, 110, 102, 105, 103]"
+    },
+    {
+      "name": "TRADER_BALANCE_SEED",
+      "docs": [
+        "Seed for the canonical balance account belonging to one trader in one market.",
+        "",
+        "PDA:",
+        "[\"trader_balance\", market, trader]"
+      ],
+      "type": "bytes",
+      "value": "[116, 114, 97, 100, 101, 114, 95, 98, 97, 108, 97, 110, 99, 101]"
     },
     {
       "name": "VAULT_AUTHORITY_SEED",

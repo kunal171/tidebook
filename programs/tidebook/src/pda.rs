@@ -2,7 +2,10 @@
 
 use anchor_lang::prelude::Pubkey;
 
-use crate::{constants::PRICE_LEVEL_SEED, state::OrderSide};
+use crate::{
+    constants::{PRICE_LEVEL_SEED, TRADER_BALANCE_SEED},
+    state::OrderSide,
+};
 
 /// Derives the unique price-level PDA for one market, side, and price.
 ///
@@ -24,6 +27,21 @@ pub fn derive_price_level_pda(
             side.seed(),
             price_bytes.as_ref(),
         ],
+        program_id,
+    )
+}
+
+/// Derives the canonical balance account for one trader in one market.
+///
+/// Seeds:
+/// ["trader_balance", market, owner]
+pub fn derive_trader_balance_pda(
+    program_id: &Pubkey,
+    market: &Pubkey,
+    owner: &Pubkey,
+) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[TRADER_BALANCE_SEED, market.as_ref(), owner.as_ref()],
         program_id,
     )
 }
@@ -71,5 +89,45 @@ mod tests {
         let (second, _) = derive_price_level_pda(&crate::ID, &second_market, OrderSide::Bid, 100);
 
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn trader_balance_pda_is_deterministic() {
+        let program_id = Pubkey::new_unique();
+        let market = Pubkey::new_unique();
+        let owner = Pubkey::new_unique();
+
+        let first = derive_trader_balance_pda(&program_id, &market, &owner);
+        let second = derive_trader_balance_pda(&program_id, &market, &owner);
+
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn trader_balance_pda_changes_for_different_owners() {
+        let program_id = Pubkey::new_unique();
+        let market = Pubkey::new_unique();
+
+        let first_owner = Pubkey::new_unique();
+        let second_owner = Pubkey::new_unique();
+
+        let first = derive_trader_balance_pda(&program_id, &market, &first_owner);
+        let second = derive_trader_balance_pda(&program_id, &market, &second_owner);
+
+        assert_ne!(first.0, second.0);
+    }
+
+    #[test]
+    fn trader_balance_pda_changes_for_different_markets() {
+        let program_id = Pubkey::new_unique();
+        let owner = Pubkey::new_unique();
+
+        let first_market = Pubkey::new_unique();
+        let second_market = Pubkey::new_unique();
+
+        let first = derive_trader_balance_pda(&program_id, &first_market, &owner);
+        let second = derive_trader_balance_pda(&program_id, &second_market, &owner);
+
+        assert_ne!(first.0, second.0);
     }
 }

@@ -41,3 +41,10 @@ pub const VAULT_SEED: &[u8] = b"vault";
 /// Namespace for one active market-side-price queue.
 #[constant]
 pub const PRICE_LEVEL_SEED: &[u8] = b"price_level";
+
+/// Seed for the canonical balance account belonging to one trader in one market.
+///
+/// PDA:
+/// ["trader_balance", market, trader]
+#[constant]
+pub const TRADER_BALANCE_SEED: &[u8] = b"trader_balance";

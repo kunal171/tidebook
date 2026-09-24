@@ -4,12 +4,11 @@
 //! reciprocal links before the FIFO queue is mutated.
 
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Mint, Token, TokenAccount, TransferChecked};
 
 use crate::{
-    constants::{ORDER_SEED, PRICE_LEVEL_SEED, VAULT_AUTHORITY_SEED, VAULT_SEED},
+    constants::{ORDER_SEED, PRICE_LEVEL_SEED, TRADER_BALANCE_SEED},
     error::MarketError,
-    state::{Market, MarketStatus, Order, OrderSide, OrderStatus, PriceLevel},
+    state::{Market, MarketStatus, Order, OrderSide, OrderStatus, PriceLevel, TraderBalance},
 };
 
 #[derive(Accounts)]
@@ -69,42 +68,21 @@ pub struct AppendLimitOrder<'info> {
     )]
     pub previous_order: Account<'info, Order>,
 
-    /// Mint used as collateral: base for asks and quote for bids.
-    pub collateral_mint: Account<'info, Mint>,
-
-    #[account(
-        mut,
-        constraint = trader_collateral.owner == trader.key()
-            @ MarketError::InvalidCollateralOwner,
-        constraint = trader_collateral.mint == collateral_mint.key()
-            @ MarketError::InvalidCollateralMint
-    )]
-    pub trader_collateral: Account<'info, TokenAccount>,
-
-    /// CHECK: Canonical stateless authority of the market vaults.
-    #[account(
-        seeds = [
-            VAULT_AUTHORITY_SEED,
-            market.key().as_ref()
-        ],
-        bump
-    )]
-    pub vault_authority: UncheckedAccount<'info>,
-
+    /// Canonical internal ledger that funds and collateralizes this order.
     #[account(
         mut,
         seeds = [
-            VAULT_SEED,
+            TRADER_BALANCE_SEED,
             market.key().as_ref(),
-            collateral_mint.key().as_ref()
+            trader.key().as_ref(),
         ],
-        bump,
-        token::mint = collateral_mint,
-        token::authority = vault_authority
+        bump = trader_balance.bump,
+        constraint = trader_balance.market == market.key()
+            @ MarketError::TraderBalanceMarketMismatch,
+        constraint = trader_balance.owner == trader.key()
+            @ MarketError::TraderBalanceOwnerMismatch
     )]
-    pub market_vault: Account<'info, TokenAccount>,
-
-    pub token_program: Program<'info, Token>,
+    pub trader_balance: Account<'info, TraderBalance>,
 
     pub system_program: Program<'info, System>,
 }
@@ -148,26 +126,41 @@ pub fn handle_append_limit_order(
 
     require!(quote_notional > 0, MarketError::OrderNotionalTooSmall);
 
-    let (expected_mint, locked_collateral) = match side {
-        OrderSide::Ask => (market.base_mint, quantity),
+    let locked_collateral = match side {
+        OrderSide::Ask => quantity,
         OrderSide::Bid => {
-            let quote_amount = u64::try_from(quote_notional)
-                .map_err(|_| error!(MarketError::OrderNotionalOverflow))?;
-
-            (market.quote_mint, quote_amount)
+            u64::try_from(quote_notional).map_err(|_| error!(MarketError::OrderNotionalOverflow))?
         }
     };
 
-    require_keys_eq!(
-        ctx.accounts.collateral_mint.key(),
-        expected_mint,
-        MarketError::InvalidCollateralMint
-    );
-
-    require!(
-        ctx.accounts.trader_collateral.amount >= locked_collateral,
-        MarketError::InsufficientCollateral
-    );
+    // Reserving collateral is now an internal ledger transition. SPL tokens
+    // remain in the market vault until an explicit withdrawal.
+    let (next_free_balance, next_locked_balance) = match side {
+        OrderSide::Ask => (
+            ctx.accounts
+                .trader_balance
+                .base_free
+                .checked_sub(locked_collateral)
+                .ok_or(MarketError::InsufficientFreeBalance)?,
+            ctx.accounts
+                .trader_balance
+                .base_locked
+                .checked_add(locked_collateral)
+                .ok_or(MarketError::LockedBalanceOverflow)?,
+        ),
+        OrderSide::Bid => (
+            ctx.accounts
+                .trader_balance
+                .quote_free
+                .checked_sub(locked_collateral)
+                .ok_or(MarketError::InsufficientFreeBalance)?,
+            ctx.accounts
+                .trader_balance
+                .quote_locked
+                .checked_add(locked_collateral)
+                .ok_or(MarketError::LockedBalanceOverflow)?,
+        ),
+    };
 
     let next_order_id = market
         .next_order_id
@@ -193,19 +186,16 @@ pub fn handle_append_limit_order(
         .checked_add(1)
         .ok_or(MarketError::PriceLevelOrderCountOverflow)?;
 
-    token::transfer_checked(
-        CpiContext::new(
-            ctx.accounts.token_program.key(),
-            TransferChecked {
-                from: ctx.accounts.trader_collateral.to_account_info(),
-                mint: ctx.accounts.collateral_mint.to_account_info(),
-                to: ctx.accounts.market_vault.to_account_info(),
-                authority: ctx.accounts.trader.to_account_info(),
-            },
-        ),
-        locked_collateral,
-        ctx.accounts.collateral_mint.decimals,
-    )?;
+    match side {
+        OrderSide::Ask => {
+            ctx.accounts.trader_balance.base_free = next_free_balance;
+            ctx.accounts.trader_balance.base_locked = next_locked_balance;
+        }
+        OrderSide::Bid => {
+            ctx.accounts.trader_balance.quote_free = next_free_balance;
+            ctx.accounts.trader_balance.quote_locked = next_locked_balance;
+        }
+    }
 
     // Link the old tail to the new order.
     ctx.accounts.previous_order.next_order = Some(order_key);

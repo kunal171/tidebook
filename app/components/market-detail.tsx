@@ -17,6 +17,7 @@ import {
   decodeMarketStatus,
   deriveOrderPda,
   derivePriceLevelPda,
+  deriveTraderBalancePda,
   deriveVaultAuthorityPda,
   formatAtomicAmount,
   findOwnedTokenAccount,
@@ -29,6 +30,7 @@ import {
   TOKEN_PROGRAM_ID,
   type MarketAccount,
   type OrderSide,
+  type TraderBalanceAccount,
 } from "../lib/tidebook";
 import { AppHeader } from "./app-header";
 
@@ -68,6 +70,16 @@ export function MarketDetail({ address }: { address: string }) {
   const [price, setPrice] = useState("");
   const [quantity, setQuantity] = useState("");
   const [pending, setPending] = useState(false);
+  const [traderBalance, setTraderBalance] =
+    useState<TraderBalanceAccount | null>(null);
+  const [balanceLoading, setBalanceLoading] = useState(false);
+  const [balanceAsset, setBalanceAsset] = useState<"base" | "quote">("base");
+  const [balanceAmount, setBalanceAmount] = useState("");
+  const [balancePending, setBalancePending] = useState<
+    "initialize" | "deposit" | "withdraw" | null
+  >(null);
+  const [balanceError, setBalanceError] = useState<string | null>(null);
+  const [balanceSignature, setBalanceSignature] = useState<string | null>(null);
   const [lifecyclePending, setLifecyclePending] = useState<
     "pause" | "unpause" | "close" | null
   >(null);
@@ -94,6 +106,13 @@ export function MarketDetail({ address }: { address: string }) {
   const signedProgram = useMemo(
     () => (wallet ? getTidebookProgram(connection, wallet) : null),
     [connection, wallet],
+  );
+  const traderBalanceAddress = useMemo(
+    () =>
+      marketAddress && wallet
+        ? deriveTraderBalancePda(marketAddress, wallet.publicKey)
+        : null,
+    [marketAddress, wallet],
   );
   // Vault addresses are deterministic children of the market and mint, so the
   // UI can link to them without storing extra addresses in the Market account.
@@ -138,10 +157,135 @@ export function MarketDetail({ address }: { address: string }) {
     void loadMarket();
   }, [loadMarket]);
 
+  const loadTraderBalance = useCallback(async () => {
+    if (!traderBalanceAddress) {
+      setTraderBalance(null);
+      return;
+    }
+
+    setBalanceLoading(true);
+    setBalanceError(null);
+    try {
+      const account = await getTidebookAccounts(
+        readProgram,
+      ).traderBalance.fetchNullable(traderBalanceAddress);
+      setTraderBalance(account);
+    } catch (cause) {
+      setBalanceError(getErrorMessage(cause));
+    } finally {
+      setBalanceLoading(false);
+    }
+  }, [readProgram, traderBalanceAddress]);
+
+  useEffect(() => {
+    void loadTraderBalance();
+  }, [loadTraderBalance]);
+
+  const initializeBalance = async () => {
+    if (!signedProgram || !wallet || !marketAddress || !traderBalanceAddress) {
+      return;
+    }
+
+    setBalancePending("initialize");
+    setBalanceError(null);
+    setBalanceSignature(null);
+    try {
+      const signature = await signedProgram.methods
+        .initializeTraderBalance()
+        .accounts({
+          owner: wallet.publicKey,
+          market: marketAddress,
+          traderBalance: traderBalanceAddress,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+      setBalanceSignature(signature);
+      await loadTraderBalance();
+    } catch (cause) {
+      setBalanceError(getErrorMessage(cause));
+    } finally {
+      setBalancePending(null);
+    }
+  };
+
+  const transferBalance = async (action: "deposit" | "withdraw") => {
+    if (
+      !signedProgram ||
+      !wallet ||
+      !marketAddress ||
+      !market ||
+      !traderBalanceAddress ||
+      !traderBalance
+    ) {
+      return;
+    }
+
+    setBalancePending(action);
+    setBalanceError(null);
+    setBalanceSignature(null);
+    try {
+      const amount = parsePositiveU64(balanceAmount, "Amount");
+      const mint = balanceAsset === "base" ? market.baseMint : market.quoteMint;
+      const tokenAccount = await findOwnedTokenAccount(
+        connection,
+        wallet.publicKey,
+        mint,
+        action === "deposit" ? amount : new BN(0),
+      );
+      const vaultAuthority = deriveVaultAuthorityPda(marketAddress);
+      const marketVault = deriveVaultPda(marketAddress, mint);
+
+      const signature =
+        action === "deposit"
+          ? await signedProgram.methods
+              .deposit(amount)
+              .accounts({
+                owner: wallet.publicKey,
+                market: marketAddress,
+                traderBalance: traderBalanceAddress,
+                depositMint: mint,
+                traderTokenAccount: tokenAccount,
+                vaultAuthority,
+                marketVault,
+                tokenProgram: TOKEN_PROGRAM_ID,
+              })
+              .rpc()
+          : await signedProgram.methods
+              .withdraw(amount)
+              .accounts({
+                owner: wallet.publicKey,
+                market: marketAddress,
+                traderBalance: traderBalanceAddress,
+                withdrawalMint: mint,
+                ownerTokenAccount: tokenAccount,
+                vaultAuthority,
+                marketVault,
+                tokenProgram: TOKEN_PROGRAM_ID,
+              })
+              .rpc();
+
+      setBalanceAmount("");
+      setBalanceSignature(signature);
+      await loadTraderBalance();
+    } catch (cause) {
+      setBalanceError(getErrorMessage(cause));
+    } finally {
+      setBalancePending(null);
+    }
+  };
+
   const placeOrder = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
-    if (!signedProgram || !wallet || !marketAddress || !market) return;
+    if (
+      !signedProgram ||
+      !wallet ||
+      !marketAddress ||
+      !market ||
+      !traderBalanceAddress
+    ) {
+      return;
+    }
 
     setPending(true);
     setError(null);
@@ -150,6 +294,9 @@ export function MarketDetail({ address }: { address: string }) {
     try {
       if (decodeMarketStatus(market.status) !== "active") {
         throw new Error("This market is paused and cannot accept new orders");
+      }
+      if (!traderBalance) {
+        throw new Error("Initialize and fund your market balance first");
       }
 
       const rawPrice = parsePositiveU64(price, "Price");
@@ -168,20 +315,18 @@ export function MarketDetail({ address }: { address: string }) {
 
       const order = deriveOrderPda(marketAddress, market.nextOrderId);
       const orderSide = side === "bid" ? { bid: {} } : { ask: {} };
-      const collateralMint = side === "bid" ? market.quoteMint : market.baseMint;
       const baseScale = new BN(10).pow(new BN(market.baseDecimals));
       const collateralAmount =
         side === "bid"
           ? rawPrice.mul(rawQuantity).div(baseScale)
           : rawQuantity;
-      const traderCollateral = await findOwnedTokenAccount(
-        connection,
-        wallet.publicKey,
-        collateralMint,
-        collateralAmount,
-      );
-      const vaultAuthority = deriveVaultAuthorityPda(marketAddress);
-      const marketVault = deriveVaultPda(marketAddress, collateralMint);
+      const availableBalance =
+        side === "bid" ? traderBalance.quoteFree : traderBalance.baseFree;
+      if (availableBalance.lt(collateralAmount)) {
+        throw new Error(
+          `Insufficient free ${side === "bid" ? "quote" : "base"} balance`,
+        );
+      }
 
       const priceLevel = derivePriceLevelPda(
         marketAddress,
@@ -207,11 +352,7 @@ export function MarketDetail({ address }: { address: string }) {
             order,
             priceLevel,
             previousOrder: priceLevelState.lastOrder,
-            collateralMint,
-            traderCollateral,
-            vaultAuthority,
-            marketVault,
-            tokenProgram: TOKEN_PROGRAM_ID,
+            traderBalance: traderBalanceAddress,
             systemProgram: SystemProgram.programId,
           })
           .rpc();
@@ -232,11 +373,7 @@ export function MarketDetail({ address }: { address: string }) {
             market: marketAddress,
             order,
             priceLevel,
-            collateralMint,
-            traderCollateral,
-            vaultAuthority,
-            marketVault,
-            tokenProgram: TOKEN_PROGRAM_ID,
+            traderBalance: traderBalanceAddress,
             systemProgram: SystemProgram.programId,
             betterLevel: betterLevel ?? signedProgram.programId,
             worseLevel: worseLevel ?? signedProgram.programId,
@@ -247,7 +384,7 @@ export function MarketDetail({ address }: { address: string }) {
       setResult({ signature, order });
       setPrice("");
       setQuantity("");
-      await loadMarket();
+      await Promise.all([loadMarket(), loadTraderBalance()]);
     } catch (cause) {
       setError(getErrorMessage(cause));
     } finally {
@@ -548,6 +685,12 @@ export function MarketDetail({ address }: { address: string }) {
 
                 {status === "active" && wallet && (
                   <form className="market-create-form" onSubmit={placeOrder}>
+                    {!traderBalance && !balanceLoading && (
+                      <div className="market-order-notice">
+                        Initialize your market balance below before placing an
+                        order.
+                      </div>
+                    )}
                     <label>
                       Side
                       <select
@@ -596,7 +739,12 @@ export function MarketDetail({ address }: { address: string }) {
                     <button
                       className="primary-button"
                       type="submit"
-                      disabled={!price.trim() || !quantity.trim() || pending}
+                      disabled={
+                        !traderBalance ||
+                        !price.trim() ||
+                        !quantity.trim() ||
+                        pending
+                      }
                     >
                       {pending ? "Placing order…" : `Place ${side}`}
                     </button>
@@ -607,6 +755,144 @@ export function MarketDetail({ address }: { address: string }) {
                 )}
               </section>
             </div>
+
+            {wallet && (
+              <section className="admin-card market-balance-card">
+                <div className="admin-list-heading">
+                  <div>
+                    <div className="card-label">Internal balance</div>
+                    <h2>Fund this market</h2>
+                  </div>
+                  <button
+                    className="text-button"
+                    type="button"
+                    disabled={balanceLoading || balancePending !== null}
+                    onClick={() => void loadTraderBalance()}
+                  >
+                    {balanceLoading ? "Refreshing…" : "Refresh"}
+                  </button>
+                </div>
+
+                {!balanceLoading && !traderBalance && (
+                  <div className="balance-initialize">
+                    <p>
+                      Create one balance ledger for this wallet and market.
+                      This does not move tokens.
+                    </p>
+                    <button
+                      className="primary-button"
+                      type="button"
+                      disabled={balancePending !== null}
+                      onClick={() => void initializeBalance()}
+                    >
+                      {balancePending === "initialize"
+                        ? "Initializing…"
+                        : "Initialize balance"}
+                    </button>
+                  </div>
+                )}
+
+                {traderBalance && (
+                  <>
+                    <dl className="market-metadata balance-metadata">
+                      <div>
+                        <dt>Base free</dt>
+                        <dd>{traderBalance.baseFree.toString()}</dd>
+                      </div>
+                      <div>
+                        <dt>Base locked</dt>
+                        <dd>{traderBalance.baseLocked.toString()}</dd>
+                      </div>
+                      <div>
+                        <dt>Quote free</dt>
+                        <dd>{traderBalance.quoteFree.toString()}</dd>
+                      </div>
+                      <div>
+                        <dt>Quote locked</dt>
+                        <dd>{traderBalance.quoteLocked.toString()}</dd>
+                      </div>
+                    </dl>
+
+                    <form
+                      className="market-create-form balance-form"
+                      onSubmit={(event) => event.preventDefault()}
+                    >
+                      <label>
+                        Asset
+                        <select
+                          value={balanceAsset}
+                          onChange={(event) =>
+                            setBalanceAsset(
+                              event.target.value as "base" | "quote",
+                            )
+                          }
+                        >
+                          <option value="base">Base token</option>
+                          <option value="quote">Quote token</option>
+                        </select>
+                      </label>
+                      <label>
+                        Raw amount
+                        <input
+                          inputMode="numeric"
+                          value={balanceAmount}
+                          onChange={(event) =>
+                            setBalanceAmount(event.target.value)
+                          }
+                          placeholder="1000"
+                          autoComplete="off"
+                        />
+                      </label>
+                      <div className="balance-actions">
+                        <button
+                          className="primary-button"
+                          type="button"
+                          disabled={!balanceAmount.trim() || balancePending !== null}
+                          onClick={() => void transferBalance("deposit")}
+                        >
+                          {balancePending === "deposit"
+                            ? "Depositing…"
+                            : "Deposit"}
+                        </button>
+                        <button
+                          className="admin-action-button"
+                          type="button"
+                          disabled={!balanceAmount.trim() || balancePending !== null}
+                          onClick={() => void transferBalance("withdraw")}
+                        >
+                          {balancePending === "withdraw"
+                            ? "Withdrawing…"
+                            : "Withdraw free balance"}
+                        </button>
+                      </div>
+                      <small>
+                        Orders move free balance to locked balance. Cancellation
+                        releases it back to free; only withdrawal moves tokens
+                        back to your wallet.
+                      </small>
+                    </form>
+                  </>
+                )}
+
+                {balanceError && (
+                  <div className="transaction-message transaction-error">
+                    {balanceError}
+                  </div>
+                )}
+                {balanceSignature && (
+                  <div className="transaction-message transaction-success">
+                    Balance updated. {" "}
+                    <a
+                      href={transactionExplorerUrl(balanceSignature)}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      View transaction ↗
+                    </a>
+                  </div>
+                )}
+              </section>
+            )}
           </>
         )}
 

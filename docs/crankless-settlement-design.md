@@ -357,10 +357,10 @@ compatible in place.
 The safe order is:
 
 1. finish and test price-level/FIFO maintenance without matching;
-2. specify and add `TraderBalance` accounts;
-3. add atomic deposits and withdrawals;
-4. move placement and cancellation collateral accounting through free/locked
-   balances;
+2. ~~specify and add `TraderBalance` accounts;~~
+3. ~~add atomic deposits and withdrawals;~~
+4. ~~move placement and cancellation collateral accounting through free/locked
+   balances;~~
 5. define the exact bounded matching account contract and remainder policy;
 6. add one-fill tests before multi-fill behavior;
 7. add partial-fill, multi-level, stale-path, rollback, and conservation tests;
