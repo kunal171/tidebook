@@ -13,14 +13,15 @@ The current implementation establishes the account and authorization foundation:
 - pause, unpause, and close a market under authority control;
 - create deterministic limit-order accounts while atomically locking collateral;
 - create canonical price levels at the best, middle, or worst position on each
-  side, and append same-price orders behind a validated FIFO tail;
+  side, append same-price orders behind a validated FIFO tail, and unlink
+  canceled orders and empty levels atomically;
 - validate behavior with in-process LiteSVM integration tests.
 
-The program does **not** yet unlink indexed
-orders during cancellation, match opposing orders, or settle trades. Orders
-hold collateral in market vaults, and canceling an open order refunds its entire
-locked amount to an owner-controlled token account. Price-level data must be
-treated as research-stage until cancellation maintains the same index.
+The program does **not** yet match opposing orders, partially fill them, or
+settle trades. Orders hold collateral in market vaults, and canceling an open
+order refunds its remaining locked amount while repairing the FIFO queue and
+sorted level index. Final-order cancellation unlinks and closes the empty level
+before the transaction completes.
 
 ## 2. System context
 
@@ -69,8 +70,10 @@ refresh. The browser walk is O(number of price levels); a production indexer
 can replace it later without changing the program's neighbor-account contract.
 
 The orders page filters program accounts by owner, displays locked collateral,
-returns it to an owned token account during cancellation, and refreshes after
-confirmation.
+and refreshes after confirmation. For cancellation it fetches the live level,
+supplies the order FIFO neighbors, and, only for a final-order removal, derives
+the better/worse level PDAs and supplies the recorded rent payer. These accounts
+are transaction-building hints; the program revalidates every link atomically.
 
 Route visibility is a user-interface concern, not an authorization boundary.
 Every privileged action must also be constrained by the Anchor program because
@@ -187,9 +190,12 @@ seeds = ["price_level", market, side_seed, price.to_le_bytes()]
 
 A level stores its market, side, price, optional better/worse price links,
 FIFO head and tail orders, aggregate remaining quantity, order count, rent
-payer, and canonical bump. The first-level creation path initializes the queue
-with one order. `append_limit_order` validates the current tail and atomically
-links a second same-price order behind it.
+payer, and canonical bump. Insertion splices a new level at the empty, best,
+middle, or worst position. Append validates the current tail before extending
+the same-price FIFO queue. Cancellation removes an order in O(1) from supplied
+reciprocal neighbors; when it removes the final order, the program repairs the
+level list, advances the market best pointer when required, returns rent to the
+stored payer, and closes the level.
 
 ## 4. Instruction architecture
 
@@ -206,7 +212,7 @@ links a second same-price order behind it.
 | `close_market` | Market authority | Market is paused; `open_order_count` is zero; both canonical vaults are empty | Closes both vaults and the market atomically, returning their rent to the authority |
 | `insert_limit_order` | Trader | Market is active; grid and collateral checks pass; supplied optional neighbors are canonical, correctly ordered, and reciprocal | Atomically transfers collateral, creates a new level and its first order, splices it at the empty, best, middle, or worst position, updates the best pointer when required, and increments counters |
 | `append_limit_order` | Trader | Existing level is canonical for market/side/price; supplied previous order is its open tail with no successor; collateral validation matches placement | Atomically transfers collateral, creates an order, links it behind the tail, and updates level aggregates and market counters |
-| `cancel_limit_order` | Order owner | Order belongs to the supplied market and signer; status is `Open`; refund account belongs to the owner and uses the side's collateral mint; vault is canonical | Refunds `locked_collateral`, sets it to zero, and transitions `Open -> Canceled` even while paused |
+| `cancel_limit_order` | Order owner | Order, level, FIFO neighbors, and optional level neighbors are canonical and reciprocal; status is `Open`; refund account and vault match the side | Refunds collateral and unlinks the order; final removal repairs best/adjacent levels, closes the empty level to its stored rent payer, and transitions `Open -> Canceled` even while paused |
 
 ### Market initialization flow
 
@@ -306,21 +312,28 @@ Order owner
    |
    | cancel_limit_order(order_id)
    v
-Validate ownership + Open status
-   |-- bid selects quote mint and quote vault
-   |-- ask selects base mint and base vault
-   |-- destination belongs to the order owner
-   |-- vault matches ["vault", market, collateral mint]
+Validate ownership + Open status + canonical level
+   |-- supplied FIFO neighbors exactly match and link back
+   |-- bid selects quote vault; ask selects base vault
+   |-- refund destination belongs to the order owner
    v
-Vault-authority PDA signs the collateral refund
+Compute checked market and level aggregate decrements
+   |
+   |-- level remains non-empty: splice previous <-> next
+   `-- final order: validate better/worse levels + rent payer
+                     repair adjacent links and market best
+                     close the empty level
+   v
+Vault-authority PDA refunds remaining collateral
    |
    v
-Set locked_collateral = 0 and status = Canceled
+Clear order links, quantity, and collateral; set Canceled
 ```
 
 Cancellation deliberately has no active-market requirement, preserving the
-owner's exit path while a market is paused. Transfer and state changes are one
-atomic transaction, so a failed refund leaves the order open and funded.
+owner's exit path while a market is paused. The refund, queue repair, aggregate
+updates, best-pointer update, and conditional level closure are one transaction;
+any failed validation or CPI rolls the complete transition back.
 
 ### Safe market shutdown flow
 
@@ -413,18 +426,24 @@ The program currently enforces:
     successor.
 36. FIFO tail linking, level aggregates, collateral transfer, and market
     counters are updated atomically.
+37. Cancellation accepts only the exact stored FIFO neighbors with reciprocal
+    links to the removed order.
+38. Cancellation decrements level quantity/count and market open-order count
+    with checked arithmetic in the same transaction as the collateral refund.
+39. A final-order cancellation accepts only canonical reciprocal level
+    neighbors, repairs them, and closes the now-empty level to its rent payer.
+40. Removing a best level advances `best_bid` or `best_ask` to its worse
+    neighbor; removing the only level clears the corresponding pointer.
+41. Empty price levels never remain in the active sorted index.
 
 ## 6. Known architectural gaps
 
 These are planned features, not defects in the current research milestone:
 
-
-- Cancellation does not yet unlink orders, update aggregates, or close an empty
-  level; price-level state can therefore be stale after cancellation.
 - No matching engine or partial-fill transitions.
 - No settlement or fee accounting.
-- Best-price pointers do not yet advance between sorted levels.
-- Order accounts are not currently closed or reclaimed.
+- Canceled order accounts are retained as history and their rent is not yet
+  reclaimed.
 
 ## 7. Test architecture
 
@@ -443,7 +462,7 @@ The test harness:
 5. sends transactions through LiteSVM;
 6. deserializes resulting Anchor accounts and checks state.
 
-The 79-test suite currently covers:
+The 87-test suite currently covers:
 
 - upgrade-authority-only, one-time protocol initialization;
 - creation of the deployer's config and active admin record;
@@ -478,6 +497,11 @@ The 79-test suite currently covers:
 - rejection of wrong refund mints, owners, markets, and vaults;
 - atomic preservation of locked collateral after failed cancellation;
 - prevention of repeated cancellation and duplicate refunds;
+- head, middle, tail, and only-order FIFO removal with reciprocal-link repair;
+- checked level count and aggregate quantity decrements;
+- best, middle, and worst price-level unlinking with best-pointer advancement;
+- empty-level closure and rent return to the recorded payer;
+- atomic rejection when a required FIFO or price-level neighbor is omitted;
 - rejection of market closure while active or controlled by another signer;
 - rejection of shutdown with open bids, open asks, or residual vault balances;
 - rejection of noncanonical base and quote vaults during shutdown;
@@ -519,7 +543,7 @@ will not represent deferred settlement work.
 The recommended implementation order is:
 
 1. ~~Add sorted multi-price insertion.~~
-2. Add indexed cancellation/removal.
+2. <del>Add indexed cancellation/removal.</del>
 3. Add canonical per-market trader balances and atomic deposit/withdrawal.
 4. Route order collateral through free and locked balance accounting.
 5. Implement bounded deterministic matching and atomic ledger settlement.

@@ -24,7 +24,8 @@ npm run build
 - Create markets as an active protocol administrator.
 - Place collateralized bid and ask limit orders from owned token accounts,
   including empty, best, middle, worst, and same-price FIFO insertion paths.
-- List wallet-owned orders and cancel them, including while a market is paused.
+- List wallet-owned orders and cancel them, including while a market is paused;
+  cancellation repairs FIFO and price-level links and closes empty levels.
 - Pause, unpause, and safely close markets as their authority.
 - Manage protocol administrators as the super-admin.
 
