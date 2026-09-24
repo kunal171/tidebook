@@ -20,6 +20,7 @@ import {
   deriveVaultAuthorityPda,
   formatAtomicAmount,
   findOwnedTokenAccount,
+  findPriceLevelNeighbors,
   getTidebookAccounts,
   getTidebookProgram,
   getTidebookReadProgram,
@@ -216,26 +217,13 @@ export function MarketDetail({ address }: { address: string }) {
           .rpc();
       } else {
         const currentBest = side === "bid" ? market.bestBid : market.bestAsk;
-        let worseLevel: PublicKey | null = null;
-
-        if (currentBest) {
-          const becomesBest =
-            side === "bid"
-              ? rawPrice.gt(currentBest)
-              : rawPrice.lt(currentBest);
-
-          if (!becomesBest) {
-            throw new Error(
-              "This price needs middle or worst level insertion, which is the next order-book milestone",
-            );
-          }
-
-          worseLevel = derivePriceLevelPda(
-            marketAddress,
-            side,
-            currentBest,
-          );
-        }
+        const { betterLevel, worseLevel } = await findPriceLevelNeighbors(
+          signedProgram,
+          marketAddress,
+          side,
+          rawPrice,
+          currentBest,
+        );
 
         signature = await signedProgram.methods
           .insertLimitOrder(orderSide, rawPrice, rawQuantity)
@@ -250,7 +238,7 @@ export function MarketDetail({ address }: { address: string }) {
             marketVault,
             tokenProgram: TOKEN_PROGRAM_ID,
             systemProgram: SystemProgram.programId,
-            betterLevel: signedProgram.programId,
+            betterLevel: betterLevel ?? signedProgram.programId,
             worseLevel: worseLevel ?? signedProgram.programId,
           })
           .rpc();

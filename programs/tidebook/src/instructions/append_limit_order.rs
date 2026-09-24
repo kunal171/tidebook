@@ -127,12 +127,12 @@ pub fn handle_append_limit_order(
     let market = &ctx.accounts.market;
 
     require!(
-        price % market.price_tick_size == 0,
+        price.is_multiple_of(market.price_tick_size),
         MarketError::PriceNotOnTick
     );
 
     require!(
-        quantity % market.quantity_lot_size == 0,
+        quantity.is_multiple_of(market.quantity_lot_size),
         MarketError::QuantityNotOnLot
     );
 

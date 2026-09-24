@@ -1138,7 +1138,10 @@
         {
           "name": "better_level",
           "docs": [
-            "Adjacent level with higher matching priority, or `None` for a new best."
+            "Adjacent level with higher matching priority, or `None` at the best edge.",
+            "",
+            "Optional accounts cannot carry a static seed constraint for every",
+            "insertion shape, so the handler derives and checks their PDAs manually."
           ],
           "writable": true,
           "optional": true
@@ -1146,7 +1149,7 @@
         {
           "name": "worse_level",
           "docs": [
-            "Adjacent level with lower matching priority, or `None` for a new worst."
+            "Adjacent level with lower matching priority, or `None` at the worst edge."
           ],
           "writable": true,
           "optional": true
@@ -1578,66 +1581,61 @@
     },
     {
       "code": 6039,
-      "name": "PriceLevelInsertionNotImplemented",
-      "msg": "Middle and new-worst price-level insertion is not implemented"
-    },
-    {
-      "code": 6040,
       "name": "PriceLevelMarketMismatch",
       "msg": "Price level belongs to a different market"
     },
     {
-      "code": 6041,
+      "code": 6040,
       "name": "PriceLevelSideMismatch",
       "msg": "Price-level side does not match the order side"
     },
     {
-      "code": 6042,
+      "code": 6041,
       "name": "PriceLevelPriceMismatch",
       "msg": "Price-level price does not match the order price"
     },
     {
-      "code": 6043,
+      "code": 6042,
       "name": "InvalidPriceLevelTail",
       "msg": "Supplied order is not the current price-level tail"
     },
     {
-      "code": 6044,
+      "code": 6043,
       "name": "OrderPriceLevelMismatch",
       "msg": "Order does not belong to the supplied price level"
     },
     {
-      "code": 6045,
+      "code": 6044,
       "name": "PriceLevelOrderCountOverflow",
       "msg": "Price-level order count overflow"
     },
     {
-      "code": 6046,
+      "code": 6045,
       "name": "PriceLevelQuantityOverflow",
       "msg": "Price-level quantity overflow"
     },
     {
-      "code": 6047,
+      "code": 6046,
       "name": "OrderIdOverflow",
       "msg": "Order ID counter overflow"
     },
     {
-      "code": 6048,
+      "code": 6047,
       "name": "InvalidPriceLevelNeighbors",
       "msg": "Invalid combination of better and worse price-level neighbors"
     },
     {
-      "code": 6049,
+      "code": 6048,
       "name": "BestPriceLevelMismatch",
       "msg": "Supplied level is not the market's current best level"
     },
     {
-      "code": 6050,
+      "code": 6049,
       "name": "InvalidPriceLevelOrdering",
       "msg": "New price does not have better priority than the current best price"
     },
     {
-      "code": 6051,
+      "code": 6050,
       "name": "NoncanonicalPriceLevel",
       "msg": "Supplied price-level account is not canonical"
     }

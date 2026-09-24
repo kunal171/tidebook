@@ -12,12 +12,11 @@ The current implementation establishes the account and authorization foundation:
 - create one deterministic market for a distinct SPL base/quote mint pair;
 - pause, unpause, and close a market under authority control;
 - create deterministic limit-order accounts while atomically locking collateral;
-- create the first canonical price level on each side, insert a better-priced
-  level ahead of the current best, and append a same-price order behind a
-  validated FIFO tail;
+- create canonical price levels at the best, middle, or worst position on each
+  side, and append same-price orders behind a validated FIFO tail;
 - validate behavior with in-process LiteSVM integration tests.
 
-The program does **not** yet insert middle or worst prices, unlink indexed
+The program does **not** yet unlink indexed
 orders during cancellation, match opposing orders, or settle trades. Orders
 hold collateral in market vaults, and canceling an open order refunds its entire
 locked amount to an owner-controlled token account. Price-level data must be
@@ -56,9 +55,22 @@ active on-chain record. Role-aware routes are:
 | `/orders` | Any connected wallet | List wallet-owned orders and cancel orders whose status is `Open` |
 
 The order form discovers a wallet-owned token account for the required mint and
-passes the canonical vault accounts to the program. The orders page filters
-program accounts by owner, displays locked collateral, returns it to an owned
-token account during cancellation, and refreshes after confirmation.
+passes the canonical vault accounts to the program. When the target price level
+already exists, the client appends behind its FIFO tail. Otherwise, it walks
+from the market's best price through `worse_price` links to find the exact
+better/worse insertion gap. The walk checks for cycles, broken reciprocal links,
+wrong markets or sides, and invalid price ordering before submitting.
+
+This RPC traversal is only an advisory transaction-building step. The linked
+book can change between reads and confirmation, so the on-chain instruction
+derives every PDA and revalidates the neighboring prices and reciprocal links
+atomically. A stale client transaction fails safely and can be retried after a
+refresh. The browser walk is O(number of price levels); a production indexer
+can replace it later without changing the program's neighbor-account contract.
+
+The orders page filters program accounts by owner, displays locked collateral,
+returns it to an owned token account during cancellation, and refreshes after
+confirmation.
 
 Route visibility is a user-interface concern, not an authorization boundary.
 Every privileged action must also be constrained by the Anchor program because
@@ -192,7 +204,7 @@ links a second same-price order behind it.
 | `pause_market` | Market authority | `has_one = authority`; market is active | `Active -> Paused` |
 | `unpause_market` | Market authority | `has_one = authority`; market is paused | `Paused -> Active` |
 | `close_market` | Market authority | Market is paused; `open_order_count` is zero; both canonical vaults are empty | Closes both vaults and the market atomically, returning their rent to the authority |
-| `insert_limit_order` | Trader | Market is active; price and quantity are aligned; collateral accounts are canonical and funded; either the side is empty with no neighbors, or the supplied worse level is the canonical current best and the new price is better | Atomically transfers collateral, creates a new level and its first order, links a previous best when present, updates the best-price pointer, and increments counters |
+| `insert_limit_order` | Trader | Market is active; grid and collateral checks pass; supplied optional neighbors are canonical, correctly ordered, and reciprocal | Atomically transfers collateral, creates a new level and its first order, splices it at the empty, best, middle, or worst position, updates the best pointer when required, and increments counters |
 | `append_limit_order` | Trader | Existing level is canonical for market/side/price; supplied previous order is its open tail with no successor; collateral validation matches placement | Atomically transfers collateral, creates an order, links it behind the tail, and updates level aggregates and market counters |
 | `cancel_limit_order` | Order owner | Order belongs to the supplied market and signer; status is `Open`; refund account belongs to the owner and uses the side's collateral mint; vault is canonical | Refunds `locked_collateral`, sets it to zero, and transitions `Open -> Canceled` even while paused |
 
@@ -229,9 +241,10 @@ Trader
    v
 Validate active Market + nonzero values
    |-- empty side requires better = None and worse = None
-   |-- non-empty side currently requires better = None
-   |-- supplied worse level must be the canonical current best
-   |-- new bid must be higher; new ask must be lower
+   |-- new best: worse is the canonical current best
+   |-- middle: better and worse link reciprocally
+   |-- new worst: better has no worse successor
+   |-- bid prices descend; ask prices ascend
    |-- price % price_tick_size == 0
    |-- quantity % quantity_lot_size == 0
    |-- checked quote notional > 0
@@ -245,7 +258,7 @@ Validate active Market + nonzero values
 Transfer collateral into the canonical market vault
    |
    v
-Initialize PriceLevel PDA; link the prior best when present
+Initialize PriceLevel PDA; splice both supplied neighbors
    |
    v
 Create Order PDA as Open and record locked_collateral
@@ -394,8 +407,8 @@ The program currently enforces:
     created atomically with its first order.
 33. Empty-side insertion requires no neighbors; new-best insertion on a non-empty
     side requires the canonical previous best as its worse neighbor.
-34. Middle and new-worst insertion remain rejected until both-neighbor and
-    terminal-link validation are implemented.
+34. Middle insertion requires reciprocal adjacent neighbors and strict price
+    ordering; new-worst insertion requires the terminal better level.
 35. An existing-level append accepts only the level's open tail with no newer
     successor.
 36. FIFO tail linking, level aggregates, collateral transfer, and market
@@ -405,8 +418,7 @@ The program currently enforces:
 
 These are planned features, not defects in the current research milestone:
 
-- New-best insertion is implemented; middle and new-worst insertion are not yet
-  implemented.
+
 - Cancellation does not yet unlink orders, update aggregates, or close an empty
   level; price-level state can therefore be stale after cancellation.
 - No matching engine or partial-fill transitions.
@@ -431,7 +443,7 @@ The test harness:
 5. sends transactions through LiteSVM;
 6. deserializes resulting Anchor accounts and checks state.
 
-The 73-test suite currently covers:
+The 79-test suite currently covers:
 
 - upgrade-authority-only, one-time protocol initialization;
 - creation of the deployer's config and active admin record;
@@ -474,7 +486,9 @@ The 73-test suite currently covers:
 - deterministic price-level derivation, side separation, and account sizing;
 - first bid and first ask price-level creation and best-pointer initialization;
 - empty-side bid and ask insertion with no neighbors, plus atomic rejection of an unexpected neighbor;
-- new-best bid and ask insertion with reciprocal links to previous bests;
+- new-best, middle, and new-worst insertion for bids and asks;
+- atomic rejection of nonadjacent, nonterminal, wrongly ordered, wrong-side,
+  wrong-market, stale-best, and noncanonical neighbor hints;
 - rejection of a missing current-best neighbor on a non-empty side;
 - same-price bid and ask FIFO append, reciprocal links, aggregates, and market
   counters;
@@ -504,12 +518,13 @@ will not represent deferred settlement work.
 
 The recommended implementation order is:
 
-1. Add sorted multi-price insertion and indexed cancellation/removal.
-2. Add canonical per-market trader balances and atomic deposit/withdrawal.
-3. Route order collateral through free and locked balance accounting.
-4. Implement bounded deterministic matching and atomic ledger settlement.
-5. Add partial fills, remainder policy, fees, and conservation tests.
-6. Add order cleanup and rent-reclamation rules.
+1. ~~Add sorted multi-price insertion.~~
+2. Add indexed cancellation/removal.
+3. Add canonical per-market trader balances and atomic deposit/withdrawal.
+4. Route order collateral through free and locked balance accounting.
+5. Implement bounded deterministic matching and atomic ledger settlement.
+6. Add partial fills, remainder policy, fees, and conservation tests.
+7. Add order cleanup and rent-reclamation rules.
 
 Each phase should add its invariants and failure-path tests before the next
 state transition is introduced.

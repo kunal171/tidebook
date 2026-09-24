@@ -1,6 +1,11 @@
 //! LiteSVM integration coverage for owner-authorized order cancellation and
 //! collateral refunds, including cancellation while a market is paused.
 
+// LiteSVM intentionally returns rich transaction-failure metadata. Boxing it in
+// every test helper would add indirection without reducing production account or
+// instruction size, so this integration-test boundary permits the large error.
+#![allow(clippy::result_large_err)]
+
 use {
     anchor_lang::{
         prelude::Pubkey,
