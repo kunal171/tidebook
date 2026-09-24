@@ -9,7 +9,7 @@ use {
     anchor_lang::{
         prelude::Pubkey,
         solana_program::{instruction::Instruction, program_pack::Pack, system_program},
-        AccountDeserialize, AccountSerialize, InstructionData, ToAccountMetas,
+        AccountDeserialize, AccountSerialize, InstructionData, Space, ToAccountMetas,
     },
     anchor_spl::token::spl_token::state::{
         Account as SplTokenAccount, AccountState, Mint as SplMint,
@@ -20,7 +20,7 @@ use {
     solana_message::{Message, VersionedMessage},
     solana_signer::Signer,
     solana_transaction::versioned::VersionedTransaction,
-    tidebook::state::{Market, MarketStatus, TraderBalance},
+    tidebook::state::{Market, MarketStatus, OrderSide, TraderBalance},
 };
 
 const PROGRAM_BYTES: &[u8] = include_bytes!(concat!(
@@ -293,6 +293,10 @@ fn store_deposit_market(svm: &mut LiteSVM, status: MarketStatus) -> DepositFixtu
     };
     let mut data = Vec::new();
     state.try_serialize(&mut data).unwrap();
+    // Match the fixed allocation used by `initialize_market`. The serialized
+    // empty book uses fewer bytes because both best-price Options are `None`,
+    // but placement must later be able to persist `Some(price)` in-place.
+    data.resize(8 + Market::INIT_SPACE, 0);
     svm.set_account(
         market,
         Account {
@@ -889,4 +893,115 @@ fn insufficient_vault_backing_rejects_withdrawal_without_ledger_mutation() {
     assert_eq!(load_token_amount(&svm, fixture.base_vault), 20);
     assert_eq!(load_token_amount(&svm, destination), 0);
     assert_eq!(load_trader_balance(&svm, trader_balance).base_free, 100);
+}
+
+#[test]
+fn deposit_place_cancel_and_withdraw_preserve_vault_backing() {
+    const PRICE: u64 = 10_000;
+    const QUANTITY: u64 = 1_000_000;
+    const DEPOSIT_AMOUNT: u64 = 25;
+    const LOCKED_QUOTE: u64 = 10;
+
+    let (mut svm, owner, fixture, trader_balance) = setup_deposit(MarketStatus::Active);
+    let source =
+        create_test_token_account(&mut svm, fixture.quote_mint, owner.pubkey(), DEPOSIT_AMOUNT);
+    let deposit = deposit_instruction(
+        owner.pubkey(),
+        &fixture,
+        trader_balance,
+        fixture.quote_mint,
+        source,
+        fixture.quote_vault,
+        DEPOSIT_AMOUNT,
+    );
+    let deposit_result = send_instruction(&mut svm, &owner, deposit);
+    assert!(deposit_result.is_ok(), "deposit failed: {deposit_result:?}");
+
+    let (order, _) = Pubkey::find_program_address(
+        &[
+            tidebook::constants::ORDER_SEED,
+            fixture.market.as_ref(),
+            1_u64.to_le_bytes().as_ref(),
+        ],
+        &tidebook::id(),
+    );
+    let (price_level, _) =
+        tidebook::derive_price_level_pda(&tidebook::id(), &fixture.market, OrderSide::Bid, PRICE);
+    let place = Instruction::new_with_bytes(
+        tidebook::id(),
+        &tidebook::instruction::InsertLimitOrder {
+            side: OrderSide::Bid,
+            price: PRICE,
+            quantity: QUANTITY,
+        }
+        .data(),
+        tidebook::accounts::InsertLimitOrder {
+            trader: owner.pubkey(),
+            market: fixture.market,
+            order,
+            price_level,
+            trader_balance,
+            system_program: system_program::ID,
+            better_level: None,
+            worse_level: None,
+        }
+        .to_account_metas(None),
+    );
+    let place_result = send_instruction(&mut svm, &owner, place);
+    assert!(place_result.is_ok(), "placement failed: {place_result:?}");
+
+    let placed_balance = load_trader_balance(&svm, trader_balance);
+    assert_eq!(placed_balance.quote_free, DEPOSIT_AMOUNT - LOCKED_QUOTE);
+    assert_eq!(placed_balance.quote_locked, LOCKED_QUOTE);
+    assert_eq!(load_token_amount(&svm, fixture.quote_vault), DEPOSIT_AMOUNT);
+
+    let cancel = Instruction::new_with_bytes(
+        tidebook::id(),
+        &tidebook::instruction::CancelLimitOrder { order_id: 1 }.data(),
+        tidebook::accounts::CancelLimitOrder {
+            owner: owner.pubkey(),
+            market: fixture.market,
+            order,
+            price_level,
+            previous_order: None,
+            next_order: None,
+            better_level: None,
+            worse_level: None,
+            level_rent_recipient: Some(owner.pubkey()),
+            trader_balance,
+        }
+        .to_account_metas(None),
+    );
+    let cancel_result = send_instruction(&mut svm, &owner, cancel);
+    assert!(
+        cancel_result.is_ok(),
+        "cancellation failed: {cancel_result:?}"
+    );
+
+    let canceled_balance = load_trader_balance(&svm, trader_balance);
+    assert_eq!(canceled_balance.quote_free, DEPOSIT_AMOUNT);
+    assert_eq!(canceled_balance.quote_locked, 0);
+    assert_eq!(load_token_amount(&svm, fixture.quote_vault), DEPOSIT_AMOUNT);
+
+    let destination = create_test_token_account(&mut svm, fixture.quote_mint, owner.pubkey(), 0);
+    let withdraw = withdraw_instruction(
+        owner.pubkey(),
+        &fixture,
+        trader_balance,
+        fixture.quote_mint,
+        destination,
+        fixture.quote_vault,
+        DEPOSIT_AMOUNT,
+    );
+    let withdraw_result = send_instruction(&mut svm, &owner, withdraw);
+    assert!(
+        withdraw_result.is_ok(),
+        "withdrawal failed: {withdraw_result:?}"
+    );
+
+    let final_balance = load_trader_balance(&svm, trader_balance);
+    assert_eq!(final_balance.quote_free, 0);
+    assert_eq!(final_balance.quote_locked, 0);
+    assert_eq!(load_token_amount(&svm, fixture.quote_vault), 0);
+    assert_eq!(load_token_amount(&svm, destination), DEPOSIT_AMOUNT);
 }

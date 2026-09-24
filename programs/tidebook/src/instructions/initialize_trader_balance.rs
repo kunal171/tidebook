@@ -1,7 +1,8 @@
 //! Initializes the canonical balance ledger for one trader in one market.
 //!
 //! This instruction only creates internal accounting state. It does not move
-//! tokens; deposits and withdrawals will be implemented separately.
+//! tokens. Separate deposit and withdrawal instructions move assets between a
+//! wallet token account and the market vault while updating this ledger.
 
 use anchor_lang::prelude::*;
 

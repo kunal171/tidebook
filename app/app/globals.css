@@ -774,6 +774,48 @@ footer {
   align-items: start;
 }
 
+.market-balance-card {
+  margin-top: 22px;
+}
+
+.balance-metadata {
+  margin: 22px 0;
+}
+
+.balance-form {
+  grid-template-columns: minmax(160px, 0.45fr) minmax(220px, 1fr);
+  align-items: end;
+}
+
+.balance-actions {
+  display: flex;
+  grid-column: 1 / -1;
+  gap: 12px;
+}
+
+.balance-actions button {
+  flex: 1;
+}
+
+.balance-form > small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.balance-initialize {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin-top: 18px;
+}
+
+.balance-initialize p {
+  margin: 0;
+  color: var(--muted);
+}
+
 .market-detail-pair {
   display: grid;
   gap: 14px;
@@ -826,6 +868,21 @@ footer {
 
   .network-pill {
     display: none;
+  }
+
+  .balance-form {
+    grid-template-columns: 1fr;
+  }
+
+  .balance-actions,
+  .balance-form > small {
+    grid-column: auto;
+  }
+
+  .balance-actions,
+  .balance-initialize {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .hero {

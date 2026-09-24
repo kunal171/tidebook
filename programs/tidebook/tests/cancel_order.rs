@@ -36,6 +36,41 @@ const TEST_PRICE_TICK_SIZE: u64 = 10_000;
 const TEST_QUANTITY_LOT_SIZE: u64 = 1_000_000;
 const TEST_ORDER_PRICE: u64 = 100_000_000;
 const TEST_ORDER_QUANTITY: u64 = 5_000_000;
+fn trader_balance_address(market: Pubkey, owner: Pubkey) -> Pubkey {
+    tidebook::derive_trader_balance_pda(&tidebook::id(), &market, &owner).0
+}
+
+fn ensure_trader_balance(svm: &mut LiteSVM, market: Pubkey, owner: Pubkey) -> Pubkey {
+    let (address, bump) = tidebook::derive_trader_balance_pda(&tidebook::id(), &market, &owner);
+
+    if svm.get_account(&address).is_none() {
+        let state = tidebook::state::TraderBalance {
+            market,
+            owner,
+            base_free: u64::MAX / 4,
+            base_locked: 0,
+            quote_free: u64::MAX / 4,
+            quote_locked: 0,
+            bump,
+        };
+        let mut data = Vec::new();
+        state.try_serialize(&mut data).unwrap();
+        svm.set_account(
+            address,
+            Account {
+                lamports: svm.minimum_balance_for_rent_exemption(data.len()),
+                data,
+                owner: tidebook::id(),
+                executable: false,
+                rent_epoch: 0,
+            },
+        )
+        .unwrap();
+    }
+
+    address
+}
+
 const TEST_QUOTE_COLLATERAL: u64 = 500_000;
 
 struct MarketFixture {
@@ -284,11 +319,7 @@ fn place_order(
             market: market_fixture.market,
             order,
             price_level,
-            collateral_mint,
-            trader_collateral,
-            vault_authority: market_fixture.vault_authority,
-            market_vault,
-            token_program: anchor_spl::token::ID,
+            trader_balance: ensure_trader_balance(svm, market_fixture.market, owner.pubkey()),
             system_program: system_program::ID,
             better_level: None,
             worse_level: None,
@@ -340,11 +371,11 @@ fn append_bid_order(
             order,
             price_level: fixture.price_level,
             previous_order,
-            collateral_mint: fixture.market.quote_mint,
-            trader_collateral,
-            vault_authority: fixture.market.vault_authority,
-            market_vault: fixture.market.quote_vault,
-            token_program: anchor_spl::token::ID,
+            trader_balance: ensure_trader_balance(
+                &mut fixture.svm,
+                fixture.market.market,
+                fixture.owner.pubkey(),
+            ),
             system_program: system_program::ID,
         }
         .to_account_metas(None),
@@ -400,11 +431,11 @@ fn insert_bid_level(
             market: fixture.market.market,
             order,
             price_level,
-            collateral_mint: fixture.market.quote_mint,
-            trader_collateral: owner_collateral,
-            vault_authority: fixture.market.vault_authority,
-            market_vault: fixture.market.quote_vault,
-            token_program: anchor_spl::token::ID,
+            trader_balance: ensure_trader_balance(
+                &mut fixture.svm,
+                fixture.market.market,
+                fixture.owner.pubkey(),
+            ),
             system_program: system_program::ID,
             better_level,
             worse_level,
@@ -430,10 +461,10 @@ fn cancel_order_instruction_with_accounts(
     order: Pubkey,
     order_id: u64,
     price_level: Pubkey,
-    collateral_mint: Pubkey,
-    owner_collateral: Pubkey,
-    vault_authority: Pubkey,
-    market_vault: Pubkey,
+    _collateral_mint: Pubkey,
+    _owner_collateral: Pubkey,
+    _vault_authority: Pubkey,
+    _market_vault: Pubkey,
 ) -> Instruction {
     Instruction::new_with_bytes(
         tidebook::id(),
@@ -448,11 +479,7 @@ fn cancel_order_instruction_with_accounts(
             better_level: None,
             worse_level: None,
             level_rent_recipient: Some(signer),
-            collateral_mint,
-            owner_collateral,
-            vault_authority,
-            market_vault,
-            token_program: anchor_spl::token::ID,
+            trader_balance: trader_balance_address(market, signer),
         }
         .to_account_metas(None),
     )
@@ -478,7 +505,7 @@ fn cancel_queued_order_instruction(
     order_id: u64,
     previous_order: Option<Pubkey>,
     next_order: Option<Pubkey>,
-    owner_collateral: Pubkey,
+    _owner_collateral: Pubkey,
 ) -> Instruction {
     Instruction::new_with_bytes(
         tidebook::id(),
@@ -493,11 +520,7 @@ fn cancel_queued_order_instruction(
             better_level: None,
             worse_level: None,
             level_rent_recipient: None,
-            collateral_mint: fixture.market.quote_mint,
-            owner_collateral,
-            vault_authority: fixture.market.vault_authority,
-            market_vault: fixture.market.quote_vault,
-            token_program: anchor_spl::token::ID,
+            trader_balance: trader_balance_address(fixture.market.market, fixture.owner.pubkey()),
         }
         .to_account_metas(None),
     )
@@ -523,11 +546,7 @@ fn cancel_distinct_bid_level_instruction(
             better_level,
             worse_level,
             level_rent_recipient: Some(fixture.owner.pubkey()),
-            collateral_mint: fixture.market.quote_mint,
-            owner_collateral: order.owner_collateral,
-            vault_authority: fixture.market.vault_authority,
-            market_vault: fixture.market.quote_vault,
-            token_program: anchor_spl::token::ID,
+            trader_balance: trader_balance_address(fixture.market.market, fixture.owner.pubkey()),
         }
         .to_account_metas(None),
     )
@@ -552,6 +571,31 @@ fn load_market(svm: &LiteSVM, address: Pubkey) -> Market {
     let account = svm.get_account(&address).unwrap();
     let mut data: &[u8] = &account.data;
     Market::try_deserialize(&mut data).unwrap()
+}
+
+fn load_trader_balance(
+    svm: &LiteSVM,
+    market: Pubkey,
+    owner: Pubkey,
+) -> tidebook::state::TraderBalance {
+    let address = trader_balance_address(market, owner);
+    let account = svm.get_account(&address).unwrap();
+    let mut data: &[u8] = &account.data;
+    tidebook::state::TraderBalance::try_deserialize(&mut data).unwrap()
+}
+
+fn store_trader_balance(
+    svm: &mut LiteSVM,
+    market: Pubkey,
+    owner: Pubkey,
+    state: &tidebook::state::TraderBalance,
+) {
+    let address = trader_balance_address(market, owner);
+    let mut account = svm.get_account(&address).unwrap();
+    let mut data = Vec::new();
+    state.try_serialize(&mut data).unwrap();
+    account.data = data;
+    svm.set_account(address, account).unwrap();
 }
 
 fn load_price_level(svm: &LiteSVM, address: Pubkey) -> PriceLevel {
@@ -596,11 +640,11 @@ fn assert_order_and_collateral_unchanged(fixture: &OpenOrderFixture) {
     let order = load_order(&fixture.svm, fixture.order);
     assert_eq!(order.status, OrderStatus::Open);
     assert_eq!(order.locked_collateral, fixture.locked_collateral);
-    assert_eq!(token_balance(&fixture.svm, fixture.owner_collateral), 0);
     assert_eq!(
-        token_balance(&fixture.svm, fixture.market_vault),
+        token_balance(&fixture.svm, fixture.owner_collateral),
         fixture.locked_collateral
     );
+    assert_eq!(token_balance(&fixture.svm, fixture.market_vault), 0);
 }
 
 #[test]
@@ -690,8 +734,10 @@ fn canceling_fifo_head_promotes_the_next_order() {
         load_market(&fixture.svm, fixture.market.market).open_order_count,
         1
     );
+    assert_eq!(token_balance(&fixture.svm, fixture.market_vault), 0);
     assert_eq!(
-        token_balance(&fixture.svm, fixture.market_vault),
+        load_trader_balance(&fixture.svm, fixture.market.market, fixture.owner.pubkey(),)
+            .quote_locked,
         TEST_QUOTE_COLLATERAL
     );
 }
@@ -728,10 +774,7 @@ fn canceling_fifo_tail_promotes_the_previous_order() {
         token_balance(&fixture.svm, second_collateral),
         TEST_QUOTE_COLLATERAL
     );
-    assert_eq!(
-        token_balance(&fixture.svm, fixture.market_vault),
-        TEST_QUOTE_COLLATERAL
-    );
+    assert_eq!(token_balance(&fixture.svm, fixture.market_vault), 0);
 }
 
 #[test]
@@ -769,8 +812,10 @@ fn canceling_fifo_middle_connects_its_neighbors() {
         load_market(&fixture.svm, fixture.market.market).open_order_count,
         2
     );
+    assert_eq!(token_balance(&fixture.svm, fixture.market_vault), 0);
     assert_eq!(
-        token_balance(&fixture.svm, fixture.market_vault),
+        load_trader_balance(&fixture.svm, fixture.market.market, fixture.owner.pubkey(),)
+            .quote_locked,
         TEST_QUOTE_COLLATERAL * 2
     );
 }
@@ -802,11 +847,11 @@ fn omitting_a_required_fifo_neighbor_is_rejected_atomically() {
         level_after.total_remaining_quantity,
         level_before.total_remaining_quantity
     );
-    assert_eq!(token_balance(&fixture.svm, fixture.owner_collateral), 0);
     assert_eq!(
-        token_balance(&fixture.svm, fixture.market_vault),
-        TEST_QUOTE_COLLATERAL * 2
+        token_balance(&fixture.svm, fixture.owner_collateral),
+        TEST_QUOTE_COLLATERAL
     );
+    assert_eq!(token_balance(&fixture.svm, fixture.market_vault), 0);
 }
 
 #[test]
@@ -935,7 +980,10 @@ fn missing_price_level_neighbor_is_rejected_atomically() {
         load_market(&fixture.svm, fixture.market.market).open_order_count,
         3
     );
-    assert_eq!(token_balance(&fixture.svm, original.owner_collateral), 0);
+    assert_eq!(
+        token_balance(&fixture.svm, original.owner_collateral),
+        original.locked_collateral
+    );
 }
 
 #[test]
@@ -1039,86 +1087,79 @@ fn owner_can_cancel_and_receive_refund_while_market_is_paused() {
 }
 
 #[test]
-fn wrong_refund_mint_is_rejected_atomically() {
+fn locked_balance_underflow_rejects_cancellation_atomically() {
     let mut fixture = setup_open_order(OrderSide::Bid);
-    let wrong_destination = create_test_token_account(
+    let mut balance =
+        load_trader_balance(&fixture.svm, fixture.market.market, fixture.owner.pubkey());
+    balance.quote_locked = fixture.locked_collateral - 1;
+    store_trader_balance(
         &mut fixture.svm,
-        fixture.market.base_mint,
-        fixture.owner.pubkey(),
-        0,
-    );
-    let instruction = cancel_order_instruction_with_accounts(
-        fixture.owner.pubkey(),
         fixture.market.market,
-        fixture.order,
-        ORDER_ID,
-        fixture.price_level,
-        fixture.market.base_mint,
-        wrong_destination,
-        fixture.market.vault_authority,
-        fixture.market.base_vault,
+        fixture.owner.pubkey(),
+        &balance,
     );
+    let instruction = cancel_order_instruction(&fixture, fixture.owner.pubkey());
 
     let result = send_instruction(&mut fixture.svm, &fixture.owner, instruction);
 
-    assert!(result.is_err(), "bid refunded through the base mint");
-    assert_order_and_collateral_unchanged(&fixture);
-    assert_eq!(token_balance(&fixture.svm, wrong_destination), 0);
-    assert_eq!(token_balance(&fixture.svm, fixture.market.base_vault), 0);
-}
-
-#[test]
-fn refund_account_owned_by_another_wallet_is_rejected() {
-    let mut fixture = setup_open_order(OrderSide::Bid);
-    let attacker = Pubkey::new_unique();
-    let wrong_destination =
-        create_test_token_account(&mut fixture.svm, fixture.market.quote_mint, attacker, 0);
-    let instruction = cancel_order_instruction_with_accounts(
-        fixture.owner.pubkey(),
-        fixture.market.market,
-        fixture.order,
-        ORDER_ID,
-        fixture.price_level,
-        fixture.market.quote_mint,
-        wrong_destination,
-        fixture.market.vault_authority,
-        fixture.market.quote_vault,
-    );
-
-    let result = send_instruction(&mut fixture.svm, &fixture.owner, instruction);
-
-    assert!(result.is_err(), "refund was sent to another wallet");
-    assert_order_and_collateral_unchanged(&fixture);
-    assert_eq!(token_balance(&fixture.svm, wrong_destination), 0);
-}
-
-#[test]
-fn noncanonical_refund_vault_is_rejected() {
-    let mut fixture = setup_open_order(OrderSide::Bid);
-    let noncanonical_vault = create_test_token_account(
-        &mut fixture.svm,
-        fixture.market.quote_mint,
-        fixture.market.vault_authority,
-        fixture.locked_collateral,
-    );
-    let instruction = cancel_order_instruction_with_accounts(
-        fixture.owner.pubkey(),
-        fixture.market.market,
-        fixture.order,
-        ORDER_ID,
-        fixture.price_level,
-        fixture.market.quote_mint,
-        fixture.owner_collateral,
-        fixture.market.vault_authority,
-        noncanonical_vault,
-    );
-
-    let result = send_instruction(&mut fixture.svm, &fixture.owner, instruction);
-
-    assert!(result.is_err(), "noncanonical refund vault was accepted");
-    assert_order_and_collateral_unchanged(&fixture);
+    assert!(result.is_err(), "locked-balance underflow was accepted");
+    let order = load_order(&fixture.svm, fixture.order);
+    assert_eq!(order.status, OrderStatus::Open);
+    assert_eq!(order.locked_collateral, fixture.locked_collateral);
     assert_eq!(
-        token_balance(&fixture.svm, noncanonical_vault),
-        fixture.locked_collateral
+        load_trader_balance(&fixture.svm, fixture.market.market, fixture.owner.pubkey(),)
+            .quote_locked,
+        fixture.locked_collateral - 1
+    );
+}
+
+#[test]
+fn free_balance_overflow_rejects_cancellation_atomically() {
+    let mut fixture = setup_open_order(OrderSide::Bid);
+    let mut balance =
+        load_trader_balance(&fixture.svm, fixture.market.market, fixture.owner.pubkey());
+    balance.quote_free = u64::MAX;
+    store_trader_balance(
+        &mut fixture.svm,
+        fixture.market.market,
+        fixture.owner.pubkey(),
+        &balance,
+    );
+    let instruction = cancel_order_instruction(&fixture, fixture.owner.pubkey());
+
+    let result = send_instruction(&mut fixture.svm, &fixture.owner, instruction);
+
+    assert!(result.is_err(), "free-balance overflow was accepted");
+    assert_eq!(
+        load_order(&fixture.svm, fixture.order).status,
+        OrderStatus::Open
+    );
+    assert_eq!(
+        load_trader_balance(&fixture.svm, fixture.market.market, fixture.owner.pubkey(),)
+            .quote_free,
+        u64::MAX
+    );
+}
+
+#[test]
+fn corrupted_trader_balance_owner_rejects_cancellation() {
+    let mut fixture = setup_open_order(OrderSide::Bid);
+    let mut balance =
+        load_trader_balance(&fixture.svm, fixture.market.market, fixture.owner.pubkey());
+    balance.owner = Pubkey::new_unique();
+    store_trader_balance(
+        &mut fixture.svm,
+        fixture.market.market,
+        fixture.owner.pubkey(),
+        &balance,
+    );
+    let instruction = cancel_order_instruction(&fixture, fixture.owner.pubkey());
+
+    let result = send_instruction(&mut fixture.svm, &fixture.owner, instruction);
+
+    assert!(result.is_err(), "corrupted balance owner was accepted");
+    assert_eq!(
+        load_order(&fixture.svm, fixture.order).status,
+        OrderStatus::Open
     );
 }

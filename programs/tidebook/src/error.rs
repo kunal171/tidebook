@@ -198,6 +198,12 @@ pub enum MarketError {
     #[msg("Free balance overflow")]
     FreeBalanceOverflow,
 
+    #[msg("Locked balance overflow")]
+    LockedBalanceOverflow,
+
+    #[msg("Locked balance underflow")]
+    LockedBalanceUnderflow,
+
     #[msg("Insufficient token balance for deposit")]
     InsufficientDepositFunds,
 
