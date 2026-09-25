@@ -3,13 +3,14 @@
 ## Status
 
 Status: **In progress.** Pure settlement planning and atomic one-maker matching
-are implemented when the taker fills completely and the maker remains open.
-Full-maker removal, bounded multi-maker traversal, and remainder handling remain.
+are implemented for both partial and complete maker fills. Complete fills repair
+FIFO and price-level links, advance the best price, and close an empty level.
+Automatic bounded multi-maker traversal and remainder posting remain.
 
 This document explains why Tidebook is targeting bounded crankless settlement,
 how that differs from Phoenix and older OpenBook designs, and which accounts a
 matching instruction must read and write. The first implementation slice proves
-maker-price settlement and price-time priority without yet mutating queue links.
+maker-price settlement, price-time priority, and safe queue removal.
 
 ## The problem in plain language
 
@@ -199,7 +200,7 @@ If the resting order is an ask:
 ```text
 maker.base_locked  -= Q
 maker.quote_free   += quote paid
-taker.quote_locked -= quote paid
+taker.quote_free   -= quote paid
 taker.base_free    += Q
 ```
 
@@ -208,7 +209,7 @@ If the resting order is a bid, the assets move in the opposite direction:
 ```text
 maker.quote_locked -= quote paid
 maker.base_free    += Q
-taker.base_locked  -= Q
+taker.base_free    -= Q
 taker.quote_free   += quote paid
 ```
 
@@ -218,12 +219,10 @@ links, market counters, and both traders' balances change atomically.
 ### Better execution for a taker
 
 A bid may specify a limit of 105 but match a resting ask at 100. The taker owes
-only 100. Any difference reserved at the 105 limit becomes free quote again; it
-must not remain stranded in `quote_locked`.
-
-The same rule applies across partial fills: after every matching chunk, the
-incoming order's locked collateral must equal the amount still required for its
-unfilled remainder at its limit price.
+only 100 because the current bounded instruction debits free balance directly
+at the maker price. It does not create or lock an incoming taker order first.
+If the taker is larger than the maker, only the actual fill is debited and the
+unprocessed remainder stays free for the client's next explicit instruction.
 
 ### Cancel
 
@@ -293,16 +292,17 @@ while capacity remains:
 
 An incoming ask is symmetric and stops when the best bid is below its limit.
 
-If supplied matching capacity ends while the incoming order still has quantity:
+The implemented instruction supplies one maker. If that capacity ends while the
+incoming request still has quantity:
 
 - the processed fills remain valid and atomically settled;
-- the remainder may rest on the book only if the instruction has all accounts
-  required to insert it safely;
-- otherwise the instruction must use an explicitly documented behavior such as
-  canceling the remainder back to free balance.
+- the remainder stays in the taker's free internal balance;
+- the web client retains the remainder in its form so the trader can match the
+  next maker or post it after refreshing the book.
 
-Tidebook must choose this remainder policy before implementing matching. It must
-never silently drop or leave collateral without a corresponding balance claim.
+Automatic multi-maker traversal and atomic remainder posting are the next
+policy milestone. The current behavior never silently drops quantity or leaves
+collateral without a balance claim.
 
 ## Events and indexers
 
@@ -358,20 +358,22 @@ compatible in place.
 
 The safe order is:
 
-1. finish and test price-level/FIFO maintenance without matching;
+1. ~~Finish and test price-level/FIFO maintenance without matching.~~
 2. ~~specify and add `TraderBalance` accounts;~~
 3. ~~add atomic deposits and withdrawals;~~
 4. ~~move placement and cancellation collateral accounting through free/locked
    balances;~~
-5. define the exact bounded matching account contract and remainder policy;
-6. add one-fill tests before multi-fill behavior;
-7. add partial-fill, multi-level, stale-path, rollback, and conservation tests;
-8. emit informational events and update the web client;
+5. ~~Define and implement the one-maker matching account contract and explicit
+   free-balance remainder policy.~~
+6. ~~Add partial- and full-maker tests before multi-fill behavior.~~
+7. **In progress:** add bounded multi-maker, multi-level, stale-path, rollback,
+   and broader conservation tests.
+8. Emit informational events; the one-maker web client is implemented.
 9. benchmark account count, compute use, contention, and retry rate before
    considering a slab-based redesign.
 
-Matching must not be introduced before balance conservation can be asserted in
-tests.
+Every future expansion must preserve the existing atomic balance and book
+invariants under success, stale-account failure, and arithmetic failure.
 
 ## Primary implementation references
 

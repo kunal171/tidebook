@@ -120,7 +120,7 @@ pub mod tidebook {
         crate::instructions::withdraw::handle_withdraw(ctx, amount)
     }
 
-    /// Executes one complete taker fill against a maker that remains open.
+    /// Settles against one best FIFO maker and removes it when fully filled.
     pub fn match_limit_order(
         ctx: Context<MatchLimitOrder>,
         taker_side: OrderSide,

@@ -22,7 +22,8 @@ exchange functionality that is still planned.
   editable source for the current and planned architecture.
 
 Open the `.drawio` file with [draw.io](https://app.diagrams.net/) or a compatible
-editor. The blue elements are implemented. The gray dashed elements are planned.
+editor. Blue and green elements are implemented. Gray dashed elements are
+planned.
 
 ## Current verification
 

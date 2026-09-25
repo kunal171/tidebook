@@ -22,10 +22,13 @@ npm run build
 - Connect to Solana devnet.
 - Discover active and paused markets without connecting a wallet.
 - Create markets as an active protocol administrator.
-- Place collateralized bid and ask limit orders from owned token accounts,
-  including empty, best, middle, worst, and same-price FIFO insertion paths.
-- List wallet-owned orders and cancel them, including while a market is paused;
-  cancellation repairs FIFO and price-level links and closes empty levels.
+- Submit bids and asks that either cross one best FIFO maker or rest as
+  collateralized limit orders, including empty, best, middle, worst, and
+  same-price FIFO insertion paths.
+- Keep a larger unprocessed taker remainder in the form for an explicit retry;
+  the current bounded instruction never silently posts or discards it.
+- List wallet-owned open, filled, and canceled orders; only open orders expose
+  cancellation, including while a market is paused.
 - Pause, unpause, and safely close markets as their authority.
 - Manage protocol administrators as the super-admin.
 
@@ -55,6 +58,12 @@ Price-level traversal begins at the market best price and follows
 levels). Those RPC reads are advisory: the on-chain instruction revalidates all
 neighbor accounts atomically, and a stale transaction must refresh and retry.
 An indexer can later accelerate discovery without changing the program API.
+
+Crossing-order construction starts from the opposing best price, fetches its
+FIFO head and maker ledger, and supplies a successor or worse level only when a
+full maker fill needs those accounts. These RPC reads are also advisory. The
+program revalidates best-price, FIFO, PDA, owner, and reciprocal-link invariants
+before changing balances or removing book nodes.
 
 New routes should keep read-only structure server-rendered and move only wallet,
 transaction, state, and browser-dependent behavior behind `"use client"`.

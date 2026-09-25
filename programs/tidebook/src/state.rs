@@ -21,9 +21,9 @@ pub struct Market {
     pub price_tick_size: u64,
     /// Minimum quantity increment in base-mint atoms.
     pub quantity_lot_size: u64,
-    /// Reserved for the matching-engine milestone; not maintained yet.
+    /// Highest-priority open bid price, or `None` when the bid side is empty.
     pub best_bid: Option<u64>,
-    /// Reserved for the matching-engine milestone; not maintained yet.
+    /// Highest-priority open ask price, or `None` when the ask side is empty.
     pub best_ask: Option<u64>,
     /// Number of orders still eligible for matching or cancellation.
     pub open_order_count: u64,

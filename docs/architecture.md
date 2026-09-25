@@ -16,16 +16,17 @@ The current implementation establishes the account and authorization foundation:
 - create canonical price levels at the best, middle, or worst position on each
   side, append same-price orders behind a validated FIFO tail, and unlink
   canceled orders and empty levels atomically;
-- settle a complete taker against one best FIFO maker while that maker remains
-  partially open, using only internal balance mutations;
+- settle against one best FIFO maker, preserving a partial maker or atomically
+  removing a complete maker and repairing its queue and level;
 - validate behavior with in-process LiteSVM integration tests.
 
-The program now supports one deliberately bounded matching case: the incoming
-taker is completely filled by the best FIFO maker and that maker remains open.
-It does not yet remove a fully filled maker, traverse multiple makers, or rest a
-taker remainder. Deposited tokens remain in market vaults while `TraderBalance`
-PDAs track each owner's free and locked claims; matching is purely an atomic
-ledger and order-book update.
+The program now supports one deliberately bounded matching step against the
+best FIFO maker. It can partially reduce that maker or fill and unlink it,
+promote its same-price successor, and close an empty best price level while
+advancing the market pointer. It does not yet traverse multiple makers or rest
+a taker remainder automatically. Deposited tokens remain in market vaults while
+`TraderBalance` PDAs track each owner's free and locked claims; matching is
+purely an atomic ledger and order-book update.
 
 ## 2. System context
 
@@ -35,7 +36,7 @@ The program has three external roles:
 | --- | --- |
 | Super-admin | Add, disable, enable, and remove administrator records |
 | Market authority | Initialize a market, pause it, unpause it, and close it while paused |
-| Trader | Initialize a market balance, deposit/withdraw, place or cancel orders, and take from one larger best FIFO maker while active |
+| Trader | Initialize a market balance, deposit/withdraw, place or cancel orders, and settle against one best FIFO maker while active |
 
 The program invokes the Token Program only at custody boundaries: deposit,
 withdrawal, market-vault initialization, and safe closure. Placement reserves
@@ -55,7 +56,7 @@ active on-chain record. Role-aware routes are:
 | Route | UI access | Purpose |
 | --- | --- | --- |
 | `/markets` | Public | Discover active and paused on-chain markets without connecting a wallet |
-| `/markets/[address]` | Public viewing; connected wallet for trading; market authority for lifecycle controls | Inspect one market, place collateralized orders while active, and pause, unpause, or safely close an authorized market |
+| `/markets/[address]` | Public viewing; connected wallet for trading; market authority for lifecycle controls | Inspect one market, match one crossing best FIFO maker or place a resting order while active, and pause, unpause, or safely close an authorized market |
 | `/admin` | Super-admin | Initialize governance and add, disable, enable, or remove admins |
 | `/markets/new` | Active admin or super-admin | Create a market for two SPL mints |
 | `/orders` | Any connected wallet | List wallet-owned orders and cancel orders whose status is `Open` |
@@ -68,6 +69,13 @@ behind its FIFO tail. Otherwise, it walks
 from the market's best price through `worse_price` links to find the exact
 better/worse insertion gap. The walk checks for cycles, broken reciprocal links,
 wrong markets or sides, and invalid price ordering before submitting.
+
+For a crossing order, the page fetches the opposing best level, FIFO maker,
+maker ledger, and only the removal accounts required by that maker's outcome.
+One transaction processes at most one maker. If the submitted quantity is
+larger, the unprocessed remainder stays in the taker's free balance and remains
+in the form for an explicit retry. A non-crossing order follows the normal
+insert-or-append path.
 
 This RPC traversal is only an advisory transaction-building step. The linked
 book can change between reads and confirmation, so the on-chain instruction
@@ -185,7 +193,7 @@ seeds = ["order", market, order_id.to_le_bytes()]
 | `quantity` | Base-mint atoms; must be nonzero and aligned to the market lot size |
 | `remaining_quantity` | Unfilled quantity; initially equals `quantity` |
 | `locked_collateral` | Base atoms for asks or quote atoms for bids currently held in the market vault |
-| `status` | Initially `Open`; the owner can transition it to `Canceled`; `Filled` is modeled but not transitioned yet |
+| `status` | Initially `Open`; cancellation transitions it to `Canceled`, while a complete match transitions it to `Filled` |
 | `bump` | Canonical order PDA bump |
 
 Each successful order placement increments `Market.next_order_id`. The order PDA
@@ -215,7 +223,8 @@ middle, or worst position. Append validates the current tail before extending
 the same-price FIFO queue. Cancellation removes an order in O(1) from supplied
 reciprocal neighbors; when it removes the final order, the program repairs the
 level list, advances the market best pointer when required, returns rent to the
-stored payer, and closes the level.
+stored payer, and closes the level. Complete matching performs the corresponding
+FIFO-head and best-level removal, while a partial maker remains at the head.
 
 ## 4. Instruction architecture
 
@@ -235,7 +244,7 @@ stored payer, and closes the level.
 | `withdraw` | Balance owner | Mint belongs to market; destination belongs to owner; sufficient free balance and vault backing exist | Debits free balance and transfers tokens out of the vault atomically, including while paused |
 | `insert_limit_order` | Trader | Market is active; canonical ledger has sufficient free balance; grid checks pass; optional neighbors are canonical, ordered, and reciprocal | Moves free to locked balance, creates a new level and first order, splices the level, and increments counters atomically |
 | `append_limit_order` | Trader | Existing level is canonical for market/side/price; previous order is its open tail; canonical ledger has sufficient free balance | Moves free to locked balance, creates an order behind the tail, and updates aggregates and counters atomically |
-| `match_limit_order` | Taker | Market is active; maker is the best opposing FIFO head; prices cross; accounts and ledgers are canonical; taker is not maker; quantity is smaller than maker remaining | Completely fills the taker, partially reduces the maker and level aggregate, and atomically exchanges free/locked internal balances without changing queue links or counters |
+| `match_limit_order` | Taker | Market is active; maker is the best opposing FIFO head; prices cross; accounts, optional removal neighbors, rent recipient, and ledgers are canonical; taker is not maker | Settles one maker-price fill; leaves a partial maker in place or marks a full maker `Filled`, promotes its successor, and closes an empty best level atomically |
 | `cancel_limit_order` | Order owner | Order, ledger, level, FIFO neighbors, and optional level neighbors are canonical and reciprocal; status is `Open` | Moves locked to free balance and unlinks the order; final removal repairs levels, closes the empty level, and transitions `Open -> Canceled` even while paused |
 
 ### Market initialization flow
@@ -329,7 +338,7 @@ Move collateral from free to locked internal balance
 The level's `first_order` and the market's best-price pointer remain unchanged.
 Every transfer, link, aggregate, and counter succeeds or rolls back together.
 
-### Partial-maker matching flow
+### Bounded one-maker matching flow
 
 ```text
 Taker
@@ -341,7 +350,6 @@ Validate active canonical market and both TraderBalance PDAs
    |-- maker is the FIFO head at the current best opposing price
    |-- maker and taker are different owners and opposite sides
    |-- taker limit crosses the maker price
-   |-- taker quantity is smaller than maker remaining quantity
    v
 Calculate one fill at the resting maker price
    |
@@ -352,13 +360,20 @@ Calculate one fill at the resting maker price
    v
 Reduce maker remaining quantity, maker locked collateral,
 and price-level aggregate quantity
+   |
+   |-- partial maker: preserve FIFO links and counters
+   |-- full maker: mark Filled and decrement counters
+   |-- full FIFO head with successor: promote successor
+   `-- final order at level: promote worse level and close empty level
 ```
 
-The maker remains `Open`, stays at the FIFO head, and retains positive
-remaining quantity. Level order count, FIFO links, market best pointers, and
-market open-order count therefore remain unchanged. All arithmetic is computed
-with checked operations before any account is mutated, and a failure rolls back
-the entire settlement.
+A partial maker remains `Open` at the FIFO head with positive remaining
+quantity, so links and counters remain unchanged. A complete maker becomes
+`Filled` with zero remaining quantity and collateral. Its exact stored
+successor becomes the new head, or its empty level is closed to the recorded
+rent payer and the next worse price becomes best. All arithmetic and topology
+validation occur before mutations; any failure rolls back settlement and index
+maintenance together.
 
 ### Order cancellation flow
 
@@ -495,19 +510,26 @@ The program currently enforces:
     its FIFO head order.
 43. Matching executes at the resting maker price, not the taker's limit price.
 44. Self-trading and same-side matching are rejected.
-45. The partial-maker milestone requires the taker quantity to be strictly
-    smaller than the maker remaining quantity.
-46. Successful partial matching changes no FIFO link, order count, open-order
+45. Successful partial matching changes no FIFO link, order count, open-order
     count, or best-price pointer.
-47. Base and quote ledger changes, maker-order changes, and the price-level
+46. A completely filled maker has zero remaining quantity, zero locked
+    collateral, cleared FIFO links, and status `Filled`.
+47. Removing a filled FIFO head requires its exact reciprocal successor and
+    promotes that successor without changing same-price priority.
+48. Removing the final maker at the best price requires the canonical worse
+    level and recorded rent recipient, advances or clears the market best
+    pointer, and closes the empty level.
+49. A taker quantity larger than one maker settles only the actual fill; the
+    unprocessed remainder is neither locked, posted, nor discarded.
+50. Base and quote ledger changes, maker-order changes, and the price-level
     aggregate update succeed or roll back atomically.
 
 ## 6. Known architectural gaps
 
 These are planned features, not defects in the current research milestone:
 
-- Fully filled maker removal and multi-maker bounded matching are not implemented.
-- Incoming taker remainders cannot yet rest on the book.
+- Automatic bounded multi-maker traversal is not implemented.
+- Incoming taker remainders remain free and cannot yet rest automatically.
 - Fee accounting is not implemented.
 - Canceled order accounts are retained as history and their rent is not yet
   reclaimed.
@@ -521,8 +543,9 @@ These are planned features, not defects in the current research milestone:
 Integration tests run against LiteSVM in
 `programs/tidebook/tests/admin_flow.rs`,
 `programs/tidebook/tests/cancel_order.rs`, and
-`programs/tidebook/tests/market_close.rs`, and
-`programs/tidebook/tests/order_flow.rs`.
+`programs/tidebook/tests/market_close.rs`,
+`programs/tidebook/tests/order_flow.rs`, and
+`programs/tidebook/tests/trader_balance.rs`.
 
 The test harness:
 
@@ -533,7 +556,7 @@ The test harness:
 5. sends transactions through LiteSVM;
 6. deserializes resulting Anchor accounts and checks state.
 
-The 140-test suite currently covers:
+The 147-test suite currently covers:
 
 - upgrade-authority-only, one-time protocol initialization;
 - creation of the deployer's config and active admin record;
@@ -599,8 +622,14 @@ The 140-test suite currently covers:
 - atomic bid-taker and ask-taker settlement against a partially filled maker;
 - preservation of FIFO links, best pointers, order counts, and market counters
   across partial-maker settlement;
+- full maker settlement, `Filled` lifecycle state, FIFO-head promotion,
+  best-price advancement or clearing, and empty-level closure;
+- a larger taker quantity that debits only the actual fill, plus final-bid
+  fixed-point rounding-dust refund;
+- atomic rejection of missing FIFO successors, missing worse levels, and an
+  incorrect price-level rent recipient;
 - rejection without mutation of non-crossing, same-side, self-trading,
-  underfunded, paused, non-head, non-best, and maker-removing match attempts.
+  underfunded, paused, non-head, and non-best match attempts.
 
 ## 8. Dependency boundary
 
@@ -628,9 +657,9 @@ The recommended implementation order is:
 2. <del>Add indexed cancellation/removal.</del>
 3. ~~Add canonical per-market trader balances and atomic deposit/withdrawal.~~
 4. ~~Route order collateral through free and locked balance accounting.~~
-5. **In progress:** one-maker partial settlement is implemented; add full-maker
-   removal and bounded multi-maker traversal.
-6. Add partial fills, remainder policy, fees, and conservation tests.
+5. ~~Add partial and full one-maker settlement with FIFO and level removal.~~
+6. **In progress:** add bounded multi-maker traversal and automatic remainder
+   posting policy, then fees and broader conservation tests.
 7. Add order cleanup and rent-reclamation rules.
 
 Each phase should add its invariants and failure-path tests before the next
