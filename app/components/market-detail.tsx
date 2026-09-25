@@ -9,13 +9,12 @@ import {
 } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { BN } from "@anchor-lang/core";
+import { AnchorProvider, BN } from "@anchor-lang/core";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
-import { PublicKey, SystemProgram } from "@solana/web3.js";
+import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 import {
   accountExplorerUrl,
   decodeMarketStatus,
-  decodeOrderStatus,
   deriveOrderPda,
   derivePriceLevelPda,
   deriveTraderBalancePda,
@@ -33,6 +32,10 @@ import {
   type OrderSide,
   type TraderBalanceAccount,
 } from "../lib/tidebook";
+import {
+  MAX_MATCHES_PER_TRANSACTION,
+  planBoundedMatches,
+} from "../lib/matching-plan";
 import { AppHeader } from "./app-header";
 
 function shortAddress(value: string) {
@@ -70,7 +73,7 @@ type SubmissionResult =
   | {
       kind: "matched";
       signature: string;
-      makerOrder: PublicKey;
+      makerCount: number;
       filledQuantity: BN;
       remainingQuantity: BN;
     };
@@ -329,7 +332,6 @@ export function MarketDetail({ address }: { address: string }) {
       const baseScale = new BN(10).pow(new BN(market.baseDecimals));
       const availableBalance =
         side === "bid" ? traderBalance.quoteFree : traderBalance.baseFree;
-      const makerSide: OrderSide = side === "bid" ? "ask" : "bid";
       const opposingBest = side === "bid" ? market.bestAsk : market.bestBid;
       const crossesBest = Boolean(
         opposingBest &&
@@ -339,35 +341,36 @@ export function MarketDetail({ address }: { address: string }) {
       );
 
       if (crossesBest && opposingBest) {
-        // One transaction deliberately consumes at most one best FIFO maker.
-        // All relationship accounts come from program-owned links and are
-        // revalidated on-chain, so an RPC race fails atomically.
-        const makerPriceLevel = derivePriceLevelPda(
+        // Build a bounded read-only snapshot of the FIFO path. Every matching
+        // instruction still validates these relationships on-chain. If any
+        // account changes before confirmation, the entire transaction rolls
+        // back instead of committing only a prefix of the planned fills.
+        const plan = await planBoundedMatches(
+          signedProgram,
           marketAddress,
-          makerSide,
-          opposingBest,
+          market,
+          wallet.publicKey,
+          side,
+          rawPrice,
+          rawQuantity,
         );
-        const accounts = getTidebookAccounts(signedProgram);
-        const level = await accounts.priceLevel.fetchNullable(makerPriceLevel);
-        if (!level?.firstOrder) {
-          throw new Error("The best opposing level has no FIFO maker");
+        if (plan.steps.length === 0) {
+          throw new Error("No crossing maker is currently available");
         }
 
-        const makerOrderAddress = level.firstOrder;
-        const makerOrder = await accounts.order.fetchNullable(makerOrderAddress);
-        if (!makerOrder || decodeOrderStatus(makerOrder.status) !== "open") {
-          throw new Error("The best FIFO maker is missing or no longer open");
-        }
-        if (makerOrder.owner.equals(wallet.publicKey)) {
-          throw new Error(
-            "Self-trading against your own resting order is not allowed",
-          );
-        }
-
-        const filledQuantity = BN.min(rawQuantity, makerOrder.remainingQuantity);
+        const filledQuantity = rawQuantity.sub(plan.remainingQuantity);
+        // Quote settlement rounds once per fill at its maker price, matching
+        // the program's arithmetic. Summing first and rounding later would be
+        // incorrect when a taker crosses multiple price levels.
         const requiredBalance =
           side === "bid"
-            ? makerOrder.price.mul(filledQuantity).div(baseScale)
+            ? plan.steps.reduce(
+                (total, step) =>
+                  total.add(
+                    step.makerPrice.mul(step.fillQuantity).div(baseScale),
+                  ),
+                new BN(0),
+              )
             : filledQuantity;
         if (availableBalance.lt(requiredBalance)) {
           throw new Error(
@@ -375,54 +378,52 @@ export function MarketDetail({ address }: { address: string }) {
           );
         }
 
-        const makerFullyFilled = rawQuantity.gte(makerOrder.remainingQuantity);
-        const removesPriceLevel = makerFullyFilled && level.orderCount.eqn(1);
-        if (makerFullyFilled && !removesPriceLevel && !makerOrder.nextOrder) {
-          throw new Error("The filled FIFO maker has no successor");
+        const transaction = new Transaction();
+        for (const step of plan.steps) {
+          const instruction = await signedProgram.methods
+            .matchLimitOrder(
+              orderSide,
+              rawPrice,
+              step.takerQuantityBeforeFill,
+            )
+            .accountsPartial({
+              taker: wallet.publicKey,
+              market: marketAddress,
+              makerOrder: step.makerOrder,
+              makerPriceLevel: step.makerPriceLevel,
+              nextOrder: step.nextOrder ?? signedProgram.programId,
+              worseLevel: step.worseLevel ?? signedProgram.programId,
+              levelRentRecipient:
+                step.levelRentRecipient ?? signedProgram.programId,
+              makerBalance: step.makerBalance,
+              takerBalance: traderBalanceAddress,
+            })
+            .instruction();
+          transaction.add(instruction);
         }
 
-        const worseLevel =
-          removesPriceLevel && level.worsePrice
-            ? derivePriceLevelPda(marketAddress, makerSide, level.worsePrice)
-            : null;
-        const makerBalance = deriveTraderBalancePda(
-          marketAddress,
-          makerOrder.owner,
-        );
-        const signature = await signedProgram.methods
-          .matchLimitOrder(orderSide, rawPrice, rawQuantity)
-          .accountsPartial({
-            taker: wallet.publicKey,
-            market: marketAddress,
-            makerOrder: makerOrderAddress,
-            makerPriceLevel,
-            nextOrder:
-              makerFullyFilled && makerOrder.nextOrder
-                ? makerOrder.nextOrder
-                : signedProgram.programId,
-            worseLevel: worseLevel ?? signedProgram.programId,
-            levelRentRecipient: removesPriceLevel
-              ? level.rentPayer
-              : signedProgram.programId,
-            makerBalance,
-            takerBalance: traderBalanceAddress,
-          })
-          .rpc();
-        const remainingQuantity = rawQuantity.sub(filledQuantity);
+        // getTidebookProgram always constructs an AnchorProvider. The explicit
+        // type communicates that this write path requires wallet signing, while
+        // the read-only program elsewhere only exposes a generic Provider.
+        const provider = signedProgram.provider as AnchorProvider;
+        const signature = await provider.sendAndConfirm(transaction);
 
         setResult({
           kind: "matched",
           signature,
-          makerOrder: makerOrderAddress,
+          makerCount: plan.steps.length,
           filledQuantity,
-          remainingQuantity,
+          remainingQuantity: plan.remainingQuantity,
         });
-        // Keep an unprocessed remainder in the form because this bounded
-        // instruction neither discards nor automatically posts it.
+        // A capped remainder stays free: it is neither discarded nor silently
+        // posted as a resting order. Keeping it visible lets the user submit
+        // the next bounded batch deliberately.
         setQuantity(
-          remainingQuantity.isZero() ? "" : remainingQuantity.toString(),
+          plan.remainingQuantity.isZero()
+            ? ""
+            : plan.remainingQuantity.toString(),
         );
-        if (remainingQuantity.isZero()) setPrice("");
+        if (plan.remainingQuantity.isZero()) setPrice("");
       } else {
         const collateralAmount =
           side === "bid"
@@ -867,8 +868,9 @@ export function MarketDetail({ address }: { address: string }) {
                     </button>
                     {crossesBest ? (
                       <small>
-                        This transaction processes one best FIFO maker. Any
-                        larger remainder stays free and remains in this form.
+                        This transaction processes up to {MAX_MATCHES_PER_TRANSACTION}{" "}
+                        FIFO makers atomically. Any larger remainder stays free
+                        and remains in this form.
                       </small>
                     ) : collateralPreview ? (
                       <small>This order will lock {collateralPreview}.</small>
@@ -1037,8 +1039,8 @@ export function MarketDetail({ address }: { address: string }) {
 
         {result?.kind === "matched" && (
           <div className="transaction-message transaction-success">
-            Filled {result.filledQuantity.toString()} raw base against maker {" "}
-            {shortAddress(result.makerOrder.toBase58())}.
+            Filled {result.filledQuantity.toString()} raw base across {" "}
+            {result.makerCount} maker{result.makerCount === 1 ? "" : "s"}.
             {!result.remainingQuantity.isZero() && (
               <> {result.remainingQuantity.toString()} remains unprocessed.</>
             )}{" "}
