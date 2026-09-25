@@ -17,15 +17,17 @@ built incrementally with Anchor, LiteSVM, and a companion web application.
 - Append another order at an existing price behind the validated FIFO tail.
 - Cancel open orders under owner control, including while a market is paused.
 - Release collateral to free balance on cancellation and safely close empty, paused markets.
-- Atomically settle against one best FIFO maker, including partial maker fills,
-  complete maker removal, FIFO-head promotion, and empty-level closure.
+- Atomically settle against up to three best-price FIFO makers per client
+  transaction, including partial fills, complete maker removal, FIFO-head
+  promotion, multi-level traversal, and empty-level closure.
 - Exercise program behavior through LiteSVM integration tests.
 
 Sorted multi-price insertion, indexed cancellation, deposits, withdrawals, and
 internal order collateral accounting are implemented. The bounded matching
-slice processes one best FIFO maker per instruction and leaves any larger taker
-remainder free for an explicit follow-up action. Automatic multi-maker
-traversal, remainder posting, events, and fees remain planned milestones.
+instruction settles one maker, while the client safely plans and batches up to
+three instructions in one atomic transaction. Any larger taker remainder stays
+free for an explicit follow-up action. Automatic remainder posting, events, and
+fees remain planned milestones.
 
 ## Architecture
 

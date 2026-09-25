@@ -43,7 +43,7 @@
         <mxCell id="queues" value="Sorted Price Levels + FIFO Queues&lt;br&gt;&lt;font style=&quot;font-size: 11px;&quot;&gt;insert / cancel / fill removal&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366" vertex="1" parent="1">
           <mxGeometry x="1310" y="150" width="170" height="75" as="geometry"/>
         </mxCell>
-        <mxCell id="matching" value="Bounded Matching&lt;br&gt;&lt;font style=&quot;font-size: 11px;&quot;&gt;best-price FIFO&lt;br&gt;one partial or full maker&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366" vertex="1" parent="1">
+        <mxCell id="matching" value="Bounded Matching&lt;br&gt;&lt;font style=&quot;font-size: 11px;&quot;&gt;best-price FIFO&lt;br&gt;up to 3 maker instructions&lt;br&gt;one atomic transaction&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366" vertex="1" parent="1">
           <mxGeometry x="1100" y="280" width="180" height="90" as="geometry"/>
         </mxCell>
         <mxCell id="settlement" value="Internal Settlement&lt;br&gt;&lt;font style=&quot;font-size: 11px;&quot;&gt;atomic ledger updates&lt;br&gt;fees still planned&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366" vertex="1" parent="1">

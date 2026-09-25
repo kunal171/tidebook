@@ -22,9 +22,9 @@ npm run build
 - Connect to Solana devnet.
 - Discover active and paused markets without connecting a wallet.
 - Create markets as an active protocol administrator.
-- Submit bids and asks that either cross one best FIFO maker or rest as
-  collateralized limit orders, including empty, best, middle, worst, and
-  same-price FIFO insertion paths.
+- Submit bids and asks that either cross up to three best-price FIFO makers in
+  one atomic transaction or rest as collateralized limit orders, including
+  empty, best, middle, worst, and same-price FIFO insertion paths.
 - Keep a larger unprocessed taker remainder in the form for an explicit retry;
   the current bounded instruction never silently posts or discards it.
 - List wallet-owned open, filled, and canceled orders; only open orders expose
@@ -44,6 +44,31 @@ NEXT_PUBLIC_SOLANA_RPC_URL=https://your-devnet-endpoint.example
 
 Store that value in `app/.env.local`; the file is ignored by Git.
 
+## Multi-maker devnet smoke test
+
+`npm run devnet:multi-maker` executes a one-shot current-layout smoke test. It
+creates the market and internal balances, deposits test assets, places two asks
+at one FIFO level, submits two matching instructions in one transaction, and
+asserts the final orders, market pointers, level closure, and exact balances.
+
+The runner intentionally does not create or mint SPL assets. Supply fresh
+no-value devnet mints, temporary signer files, and their funded token accounts:
+
+```bash
+SOLANA_WALLET=/path/to/deployer.json \
+MAKER_TWO_WALLET=/path/to/second-maker.json \
+TAKER_WALLET=/path/to/taker.json \
+BASE_MINT=<base-mint> \
+QUOTE_MINT=<quote-mint> \
+MAKER_ONE_BASE_TOKEN=<token-account> \
+MAKER_TWO_BASE_TOKEN=<token-account> \
+TAKER_QUOTE_TOKEN=<token-account> \
+npm run devnet:multi-maker
+```
+
+Use a fresh mint pair for each run because the market PDA is deterministic and
+the script deliberately tests initialization as part of the complete flow.
+
 ## Application boundaries
 
 - `app/layout.tsx` and route pages are Server Components by default.
@@ -59,11 +84,21 @@ levels). Those RPC reads are advisory: the on-chain instruction revalidates all
 neighbor accounts atomically, and a stale transaction must refresh and retry.
 An indexer can later accelerate discovery without changing the program API.
 
-Crossing-order construction starts from the opposing best price, fetches its
-FIFO head and maker ledger, and supplies a successor or worse level only when a
-full maker fill needs those accounts. These RPC reads are also advisory. The
-program revalidates best-price, FIFO, PDA, owner, and reciprocal-link invariants
-before changing balances or removing book nodes.
+Crossing-order construction is isolated in `lib/matching-plan.ts`. It starts at
+the opposing best price, validates the linked price levels and FIFO queues, and
+collects at most three makers. Every step records the taker quantity before its
+fill, the resting maker price, canonical maker ledger, and only the successor,
+worse-level, or rent-recipient accounts needed by that transition. The market
+page converts the plan into one `match_limit_order` instruction per maker and
+sends every instruction in one Solana transaction.
+
+The planner's RPC reads are advisory. Each instruction revalidates best-price,
+FIFO, PDA, owner, crossing-price, and reciprocal-link invariants against the
+state produced by the preceding instruction. A stale later step therefore
+rolls back the entire transaction. The three-maker cap bounds transaction size,
+account metadata, compute, and stale-state exposure. If the cap is reached, the
+remainder stays free and visible for an explicit retry; it is never silently
+posted while crossing liquidity may remain.
 
 New routes should keep read-only structure server-rendered and move only wallet,
 transaction, state, and browser-dependent behavior behind `"use client"`.

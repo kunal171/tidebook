@@ -8,7 +8,7 @@ production configuration.
 
 | Account | Address | Notes |
 | --- | --- | --- |
-| Tidebook program | `BPdNF5CnV8z1EkHo7tcueR6wXmzZV2j6j4wsUTirPgWL` | Current upgradeable devnet program |
+| Tidebook program | `BPdNF5CnV8z1EkHo7tcueR6wXmzZV2j6j4wsUTirPgWL` | Current upgradeable devnet program; multi-maker build verified at slot `503898678` |
 | ProgramData | `HvXrEzK1NeTQg3PhRsVFXPyshAe6mj4L5PwK132xn26g` | Upgradeable loader metadata and program data |
 | Upgrade authority | `BX6RJHGbi7msj7t1ECCX6T1ZvvetHDK6UkjzAhPfWngq` | Protocol deployer and super-admin |
 | Protocol config PDA | `4zjC2AkEeCqWAc2Hbytt9envB4VP8EYtz9vGk9MFvUsP` | Seeds: `["protocol_config"]` |
@@ -27,6 +27,8 @@ by the current Tidebook program.
 | --- | --- | --- | --- | --- |
 | Mock BTC (`tBTC`) | Base mint | `FggaZG7eJ5tpr2vmpNMbMCHkWkcw9n2Nhmf54g3wQwGk` | 8 | 0 |
 | Mock USDT (`tUSDT`) | Quote mint | `8KRa3QwidV2yZspR3wr4p3eNzq2KtejMbU1tZUgNLdtt` | 6 | 0 |
+| Multi-maker base | Smoke-test base | `DS4R9TLJmdnQXS1VqWbzXBE88LT4QzB52CjDCXKW5hr7` | 8 | 2 |
+| Multi-maker quote | Smoke-test quote | `6XGySXZ2Soe8DyNJ6Zs3efAKpigrz1RJWWYLkq1eMvuJ` | 6 | 1,000 |
 
 Mint authority for both test assets:
 `BX6RJHGbi7msj7t1ECCX6T1ZvvetHDK6UkjzAhPfWngq`.
@@ -37,12 +39,15 @@ Mint authority for both test assets:
 | --- | --- |
 | Mock BTC | `4qsjj1vteYmWyQeMb6MPBfU2D4y2nwroTzVFvaTwC1PtobKML6X5GB13EU1HQ7j2LUn6jo3ey3CCeyfDj9ZakfuT` |
 | Mock USDT | `XrdHiMNWFa2PcJCAUcwwRJnRKxszkKXh8V4ZdxA4hCZNdcHFQcL29R6cBFh2xJmCpiJkuX9rQKGPMUpVDA2i5Qr` |
+| Multi-maker base | `mpTMW6r5ATui2pA6j4vgcBSh9UBnVr3v4NMmhpW4NjT3h7TMYY56LLXcZqfPbaapn9Ynheh5Keh9QdjM6RgT3zL` |
+| Multi-maker quote | `akBppZeJMg7FMSG3FK4WFLwNiPMhUKxBmNnFLWv4mQrqCvjaD4jEy6P56i1r6u7DZ6L5iDEkWjptLUW6r6SUUt8` |
 
 ## Markets
 
 | Pair | Market PDA | Status | Creation transaction |
 | --- | --- | --- | --- |
-| `tBTC/tUSDT` | `9t1vydxLFBzUFrh5v7CE4nPgu46v4Nk7uPFcPmk69kqa` | Active; tick `10000`, lot `100000` | `4jNDzMMnHYx8v6C5yWT5KzCKPQu43kWZ2Xmt75YiFTGsc5XYj2BcmQLipM8X5SPBmtSDHVm6G9gjK5AVm9enqE4M` |
+| `tBTC/tUSDT` | `9t1vydxLFBzUFrh5v7CE4nPgu46v4Nk7uPFcPmk69kqa` | Pre-`open_order_count` layout; unsupported historical account | `4jNDzMMnHYx8v6C5yWT5KzCKPQu43kWZ2Xmt75YiFTGsc5XYj2BcmQLipM8X5SPBmtSDHVm6G9gjK5AVm9enqE4M` |
+| Multi-maker smoke | `EXFUazTspBvNDm4D2iGwpYVuT7R9BGLs16koKLhz6Viz` | Current layout; active and empty after smoke run; tick/lot `10000`/`100000` | `qvhtFrJ3UokdMtA9byKsAbgfyxVA3dStLuNRVCJtg7FSUNJh8DwrDpvrbZYjoraFfXnnBaKE5cXXsPdQNZ5i9RD` |
 
 The PDA uses the ordered seeds `["market", tBTC_mint, tUSDT_mint]`. Reversing
 the mint order produces a different market address.
@@ -58,6 +63,33 @@ the mint order produces a different market address.
 The smoke order used price `67250120000` and quantity `100000`. Its final
 on-chain status is `Canceled`. Separate simulations confirmed that off-tick and
 off-lot values fail with `PriceNotOnTick` and `QuantityNotOnLot`.
+
+### Atomic multi-maker smoke run
+
+The current-layout market was tested with two maker wallets and one taker:
+
+| Item | Address |
+| --- | --- |
+| First maker | `BX6RJHGbi7msj7t1ECCX6T1ZvvetHDK6UkjzAhPfWngq` |
+| Second maker | `63zrsd7vEEdh8UJgZSHDKtRQEZ3NCV6xxFME1xzdUJhK` |
+| Taker | `HJxRvXQGgKBV7VuMLp8Hkxz1wz4hERYEMBdVfhZEn1xW` |
+| First order | `86ATXUVWnBAMNgQr1RdT7PkWXNHDbrwwX1iDMKJNJcRq` |
+| Second order | `5YhA5bQgDfphQpuyv8x4jg1B5uEWcGGCfLsAPZ66S3bg` |
+| Closed price level | `7CDGn2rnBejw6UtFAQPDz86BxcjmDiA3hand6vKB4yGq` |
+
+| Action | Devnet transaction |
+| --- | --- |
+| First maker placement | `4oRTrYdfCvgFLLPEfKpJRuLZBoKsJZtwLVUvTiQGEHd2FvmMEK1jPtntDazPriTLRwZQ4zsbAkiHi493PLbEDQmb` |
+| Second FIFO append | `Ux93N5p9EbkAJFh6Yjkd5AacMkAWQgPXsi1EAHevJ3riUBxPUKYieM5uaFsxg9wwVKsvUWRF2xrmPA6zFCbuduG` |
+| Two-instruction atomic match | `5W63pkUniTki57fXu4JomMbEZT1WS2eSGrmU7SSTW8xnW2rdCyHYqR91a4N3vmS2gyNidBfgEpGGgxbbD4L7m5CP` |
+
+The match transaction contains two consecutive `MatchLimitOrder` instructions.
+Both `100000`-unit asks were filled at maker price `100000000`. The final
+market has no best ask and zero open orders, the empty level is closed, both
+makers received `100000` quote atoms, and the taker ended with `200000` free
+base atoms and `800000` free quote atoms. The reusable runner is
+`app/scripts/devnet-multi-maker-smoke.mjs`; it requires fresh isolated mints
+and funded token accounts supplied through environment variables.
 
 ## Legacy deployment
 

@@ -2,10 +2,11 @@
 
 ## Status
 
-Status: **In progress.** Pure settlement planning and atomic one-maker matching
-are implemented for both partial and complete maker fills. Complete fills repair
-FIFO and price-level links, advance the best price, and close an empty level.
-Automatic bounded multi-maker traversal and remainder posting remain.
+Status: **In progress.** One instruction atomically settles one partial or full
+maker, and the web client plans and batches up to three such instructions in one
+transaction. The planner supports same-level FIFO continuation, multi-level
+traversal, and complete rollback if a later step fails. Automatic non-crossing
+remainder posting remains.
 
 This document explains why Tidebook is targeting bounded crankless settlement,
 how that differs from Phoenix and older OpenBook designs, and which accounts a
@@ -248,13 +249,14 @@ can never be withdrawn.
 
 The off-chain client reads the program-maintained index, beginning at
 `market.best_ask` for an incoming bid or `market.best_bid` for an incoming ask.
-It collects up to the instruction's matching limit:
+It collects at most three makers for one client transaction:
 
 1. opposing price-level PDAs in price-priority order;
 2. resting order PDAs in FIFO order;
 3. canonical `TraderBalance` PDAs for the makers;
 4. the taker's canonical `TraderBalance` PDA;
-5. the market and canonical vault accounts required by the instruction.
+5. the exact successor, worse-level, and rent-recipient accounts required by
+   each planned transition.
 
 These accounts are hints, not trusted truth. The on-chain program must verify:
 
@@ -292,17 +294,22 @@ while capacity remains:
 
 An incoming ask is symmetric and stops when the best bid is below its limit.
 
-The implemented instruction supplies one maker. If that capacity ends while the
-incoming request still has quantity:
+The program instruction deliberately supplies one maker. The client composes up
+to three instructions into one transaction and passes the decreasing taker
+remainder to each step. If the client cap is reached while the incoming request
+still has quantity:
 
-- the processed fills remain valid and atomically settled;
+- all processed fills confirm together or all roll back together;
 - the remainder stays in the taker's free internal balance;
 - the web client retains the remainder in its form so the trader can match the
   next maker or post it after refreshing the book.
 
-Automatic multi-maker traversal and atomic remainder posting are the next
-policy milestone. The current behavior never silently drops quantity or leaves
-collateral without a balance claim.
+The fixed cap is a conservative research choice. It bounds legacy transaction
+size, writable account metadata, compute, and stale-state exposure. The cost is
+extra RPC discovery and explicit retries for deeper books. Automatic atomic
+posting once no crossing liquidity remains is the next policy milestone. The
+current behavior never silently drops quantity or leaves collateral without a
+balance claim.
 
 ## Events and indexers
 
@@ -366,10 +373,11 @@ The safe order is:
 5. ~~Define and implement the one-maker matching account contract and explicit
    free-balance remainder policy.~~
 6. ~~Add partial- and full-maker tests before multi-fill behavior.~~
-7. **In progress:** add bounded multi-maker, multi-level, stale-path, rollback,
-   and broader conservation tests.
-8. Emit informational events; the one-maker web client is implemented.
-9. benchmark account count, compute use, contention, and retry rate before
+7. ~~Add bounded multi-maker and multi-level client planning with atomic
+   rollback tests.~~
+8. **Next:** atomically post a non-crossing remainder when safe.
+9. Emit informational events and add broader conservation tests.
+10. Benchmark account count, compute use, contention, and retry rate before
    considering a slab-based redesign.
 
 Every future expansion must preserve the existing atomic balance and book
