@@ -15,13 +15,10 @@ import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 import {
   accountExplorerUrl,
   decodeMarketStatus,
-  deriveOrderPda,
-  derivePriceLevelPda,
   deriveTraderBalancePda,
   deriveVaultAuthorityPda,
   formatAtomicAmount,
   findOwnedTokenAccount,
-  findPriceLevelNeighbors,
   getTidebookAccounts,
   getTidebookProgram,
   getTidebookReadProgram,
@@ -37,6 +34,7 @@ import {
   planBoundedMatches,
 } from "../lib/matching-plan";
 import { AppHeader } from "./app-header";
+import { buildRestingOrderInstruction } from "../lib/resting-order";
 
 function shortAddress(value: string) {
   return `${value.slice(0, 8)}…${value.slice(-8)}`;
@@ -76,6 +74,7 @@ type SubmissionResult =
       makerCount: number;
       filledQuantity: BN;
       remainingQuantity: BN;
+      postedOrder: PublicKey | null;
     };
 
 export function MarketDetail({ address }: { address: string }) {
@@ -359,10 +358,25 @@ export function MarketDetail({ address }: { address: string }) {
         }
 
         const filledQuantity = rawQuantity.sub(plan.remainingQuantity);
+        const safeToPostRemainder =
+          !plan.remainingQuantity.isZero() &&
+          (plan.stopReason === "book-exhausted" ||
+            plan.stopReason === "non-crossing");
+
+        // A bid remainder must still produce at least one quote atom at the
+        // limit price. If it rounds to zero, leave it free instead of adding an
+        // instruction that the program would reject as a zero-notional order.
+        const remainderCollateral =
+          side === "bid"
+            ? rawPrice.mul(plan.remainingQuantity).div(baseScale)
+            : plan.remainingQuantity;
+        const shouldPostRemainder =
+          safeToPostRemainder && !remainderCollateral.isZero();
+
         // Quote settlement rounds once per fill at its maker price, matching
         // the program's arithmetic. Summing first and rounding later would be
         // incorrect when a taker crosses multiple price levels.
-        const requiredBalance =
+        const matchedCollateral =
           side === "bid"
             ? plan.steps.reduce(
                 (total, step) =>
@@ -372,6 +386,9 @@ export function MarketDetail({ address }: { address: string }) {
                 new BN(0),
               )
             : filledQuantity;
+        const requiredBalance = shouldPostRemainder
+          ? matchedCollateral.add(remainderCollateral)
+          : matchedCollateral;
         if (availableBalance.lt(requiredBalance)) {
           throw new Error(
             `Insufficient free ${side === "bid" ? "quote" : "base"} balance`,
@@ -402,6 +419,25 @@ export function MarketDetail({ address }: { address: string }) {
           transaction.add(instruction);
         }
 
+        // Matching changes only the opposing side and never increments the
+        // market order id. A safe remainder can therefore reuse the pre-match
+        // same-side insertion snapshot and execute after every fill atomically.
+        let postedOrder: PublicKey | null = null;
+        if (shouldPostRemainder) {
+          const placement = await buildRestingOrderInstruction(
+            signedProgram,
+            wallet.publicKey,
+            marketAddress,
+            market,
+            traderBalanceAddress,
+            side,
+            rawPrice,
+            plan.remainingQuantity,
+          );
+          transaction.add(placement.instruction);
+          postedOrder = placement.order;
+        }
+
         // getTidebookProgram always constructs an AnchorProvider. The explicit
         // type communicates that this write path requires wallet signing, while
         // the read-only program elsewhere only exposes a generic Provider.
@@ -414,16 +450,17 @@ export function MarketDetail({ address }: { address: string }) {
           makerCount: plan.steps.length,
           filledQuantity,
           remainingQuantity: plan.remainingQuantity,
+          postedOrder,
         });
-        // A capped remainder stays free: it is neither discarded nor silently
-        // posted as a resting order. Keeping it visible lets the user submit
-        // the next bounded batch deliberately.
-        setQuantity(
-          plan.remainingQuantity.isZero()
-            ? ""
-            : plan.remainingQuantity.toString(),
-        );
-        if (plan.remainingQuantity.isZero()) setPrice("");
+
+        if (plan.remainingQuantity.isZero() || postedOrder) {
+          setPrice("");
+          setQuantity("");
+        } else {
+          // A match-cap or zero-notional remainder stays free and visible so
+          // the trader can explicitly submit the next bounded attempt.
+          setQuantity(plan.remainingQuantity.toString());
+        }
       } else {
         const collateralAmount =
           side === "bid"
@@ -435,56 +472,28 @@ export function MarketDetail({ address }: { address: string }) {
           );
         }
 
-        const order = deriveOrderPda(marketAddress, market.nextOrderId);
-        const priceLevel = derivePriceLevelPda(marketAddress, side, rawPrice);
-        const priceLevelState = await getTidebookAccounts(
+        // Build the placement without submitting it so this same path can also
+        // be appended after matching instructions for a safe taker remainder.
+        const placement = await buildRestingOrderInstruction(
           signedProgram,
-        ).priceLevel.fetchNullable(priceLevel);
-        let signature: string;
+          wallet.publicKey,
+          marketAddress,
+          market,
+          traderBalanceAddress,
+          side,
+          rawPrice,
+          rawQuantity,
+        );
 
-        if (priceLevelState) {
-          if (!priceLevelState.lastOrder) {
-            throw new Error("Existing price level has no FIFO tail");
-          }
+        const provider = signedProgram.provider as AnchorProvider;
+        const transaction = new Transaction().add(placement.instruction);
+        const signature = await provider.sendAndConfirm(transaction);
 
-          signature = await signedProgram.methods
-            .appendLimitOrder(orderSide, rawPrice, rawQuantity)
-            .accounts({
-              trader: wallet.publicKey,
-              market: marketAddress,
-              order,
-              priceLevel,
-              previousOrder: priceLevelState.lastOrder,
-              traderBalance: traderBalanceAddress,
-              systemProgram: SystemProgram.programId,
-            })
-            .rpc();
-        } else {
-          const currentBest = side === "bid" ? market.bestBid : market.bestAsk;
-          const { betterLevel, worseLevel } = await findPriceLevelNeighbors(
-            signedProgram,
-            marketAddress,
-            side,
-            rawPrice,
-            currentBest,
-          );
-
-          signature = await signedProgram.methods
-            .insertLimitOrder(orderSide, rawPrice, rawQuantity)
-            .accountsPartial({
-              trader: wallet.publicKey,
-              market: marketAddress,
-              order,
-              priceLevel,
-              traderBalance: traderBalanceAddress,
-              systemProgram: SystemProgram.programId,
-              betterLevel: betterLevel ?? signedProgram.programId,
-              worseLevel: worseLevel ?? signedProgram.programId,
-            })
-            .rpc();
-        }
-
-        setResult({ kind: "placed", signature, order });
+        setResult({
+          kind: "placed",
+          signature,
+          order: placement.order,
+        });
         setPrice("");
         setQuantity("");
       }
@@ -869,8 +878,8 @@ export function MarketDetail({ address }: { address: string }) {
                     {crossesBest ? (
                       <small>
                         This transaction processes up to {MAX_MATCHES_PER_TRANSACTION}{" "}
-                        FIFO makers atomically. Any larger remainder stays free
-                        and remains in this form.
+                        FIFO makers atomically. A safe remainder rests at your
+                        limit price; a cap-blocked remainder stays free for retry.
                       </small>
                     ) : collateralPreview ? (
                       <small>This order will lock {collateralPreview}.</small>
@@ -1041,8 +1050,16 @@ export function MarketDetail({ address }: { address: string }) {
           <div className="transaction-message transaction-success">
             Filled {result.filledQuantity.toString()} raw base across {" "}
             {result.makerCount} maker{result.makerCount === 1 ? "" : "s"}.
-            {!result.remainingQuantity.isZero() && (
-              <> {result.remainingQuantity.toString()} remains unprocessed.</>
+            {result.postedOrder ? (
+              <>
+                {" "}
+                Posted {result.remainingQuantity.toString()} as resting order {" "}
+                {shortAddress(result.postedOrder.toBase58())}.
+              </>
+            ) : (
+              !result.remainingQuantity.isZero() && (
+                <> {result.remainingQuantity.toString()} remains unprocessed.</>
+              )
             )}{" "}
             <a
               href={transactionExplorerUrl(result.signature)}

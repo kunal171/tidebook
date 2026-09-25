@@ -25,8 +25,9 @@ npm run build
 - Submit bids and asks that either cross up to three best-price FIFO makers in
   one atomic transaction or rest as collateralized limit orders, including
   empty, best, middle, worst, and same-price FIFO insertion paths.
-- Keep a larger unprocessed taker remainder in the form for an explicit retry;
-  the current bounded instruction never silently posts or discards it.
+- Atomically post a valid taker remainder when the bounded path exhausts the
+  crossing book or reaches a non-crossing price; keep it free only when more
+  crossing liquidity remains beyond the cap or its bid notional rounds to zero.
 - List wallet-owned open, filled, and canceled orders; only open orders expose
   cancellation, including while a market is paused.
 - Pause, unpause, and safely close markets as their authority.
@@ -96,9 +97,11 @@ The planner's RPC reads are advisory. Each instruction revalidates best-price,
 FIFO, PDA, owner, crossing-price, and reciprocal-link invariants against the
 state produced by the preceding instruction. A stale later step therefore
 rolls back the entire transaction. The three-maker cap bounds transaction size,
-account metadata, compute, and stale-state exposure. If the cap is reached, the
-remainder stays free and visible for an explicit retry; it is never silently
-posted while crossing liquidity may remain.
+account metadata, compute, and stale-state exposure. When the planned path
+proves that no crossing maker remains, the page appends an insert-or-append
+instruction for the valid remainder to the same transaction. A remainder stays
+free and visible only when crossing liquidity remains beyond the cap or its bid
+notional rounds to zero.
 
 New routes should keep read-only structure server-rendered and move only wallet,
 transaction, state, and browser-dependent behavior behind `"use client"`.

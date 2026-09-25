@@ -4379,3 +4379,594 @@ fn failed_later_batch_match_rolls_back_earlier_fill_and_level_close() {
     );
     assert_eq!(load_market(&svm, market).best_ask, Some(MATCH_PRICE));
 }
+
+/// Builds one match instruction without submitting it so tests can compose the
+/// same atomic match-then-place transaction used by the browser client.
+fn build_atomic_match_instruction(
+    svm: &LiteSVM,
+    taker: &Keypair,
+    market: Pubkey,
+    step: BatchMatchStep,
+) -> Instruction {
+    let maker = load_order(svm, step.maker_order);
+    let maker_balance =
+        tidebook::derive_trader_balance_pda(&tidebook::id(), &market, &maker.owner).0;
+    let taker_balance =
+        tidebook::derive_trader_balance_pda(&tidebook::id(), &market, &taker.pubkey()).0;
+
+    Instruction::new_with_bytes(
+        tidebook::id(),
+        &tidebook::instruction::MatchLimitOrder {
+            taker_side: step.taker_side,
+            limit_price: step.limit_price,
+            quantity: step.quantity,
+        }
+        .data(),
+        tidebook::accounts::MatchLimitOrder {
+            taker: taker.pubkey(),
+            market,
+            maker_order: step.maker_order,
+            maker_price_level: maker.price_level,
+            next_order: step.next_order,
+            worse_level: step.worse_level,
+            level_rent_recipient: step.level_rent_recipient,
+            maker_balance,
+            taker_balance,
+        }
+        .to_account_metas(None),
+    )
+}
+
+/// Builds a new-level remainder placement from the market state that exists
+/// before matching. Matching changes only the opposing side and does not
+/// advance `next_order_id`, so both derivations remain valid later in the same
+/// transaction.
+#[allow(clippy::too_many_arguments)]
+fn build_atomic_remainder_insert_instruction(
+    svm: &LiteSVM,
+    trader: &Keypair,
+    market: Pubkey,
+    side: tidebook::state::OrderSide,
+    price: u64,
+    quantity: u64,
+    better_level: Option<Pubkey>,
+    worse_level: Option<Pubkey>,
+) -> (Pubkey, Pubkey, Instruction) {
+    let market_state = load_market(svm, market);
+    let order = Pubkey::find_program_address(
+        &[
+            tidebook::constants::ORDER_SEED,
+            market.as_ref(),
+            market_state.next_order_id.to_le_bytes().as_ref(),
+        ],
+        &tidebook::id(),
+    )
+    .0;
+    let price_level = tidebook::derive_price_level_pda(&tidebook::id(), &market, side, price).0;
+    let trader_balance =
+        tidebook::derive_trader_balance_pda(&tidebook::id(), &market, &trader.pubkey()).0;
+
+    let instruction = Instruction::new_with_bytes(
+        tidebook::id(),
+        &tidebook::instruction::InsertLimitOrder {
+            side,
+            price,
+            quantity,
+        }
+        .data(),
+        tidebook::accounts::InsertLimitOrder {
+            trader: trader.pubkey(),
+            market,
+            order,
+            price_level,
+            trader_balance,
+            system_program: system_program::ID,
+            better_level,
+            worse_level,
+        }
+        .to_account_metas(None),
+    );
+
+    (order, price_level, instruction)
+}
+
+/// Builds a same-price FIFO append for a taker remainder without submitting a
+/// separate transaction.
+fn build_atomic_remainder_append_instruction(
+    svm: &LiteSVM,
+    trader: &Keypair,
+    market: Pubkey,
+    side: tidebook::state::OrderSide,
+    price: u64,
+    quantity: u64,
+    previous_order: Pubkey,
+) -> (Pubkey, Instruction) {
+    let market_state = load_market(svm, market);
+    let order = Pubkey::find_program_address(
+        &[
+            tidebook::constants::ORDER_SEED,
+            market.as_ref(),
+            market_state.next_order_id.to_le_bytes().as_ref(),
+        ],
+        &tidebook::id(),
+    )
+    .0;
+    let price_level = tidebook::derive_price_level_pda(&tidebook::id(), &market, side, price).0;
+    let trader_balance =
+        tidebook::derive_trader_balance_pda(&tidebook::id(), &market, &trader.pubkey()).0;
+
+    let instruction = Instruction::new_with_bytes(
+        tidebook::id(),
+        &tidebook::instruction::AppendLimitOrder {
+            side,
+            price,
+            quantity,
+        }
+        .data(),
+        tidebook::accounts::AppendLimitOrder {
+            trader: trader.pubkey(),
+            market,
+            order,
+            price_level,
+            previous_order,
+            trader_balance,
+            system_program: system_program::ID,
+        }
+        .to_account_metas(None),
+    );
+
+    (order, instruction)
+}
+
+/// Sends a caller-ordered instruction sequence under one Solana transaction.
+/// LiteSVM preserves the runtime's all-or-nothing rollback semantics.
+fn send_atomic_order_flow(
+    svm: &mut LiteSVM,
+    signer: &Keypair,
+    instructions: &[Instruction],
+) -> litesvm::types::TransactionResult {
+    let message = Message::new_with_blockhash(
+        instructions,
+        Some(&signer.pubkey()),
+        &svm.latest_blockhash(),
+    );
+    let transaction =
+        VersionedTransaction::try_new(VersionedMessage::Legacy(message), &[signer]).unwrap();
+
+    svm.send_transaction(transaction)
+}
+
+#[test]
+fn full_match_then_new_level_remainder_posts_atomically() {
+    let ActiveMarketFixture {
+        mut svm,
+        payer: maker,
+        market,
+        ..
+    } = setup_active_market(6, 1_000_000, 1_000_000);
+    let limit_price = 30_000_000;
+    let taker_quantity = 8_000_000;
+    let remainder_quantity = 3_000_000;
+
+    let (maker_order, maker_result) = send_insert_limit_order(
+        &mut svm,
+        &maker,
+        market,
+        tidebook::state::OrderSide::Ask,
+        MATCH_PRICE,
+        MATCH_MAKER_QUANTITY,
+        None,
+        None,
+    );
+    assert!(
+        maker_result.is_ok(),
+        "maker placement failed: {maker_result:?}"
+    );
+    let maker_level = load_order(&svm, maker_order).price_level;
+
+    let taker = Keypair::new();
+    svm.airdrop(&taker.pubkey(), 1_000_000_000).unwrap();
+    set_trader_balance(
+        &mut svm,
+        market,
+        maker.pubkey(),
+        0,
+        MATCH_MAKER_QUANTITY,
+        0,
+        0,
+    );
+    set_trader_balance(&mut svm, market, taker.pubkey(), 0, 0, 300_000_000, 0);
+
+    let match_instruction = build_atomic_match_instruction(
+        &svm,
+        &taker,
+        market,
+        BatchMatchStep {
+            maker_order,
+            taker_side: tidebook::state::OrderSide::Bid,
+            limit_price,
+            quantity: taker_quantity,
+            next_order: None,
+            worse_level: None,
+            level_rent_recipient: Some(maker.pubkey()),
+        },
+    );
+    let (remainder_order, remainder_level, insert_instruction) =
+        build_atomic_remainder_insert_instruction(
+            &svm,
+            &taker,
+            market,
+            tidebook::state::OrderSide::Bid,
+            limit_price,
+            remainder_quantity,
+            None,
+            None,
+        );
+
+    let result = send_atomic_order_flow(&mut svm, &taker, &[match_instruction, insert_instruction]);
+    assert!(result.is_ok(), "atomic match and insert failed: {result:?}");
+
+    let market_state = load_market(&svm, market);
+    let maker_state = load_order(&svm, maker_order);
+    let remainder = load_order(&svm, remainder_order);
+    let level = load_price_level(&svm, remainder_level);
+    let maker_balance = load_trader_balance(&svm, market, maker.pubkey());
+    let taker_balance = load_trader_balance(&svm, market, taker.pubkey());
+
+    assert_eq!(maker_state.status, tidebook::state::OrderStatus::Filled);
+    assert!(svm.get_account(&maker_level).is_none());
+    assert_eq!(remainder.status, tidebook::state::OrderStatus::Open);
+    assert_eq!(remainder.side, tidebook::state::OrderSide::Bid);
+    assert_eq!(remainder.price, limit_price);
+    assert_eq!(remainder.remaining_quantity, remainder_quantity);
+    assert_eq!(remainder.locked_collateral, 90_000_000);
+    assert_eq!(level.first_order, Some(remainder_order));
+    assert_eq!(level.last_order, Some(remainder_order));
+    assert_eq!(level.total_remaining_quantity, remainder_quantity);
+    assert_eq!(level.order_count, 1);
+    assert_eq!(market_state.best_ask, None);
+    assert_eq!(market_state.best_bid, Some(limit_price));
+    assert_eq!(market_state.open_order_count, 1);
+    assert_eq!(market_state.next_order_id, 3);
+    assert_eq!(maker_balance.base_locked, 0);
+    assert_eq!(maker_balance.quote_free, 125_000_000);
+    assert_eq!(taker_balance.base_free, MATCH_MAKER_QUANTITY);
+    assert_eq!(taker_balance.quote_free, 85_000_000);
+    assert_eq!(taker_balance.quote_locked, 90_000_000);
+}
+
+#[test]
+fn full_match_then_existing_level_remainder_appends_atomically() {
+    let ActiveMarketFixture {
+        mut svm,
+        payer: resting_bid_owner,
+        market,
+        ..
+    } = setup_active_market(6, 1_000_000, 1_000_000);
+    let limit_price = 30_000_000;
+    let existing_quantity = 2_000_000;
+    let remainder_quantity = 3_000_000;
+
+    let (existing_bid, bid_result) = send_insert_limit_order(
+        &mut svm,
+        &resting_bid_owner,
+        market,
+        tidebook::state::OrderSide::Bid,
+        limit_price,
+        existing_quantity,
+        None,
+        None,
+    );
+    assert!(bid_result.is_ok(), "existing bid failed: {bid_result:?}");
+    let bid_level = load_order(&svm, existing_bid).price_level;
+
+    let ask_maker = Keypair::new();
+    svm.airdrop(&ask_maker.pubkey(), 1_000_000_000).unwrap();
+    let (maker_order, maker_result) = send_insert_limit_order(
+        &mut svm,
+        &ask_maker,
+        market,
+        tidebook::state::OrderSide::Ask,
+        MATCH_PRICE,
+        MATCH_MAKER_QUANTITY,
+        None,
+        None,
+    );
+    assert!(maker_result.is_ok(), "ask maker failed: {maker_result:?}");
+
+    let taker = Keypair::new();
+    svm.airdrop(&taker.pubkey(), 1_000_000_000).unwrap();
+    set_trader_balance(
+        &mut svm,
+        market,
+        resting_bid_owner.pubkey(),
+        0,
+        0,
+        0,
+        60_000_000,
+    );
+    set_trader_balance(
+        &mut svm,
+        market,
+        ask_maker.pubkey(),
+        0,
+        MATCH_MAKER_QUANTITY,
+        0,
+        0,
+    );
+    set_trader_balance(&mut svm, market, taker.pubkey(), 0, 0, 300_000_000, 0);
+
+    let match_instruction = build_atomic_match_instruction(
+        &svm,
+        &taker,
+        market,
+        BatchMatchStep {
+            maker_order,
+            taker_side: tidebook::state::OrderSide::Bid,
+            limit_price,
+            quantity: 8_000_000,
+            next_order: None,
+            worse_level: None,
+            level_rent_recipient: Some(ask_maker.pubkey()),
+        },
+    );
+    let (remainder_order, append_instruction) = build_atomic_remainder_append_instruction(
+        &svm,
+        &taker,
+        market,
+        tidebook::state::OrderSide::Bid,
+        limit_price,
+        remainder_quantity,
+        existing_bid,
+    );
+
+    let result = send_atomic_order_flow(&mut svm, &taker, &[match_instruction, append_instruction]);
+    assert!(result.is_ok(), "atomic match and append failed: {result:?}");
+
+    let market_state = load_market(&svm, market);
+    let existing = load_order(&svm, existing_bid);
+    let remainder = load_order(&svm, remainder_order);
+    let level = load_price_level(&svm, bid_level);
+    let taker_balance = load_trader_balance(&svm, market, taker.pubkey());
+
+    assert_eq!(existing.next_order, Some(remainder_order));
+    assert_eq!(remainder.previous_order, Some(existing_bid));
+    assert_eq!(remainder.next_order, None);
+    assert_eq!(remainder.remaining_quantity, remainder_quantity);
+    assert_eq!(remainder.locked_collateral, 90_000_000);
+    assert_eq!(level.first_order, Some(existing_bid));
+    assert_eq!(level.last_order, Some(remainder_order));
+    assert_eq!(level.order_count, 2);
+    assert_eq!(level.total_remaining_quantity, 5_000_000);
+    assert_eq!(market_state.best_ask, None);
+    assert_eq!(market_state.best_bid, Some(limit_price));
+    assert_eq!(market_state.open_order_count, 2);
+    assert_eq!(market_state.next_order_id, 4);
+    assert_eq!(taker_balance.base_free, MATCH_MAKER_QUANTITY);
+    assert_eq!(taker_balance.quote_free, 85_000_000);
+    assert_eq!(taker_balance.quote_locked, 90_000_000);
+}
+
+#[test]
+fn failed_remainder_placement_rolls_back_preceding_match() {
+    let ActiveMarketFixture {
+        mut svm,
+        payer: maker,
+        market,
+        ..
+    } = setup_active_market(6, 1_000_000, 1_000_000);
+    let invalid_remainder_price = 30_000_001;
+
+    let (maker_order, maker_result) = send_insert_limit_order(
+        &mut svm,
+        &maker,
+        market,
+        tidebook::state::OrderSide::Ask,
+        MATCH_PRICE,
+        MATCH_MAKER_QUANTITY,
+        None,
+        None,
+    );
+    assert!(maker_result.is_ok());
+    let maker_level = load_order(&svm, maker_order).price_level;
+
+    let taker = Keypair::new();
+    svm.airdrop(&taker.pubkey(), 1_000_000_000).unwrap();
+    let maker_balance = set_trader_balance(
+        &mut svm,
+        market,
+        maker.pubkey(),
+        0,
+        MATCH_MAKER_QUANTITY,
+        0,
+        0,
+    );
+    let taker_balance = set_trader_balance(&mut svm, market, taker.pubkey(), 0, 0, 300_000_000, 0);
+
+    let match_instruction = build_atomic_match_instruction(
+        &svm,
+        &taker,
+        market,
+        BatchMatchStep {
+            maker_order,
+            taker_side: tidebook::state::OrderSide::Bid,
+            limit_price: invalid_remainder_price,
+            quantity: 8_000_000,
+            next_order: None,
+            worse_level: None,
+            level_rent_recipient: Some(maker.pubkey()),
+        },
+    );
+    let (remainder_order, remainder_level, invalid_insert) =
+        build_atomic_remainder_insert_instruction(
+            &svm,
+            &taker,
+            market,
+            tidebook::state::OrderSide::Bid,
+            invalid_remainder_price,
+            3_000_000,
+            None,
+            None,
+        );
+
+    let tracked = [
+        market,
+        maker_order,
+        maker_level,
+        maker_balance,
+        taker_balance,
+    ];
+    let before = account_data_snapshot(&svm, &tracked);
+    let result = send_atomic_order_flow(&mut svm, &taker, &[match_instruction, invalid_insert]);
+
+    assert!(result.is_err(), "off-tick remainder unexpectedly succeeded");
+    assert_eq!(account_data_snapshot(&svm, &tracked), before);
+    assert!(svm.get_account(&remainder_order).is_none());
+    assert!(svm.get_account(&remainder_level).is_none());
+    assert_eq!(
+        load_order(&svm, maker_order).status,
+        tidebook::state::OrderStatus::Open
+    );
+    assert_eq!(load_market(&svm, market).best_ask, Some(MATCH_PRICE));
+}
+
+#[test]
+fn three_match_cap_leaves_fourth_crossing_maker_and_remainder_unposted() {
+    let ActiveMarketFixture {
+        mut svm,
+        payer: maker,
+        market,
+        ..
+    } = setup_active_market(6, 1_000_000, 1_000_000);
+    let maker_quantity = 1_000_000;
+
+    let (first_order, first_result) = send_insert_limit_order(
+        &mut svm,
+        &maker,
+        market,
+        tidebook::state::OrderSide::Ask,
+        MATCH_PRICE,
+        maker_quantity,
+        None,
+        None,
+    );
+    assert!(first_result.is_ok());
+    let (second_order, second_result) = send_append_limit_order(
+        &mut svm,
+        &maker,
+        market,
+        tidebook::state::OrderSide::Ask,
+        MATCH_PRICE,
+        maker_quantity,
+        first_order,
+    );
+    assert!(second_result.is_ok());
+    let (third_order, third_result) = send_append_limit_order(
+        &mut svm,
+        &maker,
+        market,
+        tidebook::state::OrderSide::Ask,
+        MATCH_PRICE,
+        maker_quantity,
+        second_order,
+    );
+    assert!(third_result.is_ok());
+    let (fourth_order, fourth_result) = send_append_limit_order(
+        &mut svm,
+        &maker,
+        market,
+        tidebook::state::OrderSide::Ask,
+        MATCH_PRICE,
+        maker_quantity,
+        third_order,
+    );
+    assert!(fourth_result.is_ok());
+
+    let taker = Keypair::new();
+    svm.airdrop(&taker.pubkey(), 1_000_000_000).unwrap();
+    set_trader_balance(&mut svm, market, maker.pubkey(), 0, 4_000_000, 0, 0);
+    set_trader_balance(&mut svm, market, taker.pubkey(), 0, 0, 200_000_000, 0);
+
+    let market_before = load_market(&svm, market);
+    let unposted_order = Pubkey::find_program_address(
+        &[
+            tidebook::constants::ORDER_SEED,
+            market.as_ref(),
+            market_before.next_order_id.to_le_bytes().as_ref(),
+        ],
+        &tidebook::id(),
+    )
+    .0;
+    let price_level = load_order(&svm, first_order).price_level;
+
+    let result = send_match_limit_order_batch(
+        &mut svm,
+        &taker,
+        market,
+        &[
+            BatchMatchStep {
+                maker_order: first_order,
+                taker_side: tidebook::state::OrderSide::Bid,
+                limit_price: 30_000_000,
+                quantity: 4_000_000,
+                next_order: Some(second_order),
+                worse_level: None,
+                level_rent_recipient: None,
+            },
+            BatchMatchStep {
+                maker_order: second_order,
+                taker_side: tidebook::state::OrderSide::Bid,
+                limit_price: 30_000_000,
+                quantity: 3_000_000,
+                next_order: Some(third_order),
+                worse_level: None,
+                level_rent_recipient: None,
+            },
+            BatchMatchStep {
+                maker_order: third_order,
+                taker_side: tidebook::state::OrderSide::Bid,
+                limit_price: 30_000_000,
+                quantity: 2_000_000,
+                next_order: Some(fourth_order),
+                worse_level: None,
+                level_rent_recipient: None,
+            },
+        ],
+    );
+    assert!(result.is_ok(), "capped batch failed: {result:?}");
+
+    let market_state = load_market(&svm, market);
+    let fourth = load_order(&svm, fourth_order);
+    let level = load_price_level(&svm, price_level);
+    let maker_balance = load_trader_balance(&svm, market, maker.pubkey());
+    let taker_balance = load_trader_balance(&svm, market, taker.pubkey());
+
+    assert_eq!(
+        load_order(&svm, first_order).status,
+        tidebook::state::OrderStatus::Filled
+    );
+    assert_eq!(
+        load_order(&svm, second_order).status,
+        tidebook::state::OrderStatus::Filled
+    );
+    assert_eq!(
+        load_order(&svm, third_order).status,
+        tidebook::state::OrderStatus::Filled
+    );
+    assert_eq!(fourth.status, tidebook::state::OrderStatus::Open);
+    assert_eq!(fourth.previous_order, None);
+    assert_eq!(fourth.remaining_quantity, maker_quantity);
+    assert_eq!(level.first_order, Some(fourth_order));
+    assert_eq!(level.last_order, Some(fourth_order));
+    assert_eq!(level.order_count, 1);
+    assert_eq!(level.total_remaining_quantity, maker_quantity);
+    assert_eq!(market_state.best_ask, Some(MATCH_PRICE));
+    assert_eq!(market_state.best_bid, None);
+    assert_eq!(market_state.open_order_count, 1);
+    assert_eq!(market_state.next_order_id, market_before.next_order_id);
+    assert!(svm.get_account(&unposted_order).is_none());
+    assert_eq!(maker_balance.base_locked, maker_quantity);
+    assert_eq!(maker_balance.quote_free, 75_000_000);
+    assert_eq!(taker_balance.base_free, 3_000_000);
+    assert_eq!(taker_balance.quote_free, 125_000_000);
+}

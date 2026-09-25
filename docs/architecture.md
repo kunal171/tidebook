@@ -23,8 +23,9 @@ The current implementation establishes the account and authorization foundation:
 
 Each on-chain instruction settles one best FIFO maker. The client may compose
 up to three sequential instructions into one atomic Solana transaction, across
-same-price FIFO successors or multiple price levels. It does not yet rest a
-taker remainder automatically. Deposited tokens remain in market vaults while
+same-price FIFO successors or multiple price levels. When the path proves that
+no crossing liquidity remains, the client atomically rests a valid taker
+remainder at its limit price. Deposited tokens remain in market vaults while
 `TraderBalance` PDAs track each owner's free and locked claims; matching is
 purely an atomic ledger and order-book update.
 
@@ -74,9 +75,12 @@ For a crossing order, `matching-plan.ts` walks the opposing price-level and
 FIFO links, rejecting cycles, broken ordering, self-trades, and inconsistent
 aggregates. It collects at most three makers and records each resting execution
 price plus the optional accounts required by that transition. The page builds
-one matching instruction per step and sends the batch atomically. If the cap is
-reached, the unprocessed remainder stays free and remains in the form for an
-explicit retry. A non-crossing order follows the normal insert-or-append path.
+one matching instruction per step. If the path ends because the opposing book
+is exhausted or the next price no longer crosses, it appends an insert-or-append
+instruction for any valid remainder and sends the complete sequence atomically.
+If crossing liquidity remains beyond the cap, the remainder stays free and in
+the form for an explicit retry. A non-crossing order follows the same reusable
+insert-or-append builder.
 
 This RPC traversal is only an advisory transaction-building step. The linked
 book can change between reads and confirmation, so the on-chain instruction
@@ -530,20 +534,23 @@ The program currently enforces:
 48. Removing the final maker at the best price requires the canonical worse
     level and recorded rent recipient, advances or clears the market best
     pointer, and closes the empty level.
-49. A taker quantity larger than one maker settles only the actual fill; the
-    unprocessed remainder is neither locked, posted, nor discarded.
+49. A taker quantity larger than the bounded crossing path settles only the
+    planned fills; a remainder is never discarded.
 50. Base and quote ledger changes, maker-order changes, and the price-level
     aggregate update succeed or roll back atomically.
 51. A client transaction may sequence at most three one-maker instructions;
     each receives the taker quantity remaining before its own fill.
 52. Failure of any later matching instruction rolls back every earlier fill,
     queue mutation, level closure, and balance change in the transaction.
+53. A valid remainder is posted only after the planner proves that the opposing
+    book is exhausted or the next opposing price no longer crosses.
+54. Matching and remainder insertion or append succeed or roll back together; a
+    cap-blocked or zero-notional remainder stays in free balance.
 
 ## 6. Known architectural gaps
 
 These are planned features, not defects in the current research milestone:
 
-- Incoming taker remainders remain free and cannot yet rest automatically.
 - Fee accounting is not implemented.
 - Canceled order accounts are retained as history and their rent is not yet
   reclaimed.
@@ -570,7 +577,7 @@ The test harness:
 5. sends transactions through LiteSVM;
 6. deserializes resulting Anchor accounts and checks state.
 
-The 150-test suite currently covers:
+The 154-test suite currently covers:
 
 - upgrade-authority-only, one-time protocol initialization;
 - creation of the deployer's config and active admin record;
@@ -647,6 +654,11 @@ The 150-test suite currently covers:
 - atomic multi-level batching that closes the best level and continues at its
   worse neighbor;
 - complete transaction rollback when a later batch instruction fails;
+- atomic new-level insertion and same-level FIFO append of safe taker
+  remainders;
+- rollback of preceding fills when remainder placement fails;
+- cap-boundary behavior that leaves later crossing makers and the taker
+  remainder untouched;
 - rejection without mutation of non-crossing, same-side, self-trading,
   underfunded, paused, non-head, and non-best match attempts.
 
@@ -678,9 +690,9 @@ The recommended implementation order is:
 4. ~~Route order collateral through free and locked balance accounting.~~
 5. ~~Add partial and full one-maker settlement with FIFO and level removal.~~
 6. ~~Add bounded client-planned multi-maker traversal with atomic rollback.~~
-7. **Next:** add automatic non-crossing remainder posting, then events, fees,
-   and broader conservation tests.
-8. Add order cleanup and rent-reclamation rules.
+7. ~~Add automatic non-crossing remainder posting with atomic rollback.~~
+8. **Next:** add events, fees, and broader conservation tests.
+9. Add order cleanup and rent-reclamation rules.
 
 Each phase should add its invariants and failure-path tests before the next
 state transition is introduced.
