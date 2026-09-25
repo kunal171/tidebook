@@ -16,15 +16,15 @@ The current implementation establishes the account and authorization foundation:
 - create canonical price levels at the best, middle, or worst position on each
   side, append same-price orders behind a validated FIFO tail, and unlink
   canceled orders and empty levels atomically;
-- settle against one best FIFO maker, preserving a partial maker or atomically
-  removing a complete maker and repairing its queue and level;
+- settle against up to three best-price FIFO makers per client transaction,
+  preserving partial makers or atomically removing complete makers and
+  repairing their queues and levels;
 - validate behavior with in-process LiteSVM integration tests.
 
-The program now supports one deliberately bounded matching step against the
-best FIFO maker. It can partially reduce that maker or fill and unlink it,
-promote its same-price successor, and close an empty best price level while
-advancing the market pointer. It does not yet traverse multiple makers or rest
-a taker remainder automatically. Deposited tokens remain in market vaults while
+Each on-chain instruction settles one best FIFO maker. The client may compose
+up to three sequential instructions into one atomic Solana transaction, across
+same-price FIFO successors or multiple price levels. It does not yet rest a
+taker remainder automatically. Deposited tokens remain in market vaults while
 `TraderBalance` PDAs track each owner's free and locked claims; matching is
 purely an atomic ledger and order-book update.
 
@@ -36,7 +36,7 @@ The program has three external roles:
 | --- | --- |
 | Super-admin | Add, disable, enable, and remove administrator records |
 | Market authority | Initialize a market, pause it, unpause it, and close it while paused |
-| Trader | Initialize a market balance, deposit/withdraw, place or cancel orders, and settle against one best FIFO maker while active |
+| Trader | Initialize a market balance, deposit/withdraw, place or cancel orders, and atomically settle against a bounded best-price FIFO path while active |
 
 The program invokes the Token Program only at custody boundaries: deposit,
 withdrawal, market-vault initialization, and safe closure. Placement reserves
@@ -56,7 +56,7 @@ active on-chain record. Role-aware routes are:
 | Route | UI access | Purpose |
 | --- | --- | --- |
 | `/markets` | Public | Discover active and paused on-chain markets without connecting a wallet |
-| `/markets/[address]` | Public viewing; connected wallet for trading; market authority for lifecycle controls | Inspect one market, match one crossing best FIFO maker or place a resting order while active, and pause, unpause, or safely close an authorized market |
+| `/markets/[address]` | Public viewing; connected wallet for trading; market authority for lifecycle controls | Inspect one market, match up to three crossing FIFO makers atomically or place a resting order while active, and pause, unpause, or safely close an authorized market |
 | `/admin` | Super-admin | Initialize governance and add, disable, enable, or remove admins |
 | `/markets/new` | Active admin or super-admin | Create a market for two SPL mints |
 | `/orders` | Any connected wallet | List wallet-owned orders and cancel orders whose status is `Open` |
@@ -70,12 +70,13 @@ from the market's best price through `worse_price` links to find the exact
 better/worse insertion gap. The walk checks for cycles, broken reciprocal links,
 wrong markets or sides, and invalid price ordering before submitting.
 
-For a crossing order, the page fetches the opposing best level, FIFO maker,
-maker ledger, and only the removal accounts required by that maker's outcome.
-One transaction processes at most one maker. If the submitted quantity is
-larger, the unprocessed remainder stays in the taker's free balance and remains
-in the form for an explicit retry. A non-crossing order follows the normal
-insert-or-append path.
+For a crossing order, `matching-plan.ts` walks the opposing price-level and
+FIFO links, rejecting cycles, broken ordering, self-trades, and inconsistent
+aggregates. It collects at most three makers and records each resting execution
+price plus the optional accounts required by that transition. The page builds
+one matching instruction per step and sends the batch atomically. If the cap is
+reached, the unprocessed remainder stays free and remains in the form for an
+explicit retry. A non-crossing order follows the normal insert-or-append path.
 
 This RPC traversal is only an advisory transaction-building step. The linked
 book can change between reads and confirmation, so the on-chain instruction
@@ -338,7 +339,7 @@ Move collateral from free to locked internal balance
 The level's `first_order` and the market's best-price pointer remain unchanged.
 Every transfer, link, aggregate, and counter succeeds or rolls back together.
 
-### Bounded one-maker matching flow
+### Bounded multi-maker transaction flow
 
 ```text
 Taker
@@ -374,6 +375,16 @@ successor becomes the new head, or its empty level is closed to the recorded
 rent payer and the next worse price becomes best. All arithmetic and topology
 validation occur before mutations; any failure rolls back settlement and index
 maintenance together.
+
+The program deliberately keeps one maker per instruction, while the client
+places up to three sequential instructions in one Solana transaction. Later
+instructions observe the queue and level mutations made by earlier ones. If any
+step sees stale links, insufficient balance, or invalid arithmetic, Solana rolls
+back every preceding fill in that transaction.
+
+This composition avoids an unbounded on-chain loop and a variable account
+parser, at the cost of more client-side discovery, transaction account metadata,
+and retry work under contention.
 
 ### Order cancellation flow
 
@@ -523,12 +534,15 @@ The program currently enforces:
     unprocessed remainder is neither locked, posted, nor discarded.
 50. Base and quote ledger changes, maker-order changes, and the price-level
     aggregate update succeed or roll back atomically.
+51. A client transaction may sequence at most three one-maker instructions;
+    each receives the taker quantity remaining before its own fill.
+52. Failure of any later matching instruction rolls back every earlier fill,
+    queue mutation, level closure, and balance change in the transaction.
 
 ## 6. Known architectural gaps
 
 These are planned features, not defects in the current research milestone:
 
-- Automatic bounded multi-maker traversal is not implemented.
 - Incoming taker remainders remain free and cannot yet rest automatically.
 - Fee accounting is not implemented.
 - Canceled order accounts are retained as history and their rent is not yet
@@ -556,7 +570,7 @@ The test harness:
 5. sends transactions through LiteSVM;
 6. deserializes resulting Anchor accounts and checks state.
 
-The 147-test suite currently covers:
+The 150-test suite currently covers:
 
 - upgrade-authority-only, one-time protocol initialization;
 - creation of the deployer's config and active admin record;
@@ -616,7 +630,7 @@ The 147-test suite currently covers:
   counters;
 - three-order FIFO chaining;
 - atomic rejection of stale tails, opposite-side levels, paused-market append,
-  and insufficient append collateral.
+  and insufficient append collateral;
 - deterministic crossing, maker-price execution, fill sizing, overflow
   protection, and final-bid rounding-dust planning;
 - atomic bid-taker and ask-taker settlement against a partially filled maker;
@@ -628,6 +642,11 @@ The 147-test suite currently covers:
   fixed-point rounding-dust refund;
 - atomic rejection of missing FIFO successors, missing worse levels, and an
   incorrect price-level rent recipient;
+- atomic same-price batching that fills the FIFO head and continues into its
+  successor;
+- atomic multi-level batching that closes the best level and continues at its
+  worse neighbor;
+- complete transaction rollback when a later batch instruction fails;
 - rejection without mutation of non-crossing, same-side, self-trading,
   underfunded, paused, non-head, and non-best match attempts.
 
@@ -645,11 +664,11 @@ The proposed account model and its alternatives are documented in
 The matching and balance model is documented separately in
 [`crankless-settlement-design.md`](crankless-settlement-design.md).
 
-The selected direction is bounded crankless PDA matching. The client will
-supply a limited sequence of program-maintained price levels, FIFO orders, and
-canonical maker balance PDAs. The program will validate the complete path and
-atomically update orders plus free/locked trader balances. Informational events
-will not represent deferred settlement work.
+The selected direction is bounded crankless PDA matching. The client supplies a
+limited sequence of program-maintained price levels, FIFO orders, and canonical
+maker balance PDAs. Each instruction validates its current best FIFO step, and
+the Solana transaction atomically applies or rolls back the complete bounded
+path. Informational events will not represent deferred settlement work.
 
 The recommended implementation order is:
 
@@ -658,9 +677,10 @@ The recommended implementation order is:
 3. ~~Add canonical per-market trader balances and atomic deposit/withdrawal.~~
 4. ~~Route order collateral through free and locked balance accounting.~~
 5. ~~Add partial and full one-maker settlement with FIFO and level removal.~~
-6. **In progress:** add bounded multi-maker traversal and automatic remainder
-   posting policy, then fees and broader conservation tests.
-7. Add order cleanup and rent-reclamation rules.
+6. ~~Add bounded client-planned multi-maker traversal with atomic rollback.~~
+7. **Next:** add automatic non-crossing remainder posting, then events, fees,
+   and broader conservation tests.
+8. Add order cleanup and rent-reclamation rules.
 
 Each phase should add its invariants and failure-path tests before the next
 state transition is introduced.
