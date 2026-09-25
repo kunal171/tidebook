@@ -239,7 +239,4 @@ pub enum MarketError {
 
     #[msg("Matching must consume the FIFO head order")]
     MakerNotFifoHead,
-
-    #[msg("The first matching milestone requires the maker to remain open")]
-    MakerMustRemainOpen,
 }

@@ -15,6 +15,7 @@ import { PublicKey, SystemProgram } from "@solana/web3.js";
 import {
   accountExplorerUrl,
   decodeMarketStatus,
+  decodeOrderStatus,
   deriveOrderPda,
   derivePriceLevelPda,
   deriveTraderBalancePda,
@@ -60,6 +61,20 @@ function parsePositiveU64(value: string, label: string) {
   return number;
 }
 
+type SubmissionResult =
+  | {
+      kind: "placed";
+      signature: string;
+      order: PublicKey;
+    }
+  | {
+      kind: "matched";
+      signature: string;
+      makerOrder: PublicKey;
+      filledQuantity: BN;
+      remainingQuantity: BN;
+    };
+
 export function MarketDetail({ address }: { address: string }) {
   const router = useRouter();
   const { connection } = useConnection();
@@ -87,10 +102,7 @@ export function MarketDetail({ address }: { address: string }) {
     null,
   );
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<{
-    signature: string;
-    order: PublicKey;
-  } | null>(null);
+  const [result, setResult] = useState<SubmissionResult | null>(null);
   const marketAddress = useMemo(() => {
     try {
       return new PublicKey(address);
@@ -313,77 +325,168 @@ export function MarketDetail({ address }: { address: string }) {
         );
       }
 
-      const order = deriveOrderPda(marketAddress, market.nextOrderId);
       const orderSide = side === "bid" ? { bid: {} } : { ask: {} };
       const baseScale = new BN(10).pow(new BN(market.baseDecimals));
-      const collateralAmount =
-        side === "bid"
-          ? rawPrice.mul(rawQuantity).div(baseScale)
-          : rawQuantity;
       const availableBalance =
         side === "bid" ? traderBalance.quoteFree : traderBalance.baseFree;
-      if (availableBalance.lt(collateralAmount)) {
-        throw new Error(
-          `Insufficient free ${side === "bid" ? "quote" : "base"} balance`,
-        );
-      }
-
-      const priceLevel = derivePriceLevelPda(
-        marketAddress,
-        side,
-        rawPrice,
+      const makerSide: OrderSide = side === "bid" ? "ask" : "bid";
+      const opposingBest = side === "bid" ? market.bestAsk : market.bestBid;
+      const crossesBest = Boolean(
+        opposingBest &&
+          (side === "bid"
+            ? rawPrice.gte(opposingBest)
+            : rawPrice.lte(opposingBest)),
       );
-      const priceLevelState = await getTidebookAccounts(
-        signedProgram,
-      ).priceLevel.fetchNullable(priceLevel);
 
-      let signature: string;
-
-      if (priceLevelState) {
-        if (!priceLevelState.lastOrder) {
-          throw new Error("Existing price level has no FIFO tail");
+      if (crossesBest && opposingBest) {
+        // One transaction deliberately consumes at most one best FIFO maker.
+        // All relationship accounts come from program-owned links and are
+        // revalidated on-chain, so an RPC race fails atomically.
+        const makerPriceLevel = derivePriceLevelPda(
+          marketAddress,
+          makerSide,
+          opposingBest,
+        );
+        const accounts = getTidebookAccounts(signedProgram);
+        const level = await accounts.priceLevel.fetchNullable(makerPriceLevel);
+        if (!level?.firstOrder) {
+          throw new Error("The best opposing level has no FIFO maker");
         }
 
-        signature = await signedProgram.methods
-          .appendLimitOrder(orderSide, rawPrice, rawQuantity)
-          .accounts({
-            trader: wallet.publicKey,
-            market: marketAddress,
-            order,
-            priceLevel,
-            previousOrder: priceLevelState.lastOrder,
-            traderBalance: traderBalanceAddress,
-            systemProgram: SystemProgram.programId,
-          })
-          .rpc();
-      } else {
-        const currentBest = side === "bid" ? market.bestBid : market.bestAsk;
-        const { betterLevel, worseLevel } = await findPriceLevelNeighbors(
-          signedProgram,
+        const makerOrderAddress = level.firstOrder;
+        const makerOrder = await accounts.order.fetchNullable(makerOrderAddress);
+        if (!makerOrder || decodeOrderStatus(makerOrder.status) !== "open") {
+          throw new Error("The best FIFO maker is missing or no longer open");
+        }
+        if (makerOrder.owner.equals(wallet.publicKey)) {
+          throw new Error(
+            "Self-trading against your own resting order is not allowed",
+          );
+        }
+
+        const filledQuantity = BN.min(rawQuantity, makerOrder.remainingQuantity);
+        const requiredBalance =
+          side === "bid"
+            ? makerOrder.price.mul(filledQuantity).div(baseScale)
+            : filledQuantity;
+        if (availableBalance.lt(requiredBalance)) {
+          throw new Error(
+            `Insufficient free ${side === "bid" ? "quote" : "base"} balance`,
+          );
+        }
+
+        const makerFullyFilled = rawQuantity.gte(makerOrder.remainingQuantity);
+        const removesPriceLevel = makerFullyFilled && level.orderCount.eqn(1);
+        if (makerFullyFilled && !removesPriceLevel && !makerOrder.nextOrder) {
+          throw new Error("The filled FIFO maker has no successor");
+        }
+
+        const worseLevel =
+          removesPriceLevel && level.worsePrice
+            ? derivePriceLevelPda(marketAddress, makerSide, level.worsePrice)
+            : null;
+        const makerBalance = deriveTraderBalancePda(
           marketAddress,
-          side,
-          rawPrice,
-          currentBest,
+          makerOrder.owner,
         );
-
-        signature = await signedProgram.methods
-          .insertLimitOrder(orderSide, rawPrice, rawQuantity)
+        const signature = await signedProgram.methods
+          .matchLimitOrder(orderSide, rawPrice, rawQuantity)
           .accountsPartial({
-            trader: wallet.publicKey,
+            taker: wallet.publicKey,
             market: marketAddress,
-            order,
-            priceLevel,
-            traderBalance: traderBalanceAddress,
-            systemProgram: SystemProgram.programId,
-            betterLevel: betterLevel ?? signedProgram.programId,
+            makerOrder: makerOrderAddress,
+            makerPriceLevel,
+            nextOrder:
+              makerFullyFilled && makerOrder.nextOrder
+                ? makerOrder.nextOrder
+                : signedProgram.programId,
             worseLevel: worseLevel ?? signedProgram.programId,
+            levelRentRecipient: removesPriceLevel
+              ? level.rentPayer
+              : signedProgram.programId,
+            makerBalance,
+            takerBalance: traderBalanceAddress,
           })
           .rpc();
-      }
+        const remainingQuantity = rawQuantity.sub(filledQuantity);
 
-      setResult({ signature, order });
-      setPrice("");
-      setQuantity("");
+        setResult({
+          kind: "matched",
+          signature,
+          makerOrder: makerOrderAddress,
+          filledQuantity,
+          remainingQuantity,
+        });
+        // Keep an unprocessed remainder in the form because this bounded
+        // instruction neither discards nor automatically posts it.
+        setQuantity(
+          remainingQuantity.isZero() ? "" : remainingQuantity.toString(),
+        );
+        if (remainingQuantity.isZero()) setPrice("");
+      } else {
+        const collateralAmount =
+          side === "bid"
+            ? rawPrice.mul(rawQuantity).div(baseScale)
+            : rawQuantity;
+        if (availableBalance.lt(collateralAmount)) {
+          throw new Error(
+            `Insufficient free ${side === "bid" ? "quote" : "base"} balance`,
+          );
+        }
+
+        const order = deriveOrderPda(marketAddress, market.nextOrderId);
+        const priceLevel = derivePriceLevelPda(marketAddress, side, rawPrice);
+        const priceLevelState = await getTidebookAccounts(
+          signedProgram,
+        ).priceLevel.fetchNullable(priceLevel);
+        let signature: string;
+
+        if (priceLevelState) {
+          if (!priceLevelState.lastOrder) {
+            throw new Error("Existing price level has no FIFO tail");
+          }
+
+          signature = await signedProgram.methods
+            .appendLimitOrder(orderSide, rawPrice, rawQuantity)
+            .accounts({
+              trader: wallet.publicKey,
+              market: marketAddress,
+              order,
+              priceLevel,
+              previousOrder: priceLevelState.lastOrder,
+              traderBalance: traderBalanceAddress,
+              systemProgram: SystemProgram.programId,
+            })
+            .rpc();
+        } else {
+          const currentBest = side === "bid" ? market.bestBid : market.bestAsk;
+          const { betterLevel, worseLevel } = await findPriceLevelNeighbors(
+            signedProgram,
+            marketAddress,
+            side,
+            rawPrice,
+            currentBest,
+          );
+
+          signature = await signedProgram.methods
+            .insertLimitOrder(orderSide, rawPrice, rawQuantity)
+            .accountsPartial({
+              trader: wallet.publicKey,
+              market: marketAddress,
+              order,
+              priceLevel,
+              traderBalance: traderBalanceAddress,
+              systemProgram: SystemProgram.programId,
+              betterLevel: betterLevel ?? signedProgram.programId,
+              worseLevel: worseLevel ?? signedProgram.programId,
+            })
+            .rpc();
+        }
+
+        setResult({ kind: "placed", signature, order });
+        setPrice("");
+        setQuantity("");
+      }
       await Promise.all([loadMarket(), loadTraderBalance()]);
     } catch (cause) {
       setError(getErrorMessage(cause));
@@ -488,6 +591,15 @@ export function MarketDetail({ address }: { address: string }) {
     const quoteAmount = rawPrice.mul(rawQuantity).div(baseScale);
     return `${formatAtomicAmount(quoteAmount, market.quoteDecimals)} quote tokens`;
   }, [market, price, quantity, side]);
+  const crossesBest = useMemo(() => {
+    if (!market || !/^[0-9]+$/.test(price.trim())) return false;
+    const rawPrice = new BN(price.trim(), 10);
+    const opposingBest = side === "bid" ? market.bestAsk : market.bestBid;
+    if (!opposingBest) return false;
+    return side === "bid"
+      ? rawPrice.gte(opposingBest)
+      : rawPrice.lte(opposingBest);
+  }, [market, price, side]);
 
   return (
     <div className="app-shell">
@@ -507,8 +619,9 @@ export function MarketDetail({ address }: { address: string }) {
                 <div className="eyebrow">Market details</div>
                 <h1>{shortAddress(marketAddress.toBase58())}</h1>
                 <p>
-                  Submit collateralized limit orders. Bids lock quote tokens;
-                  asks lock base tokens until cancellation or future matching.
+                  Cross the best FIFO maker or post a collateralized limit
+                  order. Every completed fill settles internal balances
+                  atomically at the resting maker price.
                 </p>
               </div>
               <span className={`role-badge market-${status}`}>{status}</span>
@@ -543,11 +656,11 @@ export function MarketDetail({ address }: { address: string }) {
                   </div>
                   <div>
                     <dt>Best bid</dt>
-                    <dd>{market.bestBid?.toString() ?? "Not maintained"}</dd>
+                    <dd>{market.bestBid?.toString() ?? "No open bids"}</dd>
                   </div>
                   <div>
                     <dt>Best ask</dt>
-                    <dd>{market.bestAsk?.toString() ?? "Not maintained"}</dd>
+                    <dd>{market.bestAsk?.toString() ?? "No open asks"}</dd>
                   </div>
                   <div>
                     <dt>Base decimals</dt>
@@ -746,11 +859,20 @@ export function MarketDetail({ address }: { address: string }) {
                         pending
                       }
                     >
-                      {pending ? "Placing order…" : `Place ${side}`}
+                      {pending
+                        ? "Submitting…"
+                        : crossesBest
+                          ? `Match best ${side === "bid" ? "ask" : "bid"}`
+                          : `Place ${side}`}
                     </button>
-                    {collateralPreview && (
+                    {crossesBest ? (
+                      <small>
+                        This transaction processes one best FIFO maker. Any
+                        larger remainder stays free and remains in this form.
+                      </small>
+                    ) : collateralPreview ? (
                       <small>This order will lock {collateralPreview}.</small>
-                    )}
+                    ) : null}
                   </form>
                 )}
               </section>
@@ -900,9 +1022,26 @@ export function MarketDetail({ address }: { address: string }) {
           <div className="transaction-message transaction-error">{error}</div>
         )}
 
-        {result && (
+        {result?.kind === "placed" && (
           <div className="transaction-message transaction-success">
             Order created at {shortAddress(result.order.toBase58())}.{" "}
+            <a
+              href={transactionExplorerUrl(result.signature)}
+              target="_blank"
+              rel="noreferrer"
+            >
+              View transaction ↗
+            </a>
+          </div>
+        )}
+
+        {result?.kind === "matched" && (
+          <div className="transaction-message transaction-success">
+            Filled {result.filledQuantity.toString()} raw base against maker {" "}
+            {shortAddress(result.makerOrder.toBase58())}.
+            {!result.remainingQuantity.isZero() && (
+              <> {result.remainingQuantity.toString()} remains unprocessed.</>
+            )}{" "}
             <a
               href={transactionExplorerUrl(result.signature)}
               target="_blank"

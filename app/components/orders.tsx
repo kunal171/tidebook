@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 
 import {
@@ -156,8 +157,8 @@ export function Orders() {
           <div className="eyebrow">Trader workspace</div>
           <h1>My orders</h1>
           <p>
-            Orders owned by the connected wallet. Open orders can be
-            canceled even while their market is paused.
+            Orders owned by the connected wallet. Filled and canceled records
+            remain visible as history; only open orders can be canceled.
           </p>
         </div>
 
@@ -203,7 +204,9 @@ export function Orders() {
                       <div>
                         <span>Market</span>
                         <strong>
-                          {shortAddress(order.market.toBase58())}
+                          <Link href={`/markets/${order.market.toBase58()}`}>
+                            {shortAddress(order.market.toBase58())}
+                          </Link>
                         </strong>
                       </div>
 
@@ -226,6 +229,15 @@ export function Orders() {
                         <span>Remaining</span>
                         <strong>
                           {order.remainingQuantity.toString()}
+                        </strong>
+                      </div>
+
+                      <div>
+                        <span>Filled</span>
+                        <strong>
+                          {order.quantity
+                            .sub(order.remainingQuantity)
+                            .toString()}
                         </strong>
                       </div>
 

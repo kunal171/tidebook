@@ -1387,7 +1387,7 @@
     {
       "name": "match_limit_order",
       "docs": [
-        "Executes one complete taker fill against a maker that remains open."
+        "Settles against one best FIFO maker and removes it when fully filled."
       ],
       "discriminator": [
         56,
@@ -1500,6 +1500,32 @@
               }
             ]
           }
+        },
+        {
+          "name": "next_order",
+          "docs": [
+            "New FIFO head when the filled maker has another order behind it."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "worse_level",
+          "docs": [
+            "Next lower-priority price level when the maker's level becomes empty."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "level_rent_recipient",
+          "docs": [
+            "Receives the reclaimed rent when an empty price level is closed.",
+            "",
+            "`maker_price_level.rent_payer`."
+          ],
+          "writable": true,
+          "optional": true
         },
         {
           "name": "maker_balance",
@@ -2344,11 +2370,6 @@
       "code": 6077,
       "name": "MakerNotFifoHead",
       "msg": "Matching must consume the FIFO head order"
-    },
-    {
-      "code": 6078,
-      "name": "MakerMustRemainOpen",
-      "msg": "The first matching milestone requires the maker to remain open"
     }
   ],
   "types": [
@@ -2457,7 +2478,7 @@
           {
             "name": "best_bid",
             "docs": [
-              "Reserved for the matching-engine milestone; not maintained yet."
+              "Highest-priority open bid price, or `None` when the bid side is empty."
             ],
             "type": {
               "option": "u64"
@@ -2466,7 +2487,7 @@
           {
             "name": "best_ask",
             "docs": [
-              "Reserved for the matching-engine milestone; not maintained yet."
+              "Highest-priority open ask price, or `None` when the ask side is empty."
             ],
             "type": {
               "option": "u64"
