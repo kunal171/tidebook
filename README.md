@@ -25,9 +25,11 @@ built incrementally with Anchor, LiteSVM, and a companion web application.
 Sorted multi-price insertion, indexed cancellation, deposits, withdrawals, and
 internal order collateral accounting are implemented. The bounded matching
 instruction settles one maker, while the client safely plans and batches up to
-three instructions in one atomic transaction. Any larger taker remainder stays
-free for an explicit follow-up action. Automatic remainder posting, events, and
-fees remain planned milestones.
+three instructions in one atomic transaction. When those fills exhaust the
+crossing book or reach a non-crossing price, the client atomically inserts or
+appends any valid remainder at the taker limit. A remainder stays free only when
+more crossing liquidity remains beyond the cap or its bid notional rounds to
+zero. Events and fees remain planned milestones.
 
 ## Architecture
 

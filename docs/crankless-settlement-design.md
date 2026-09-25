@@ -5,8 +5,8 @@
 Status: **In progress.** One instruction atomically settles one partial or full
 maker, and the web client plans and batches up to three such instructions in one
 transaction. The planner supports same-level FIFO continuation, multi-level
-traversal, and complete rollback if a later step fails. Automatic non-crossing
-remainder posting remains.
+traversal, complete rollback if a later step fails, and atomic insertion or
+append of a valid non-crossing remainder.
 
 This document explains why Tidebook is targeting bounded crankless settlement,
 how that differs from Phoenix and older OpenBook designs, and which accounts a
@@ -222,8 +222,10 @@ links, market counters, and both traders' balances change atomically.
 A bid may specify a limit of 105 but match a resting ask at 100. The taker owes
 only 100 because the current bounded instruction debits free balance directly
 at the maker price. It does not create or lock an incoming taker order first.
-If the taker is larger than the maker, only the actual fill is debited and the
-unprocessed remainder stays free for the client's next explicit instruction.
+If the taker is larger than the bounded crossing path, only actual fills are
+debited at maker prices. Once the planner proves the next price does not cross
+or the opposing book is exhausted, it atomically posts a valid remainder at the
+taker limit price. A cap-blocked or zero-notional remainder stays free.
 
 ### Cancel
 
@@ -296,20 +298,22 @@ An incoming ask is symmetric and stops when the best bid is below its limit.
 
 The program instruction deliberately supplies one maker. The client composes up
 to three instructions into one transaction and passes the decreasing taker
-remainder to each step. If the client cap is reached while the incoming request
-still has quantity:
+remainder to each step. If the client cap is reached while the incoming request still has quantity and
+another crossing maker remains:
 
 - all processed fills confirm together or all roll back together;
 - the remainder stays in the taker's free internal balance;
 - the web client retains the remainder in its form so the trader can match the
-  next maker or post it after refreshing the book.
+  next bounded path after refreshing the book.
 
 The fixed cap is a conservative research choice. It bounds legacy transaction
 size, writable account metadata, compute, and stale-state exposure. The cost is
-extra RPC discovery and explicit retries for deeper books. Automatic atomic
-posting once no crossing liquidity remains is the next policy milestone. The
-current behavior never silently drops quantity or leaves collateral without a
-balance claim.
+extra RPC discovery and explicit retries for deeper books. If the planned path
+exhausts the opposing book or reaches a non-crossing price, the client appends
+the existing insert-or-append instruction for a valid remainder to the same
+transaction. A stale match or placement account rolls back the entire sequence.
+The current behavior never silently drops quantity or leaves collateral without
+a balance claim.
 
 ## Events and indexers
 
@@ -375,8 +379,8 @@ The safe order is:
 6. ~~Add partial- and full-maker tests before multi-fill behavior.~~
 7. ~~Add bounded multi-maker and multi-level client planning with atomic
    rollback tests.~~
-8. **Next:** atomically post a non-crossing remainder when safe.
-9. Emit informational events and add broader conservation tests.
+8. ~~Atomically post a non-crossing remainder when safe.~~
+9. **Next:** emit informational events and add broader conservation tests.
 10. Benchmark account count, compute use, contention, and retry rate before
    considering a slab-based redesign.
 

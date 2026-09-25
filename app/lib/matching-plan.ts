@@ -11,6 +11,9 @@ import {
   type OrderSide,
 } from "./tidebook";
 
+// Keep the batch deliberately small. Each match step introduces writable
+// maker, order, and price-level accounts, so an unbounded plan would eventually
+// exceed Solana's transaction account or compute limits.
 export const MAX_MATCHES_PER_TRANSACTION = 3;
 
 export interface MatchStep {
@@ -29,11 +32,6 @@ export interface MatchStep {
   fillQuantity: BN;
 }
 
-export interface BoundedMatchPlan {
-  steps: MatchStep[];
-  remainingQuantity: BN;
-}
-
 export function pricesCross(
   takerSide: OrderSide,
   takerLimitPrice: BN,
@@ -42,6 +40,27 @@ export function pricesCross(
   return takerSide === "bid"
     ? takerLimitPrice.gte(makerPrice)
     : takerLimitPrice.lte(makerPrice);
+}
+
+export type MatchPlanStopReason =
+  | "filled"
+  | "book-exhausted"
+  | "non-crossing"
+  | "match-cap";
+
+/**
+ * A read-only snapshot used to construct one atomic matching transaction.
+ *
+ * `book-exhausted` and `non-crossing` prove that an unfilled remainder may be
+ * posted at the taker's limit price. `match-cap` does not: crossing liquidity
+ * still exists and must be processed by another bounded transaction first.
+ * Every relationship in this plan remains untrusted until the program
+ * revalidates it on-chain.
+ */
+export interface BoundedMatchPlan {
+  steps: MatchStep[];
+  remainingQuantity: BN;
+  stopReason: MatchPlanStopReason;
 }
 
 export async function planBoundedMatches(
@@ -57,6 +76,9 @@ export async function planBoundedMatches(
     throw new Error("Matching quantity must be greater than zero");
   }
 
+  // If traversal naturally runs out of opposing levels, the book is
+  // exhausted. More specific exit paths replace this default below.
+  let stopReason: MatchPlanStopReason = "book-exhausted";
   const accounts = getTidebookAccounts(program);
   const makerSide: OrderSide = takerSide === "bid" ? "ask" : "bid";
   const steps: MatchStep[] = [];
@@ -78,6 +100,7 @@ export async function planBoundedMatches(
     steps.length < MAX_MATCHES_PER_TRANSACTION
   ) {
     if (!pricesCross(takerSide, limitPrice, currentPrice)) {
+      stopReason = "non-crossing";
       break;
     }
 
@@ -250,10 +273,29 @@ export async function planBoundedMatches(
       localLevelQuantity = nextLevelQuantity;
       localOrderCount = nextOrderCount;
 
-      if (
-        remainingQuantity.isZero() ||
-        steps.length === MAX_MATCHES_PER_TRANSACTION
-      ) {
+      if (remainingQuantity.isZero()) {
+        stopReason = "filled";
+        break;
+      }
+
+      if (steps.length === MAX_MATCHES_PER_TRANSACTION) {
+        // Reaching the cap is not automatically unsafe for remainder posting.
+        // The capped step may also have consumed the final crossing maker. We
+        // can classify that boundary from the current maker and level links
+        // without fetching a fourth order.
+        if (maker.nextOrder) {
+          // Another FIFO order exists at the same crossing price.
+          stopReason = "match-cap";
+        } else if (!level.worsePrice) {
+          // The final opposing price level was completely consumed.
+          stopReason = "book-exhausted";
+        } else if (pricesCross(takerSide, limitPrice, level.worsePrice)) {
+          // The next price level still crosses, but the transaction is full.
+          stopReason = "match-cap";
+        } else {
+          stopReason = "non-crossing";
+        }
+
         break;
       }
 
@@ -290,5 +332,6 @@ export async function planBoundedMatches(
   return {
     steps,
     remainingQuantity,
+    stopReason,
   };
 }
