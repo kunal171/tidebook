@@ -6,6 +6,8 @@
 // instruction size, so this integration-test boundary permits the large error.
 #![allow(clippy::result_large_err)]
 
+mod support;
+
 use {
     anchor_lang::{
         prelude::Pubkey,
@@ -1260,7 +1262,13 @@ fn pause_and_unpause_market() {
     let blockhash = svm.latest_blockhash();
     let msg = Message::new_with_blockhash(&[pause_ix], Some(&payer.pubkey()), &blockhash);
     let tx = VersionedTransaction::try_new(VersionedMessage::Legacy(msg), &[&payer]).unwrap();
-    assert!(svm.send_transaction(tx).is_ok());
+    let pause_result = svm.send_transaction(tx);
+    assert!(pause_result.is_ok());
+    let paused =
+        support::events::single_event::<tidebook::events::MarketStatusChangedEvent>(&pause_result);
+    assert_eq!(paused.market, market);
+    assert_eq!(paused.authority, payer.pubkey());
+    assert_eq!(paused.status, tidebook::state::MarketStatus::Paused);
 
     let market_account = svm.get_account(&market).unwrap();
     let mut market_data: &[u8] = &market_account.data;
@@ -1280,7 +1288,14 @@ fn pause_and_unpause_market() {
     let blockhash = svm.latest_blockhash();
     let msg = Message::new_with_blockhash(&[unpause_ix], Some(&payer.pubkey()), &blockhash);
     let tx = VersionedTransaction::try_new(VersionedMessage::Legacy(msg), &[&payer]).unwrap();
-    assert!(svm.send_transaction(tx).is_ok());
+    let unpause_result = svm.send_transaction(tx);
+    assert!(unpause_result.is_ok());
+    let active = support::events::single_event::<tidebook::events::MarketStatusChangedEvent>(
+        &unpause_result,
+    );
+    assert_eq!(active.market, market);
+    assert_eq!(active.authority, payer.pubkey());
+    assert_eq!(active.status, tidebook::state::MarketStatus::Active);
 
     let market_account = svm.get_account(&market).unwrap();
     let mut market_data: &[u8] = &market_account.data;
@@ -1365,9 +1380,21 @@ fn valid_mints_initialize_market() {
     let base_mint = create_test_mint(&mut svm, 9);
     let quote_mint = create_test_mint(&mut svm, 6);
 
-    let (_, result) = send_initialize_market(&mut svm, &payer, base_mint, quote_mint);
+    let (market, result) = send_initialize_market(&mut svm, &payer, base_mint, quote_mint);
 
     assert!(result.is_ok(), "initialization failed: {result:?}");
+
+    let (_, base_vault, quote_vault) =
+        derive_market_vault_addresses(&tidebook::id(), &market, &base_mint, &quote_mint);
+    let event = support::events::single_event::<tidebook::events::MarketInitializedEvent>(&result);
+    assert_eq!(event.market, market);
+    assert_eq!(event.authority, payer.pubkey());
+    assert_eq!(event.base_mint, base_mint);
+    assert_eq!(event.quote_mint, quote_mint);
+    assert_eq!(event.base_vault, base_vault);
+    assert_eq!(event.quote_vault, quote_vault);
+    assert_eq!(event.price_tick_size, TEST_PRICE_TICK_SIZE);
+    assert_eq!(event.quantity_lot_size, TEST_QUANTITY_LOT_SIZE);
 }
 
 #[test]
@@ -1773,6 +1800,17 @@ fn first_bid_creates_best_price_level_and_fifo_queue() {
     let level_state = load_price_level(&svm, price_level);
     let order_state = load_order(&svm, order);
 
+    let event = support::events::single_event::<tidebook::events::OrderPlacedEvent>(&result);
+    assert_eq!(event.market, market);
+    assert_eq!(event.order, order);
+    assert_eq!(event.order_id, order_state.order_id);
+    assert_eq!(event.owner, payer.pubkey());
+    assert_eq!(event.side, tidebook::state::OrderSide::Bid);
+    assert_eq!(event.price, TEST_ORDER_PRICE);
+    assert_eq!(event.quantity, TEST_ORDER_QUANTITY);
+    assert_eq!(event.locked_collateral, order_state.locked_collateral);
+    assert_eq!(event.price_level, price_level);
+
     assert_eq!(market_state.best_bid, Some(TEST_ORDER_PRICE));
     assert_eq!(market_state.best_ask, None);
 
@@ -1940,6 +1978,17 @@ fn second_bid_at_same_price_appends_to_fifo_queue() {
     let first_state = load_order(&svm, first_order);
     let second_state = load_order(&svm, second_order);
 
+    let event = support::events::single_event::<tidebook::events::OrderPlacedEvent>(&second_result);
+    assert_eq!(event.market, market);
+    assert_eq!(event.order, second_order);
+    assert_eq!(event.order_id, second_state.order_id);
+    assert_eq!(event.owner, payer.pubkey());
+    assert_eq!(event.side, tidebook::state::OrderSide::Bid);
+    assert_eq!(event.price, TEST_ORDER_PRICE);
+    assert_eq!(event.quantity, TEST_ORDER_QUANTITY);
+    assert_eq!(event.locked_collateral, second_state.locked_collateral);
+    assert_eq!(event.price_level, price_level);
+
     assert_eq!(market_state.best_bid, Some(TEST_ORDER_PRICE));
     assert_eq!(market_state.next_order_id, 3);
     assert_eq!(market_state.open_order_count, 2);
@@ -2016,6 +2065,7 @@ fn three_bids_at_same_price_preserve_fifo_order() {
         TEST_ORDER_PRICE,
     );
     let market_state = load_market(&svm, market);
+
     let level_state = load_price_level(&svm, price_level);
     let first_state = load_order(&svm, first_order);
     let second_state = load_order(&svm, second_order);
@@ -3177,6 +3227,19 @@ fn bid_taker_settles_against_partial_maker_ask() {
     let taker_balance = load_trader_balance(&svm, market, taker.pubkey());
     let market_state = load_market(&svm, market);
 
+    let event = support::events::single_event::<tidebook::events::FillEvent>(&result);
+    assert_eq!(event.market, market);
+    assert_eq!(event.maker_order, maker_order);
+    assert_eq!(event.maker_order_id, maker.order_id);
+    assert_eq!(event.maker, maker.owner);
+    assert_eq!(event.taker, taker.pubkey());
+    assert_eq!(event.maker_side, tidebook::state::OrderSide::Ask);
+    assert_eq!(event.execution_price, MATCH_PRICE);
+    assert_eq!(event.base_quantity, MATCH_TAKER_QUANTITY);
+    assert_eq!(event.quote_quantity, 50_000_000);
+    assert_eq!(event.maker_remaining_quantity, 3_000_000);
+    assert_eq!(event.taker_remaining_quantity, 0);
+
     assert_eq!(maker.remaining_quantity, 3_000_000);
     assert_eq!(maker.locked_collateral, 3_000_000);
     assert_eq!(maker.status, tidebook::state::OrderStatus::Open);
@@ -4128,6 +4191,15 @@ fn batch_match_consumes_same_price_fifo_head_then_partially_fills_successor() {
         ],
     );
     assert!(result.is_ok(), "same-level batch failed: {result:?}");
+
+    let events = support::events::events::<tidebook::events::FillEvent>(&result);
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].maker_order, first_order);
+    assert_eq!(events[0].maker_remaining_quantity, 0);
+    assert_eq!(events[0].taker_remaining_quantity, 3_000_000);
+    assert_eq!(events[1].maker_order, second_order);
+    assert_eq!(events[1].maker_remaining_quantity, 2_000_000);
+    assert_eq!(events[1].taker_remaining_quantity, 0);
 
     let first = load_order(&svm, first_order);
     let second = load_order(&svm, second_order);

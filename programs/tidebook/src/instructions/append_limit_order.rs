@@ -8,6 +8,7 @@ use anchor_lang::prelude::*;
 use crate::{
     constants::{ORDER_SEED, PRICE_LEVEL_SEED, TRADER_BALANCE_SEED},
     errors::{balance, market, order},
+    events::OrderPlacedEvent,
     state::{Market, MarketStatus, Order, OrderSide, OrderStatus, PriceLevel, TraderBalance},
 };
 
@@ -162,10 +163,9 @@ pub fn handle_append_limit_order(
         ),
     };
 
-    let next_order_id = market
-        .next_order_id
-        .checked_add(1)
-        .ok_or(order::OrderIdOverflow)?;
+    let order_id = market.next_order_id;
+
+    let next_order_id = order_id.checked_add(1).ok_or(order::OrderIdOverflow)?;
 
     let next_open_order_count = market
         .open_order_count
@@ -204,7 +204,7 @@ pub fn handle_append_limit_order(
     let order = &mut ctx.accounts.order;
     order.owner = trader_key;
     order.market = market_key;
-    order.order_id = ctx.accounts.market.next_order_id;
+    order.order_id = order_id;
     order.side = side;
     order.price = price;
     order.price_level = price_level_key;
@@ -225,6 +225,18 @@ pub fn handle_append_limit_order(
     let market = &mut ctx.accounts.market;
     market.next_order_id = next_order_id;
     market.open_order_count = next_open_order_count;
+
+    emit!(OrderPlacedEvent {
+        market: market_key,
+        order: order_key,
+        order_id,
+        owner: trader_key,
+        side,
+        price,
+        quantity,
+        locked_collateral,
+        price_level: price_level_key,
+    });
 
     Ok(())
 }

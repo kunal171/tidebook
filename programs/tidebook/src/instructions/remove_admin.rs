@@ -7,6 +7,7 @@ use anchor_lang::prelude::*;
 use crate::{
     constants::{ADMIN_SEED, PROTOCOL_CONFIG_SEED},
     errors::admin,
+    events::AdminRemovedEvent,
     state::{AdminRecord, AdminStatus, ProtocolConfig},
 };
 
@@ -41,6 +42,12 @@ pub fn handle_remove_admin(ctx: Context<RemoveAdmin>, _target_admin: Pubkey) -> 
         ctx.accounts.admin_record.status == AdminStatus::Disabled,
         admin::AdminMustBeDisabled
     );
+
+    emit!(AdminRemovedEvent {
+        admin_record: ctx.accounts.admin_record.key(),
+        authority: ctx.accounts.admin_record.authority,
+        removed_by: ctx.accounts.super_admin.key(),
+    });
 
     // Anchor closes admin_record after the handler succeeds and sends
     // its remaining lamports to super_admin.

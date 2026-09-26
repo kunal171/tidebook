@@ -11,6 +11,7 @@ use anchor_lang::prelude::*;
 use crate::{
     constants::{MARKET_SEED, ORDER_SEED, PRICE_LEVEL_SEED, TRADER_BALANCE_SEED},
     errors::{balance, market, matching, order},
+    events::FillEvent,
     matching::calculate_settlement,
     pda::derive_price_level_pda,
     state::{Market, MarketStatus, Order, OrderSide, OrderStatus, PriceLevel, TraderBalance},
@@ -160,6 +161,10 @@ pub fn handle_match_limit_order(
         market.base_decimals,
     )?;
 
+    let taker_remaining_quantity = quantity
+        .checked_sub(plan.fill.base_quantity)
+        .ok_or(order::InvalidQuantity)?;
+
     // Calculate every fallible result before mutating any account. Solana would
     // roll the instruction back after an error, but precomputation keeps the
     // settlement transition auditable and prevents accidental partial writes
@@ -195,6 +200,10 @@ pub fn handle_match_limit_order(
     let level_price = ctx.accounts.maker_price_level.price;
     let level_worse_price = ctx.accounts.maker_price_level.worse_price;
     let level_last_order = ctx.accounts.maker_price_level.last_order;
+    let maker_order_id = ctx.accounts.maker_order.order_id;
+    let maker_owner = ctx.accounts.maker_order.owner;
+    let maker_side = ctx.accounts.maker_order.side;
+    let taker_key = ctx.accounts.taker.key();
 
     // A partial fill changes quantities only. Counters are decremented exactly
     // once when the maker transitions from Open to Filled.
@@ -497,6 +506,20 @@ pub fn handle_match_limit_order(
         ctx.accounts.maker_order.locked_collateral = next_order_collateral;
         ctx.accounts.maker_price_level.total_remaining_quantity = next_level_quantity;
     }
+
+    emit!(FillEvent {
+        market: market_key,
+        maker_order: maker_key,
+        maker_order_id,
+        maker: maker_owner,
+        taker: taker_key,
+        maker_side,
+        execution_price: plan.fill.execution_price,
+        base_quantity: plan.fill.base_quantity,
+        quote_quantity: plan.fill.quote_quantity,
+        maker_remaining_quantity: next_order_remaining,
+        taker_remaining_quantity,
+    });
 
     Ok(())
 }

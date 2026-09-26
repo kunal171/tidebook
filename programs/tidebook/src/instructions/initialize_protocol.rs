@@ -9,6 +9,7 @@ use anchor_lang::prelude::*;
 use crate::{
     constants::{ADMIN_SEED, PROTOCOL_CONFIG_SEED},
     errors::admin,
+    events::ProtocolInitializedEvent,
     state::{AdminRecord, AdminStatus, ProtocolConfig},
 };
 
@@ -65,6 +66,12 @@ pub fn handle_initialize_protocol(ctx: Context<InitializeProtocol>) -> Result<()
     deployer_admin.added_by = deployer;
     deployer_admin.status = AdminStatus::Active;
     deployer_admin.bump = ctx.bumps.deployer_admin;
+
+    emit!(ProtocolInitializedEvent {
+        protocol_config: ctx.accounts.protocol_config.key(),
+        super_admin: deployer,
+        admin_record: ctx.accounts.deployer_admin.key(),
+    });
 
     Ok(())
 }

@@ -9,6 +9,7 @@ use anchor_spl::token::{self, Mint, Token, TokenAccount, TransferChecked};
 use crate::{
     constants::{TRADER_BALANCE_SEED, VAULT_AUTHORITY_SEED, VAULT_SEED},
     errors::balance,
+    events::WithdrawalEvent,
     state::{Market, TraderBalance},
 };
 
@@ -132,6 +133,16 @@ pub fn handle_withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
     } else {
         ctx.accounts.trader_balance.quote_free = next_free_balance;
     }
+
+    emit!(WithdrawalEvent {
+        market: market_key,
+        owner: ctx.accounts.owner.key(),
+        trader_balance: ctx.accounts.trader_balance.key(),
+        mint,
+        market_vault: ctx.accounts.market_vault.key(),
+        amount,
+        free_balance: next_free_balance,
+    });
 
     Ok(())
 }

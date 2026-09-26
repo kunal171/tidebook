@@ -8,6 +8,7 @@ use anchor_lang::prelude::*;
 
 use crate::{
     constants::TRADER_BALANCE_SEED,
+    events::TraderBalanceInitializedEvent,
     state::{Market, TraderBalance},
 };
 
@@ -51,6 +52,12 @@ pub fn handle_initialize_trader_balance(ctx: Context<InitializeTraderBalance>) -
     trader_balance.quote_locked = 0;
 
     trader_balance.bump = ctx.bumps.trader_balance;
+
+    emit!(TraderBalanceInitializedEvent {
+        market: ctx.accounts.market.key(),
+        owner: ctx.accounts.owner.key(),
+        trader_balance: ctx.accounts.trader_balance.key(),
+    });
 
     Ok(())
 }

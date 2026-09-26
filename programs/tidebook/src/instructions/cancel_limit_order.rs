@@ -8,6 +8,7 @@ use anchor_lang::prelude::*;
 use crate::{
     constants::{ORDER_SEED, PRICE_LEVEL_SEED, TRADER_BALANCE_SEED},
     errors::{balance, market, order},
+    events::OrderCanceledEvent,
     pda::derive_price_level_pda,
     state::{Market, Order, OrderSide, OrderStatus, PriceLevel, TraderBalance},
 };
@@ -106,7 +107,10 @@ pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64)
     // Snapshot immutable order state before borrowing any queue account mutably.
     // This also keeps validation separate from the eventual state transition.
     let order_key = ctx.accounts.order.key();
+    let order_id = ctx.accounts.order.order_id;
+    let order_owner = ctx.accounts.order.owner;
     let order_side = ctx.accounts.order.side;
+    let order_price = ctx.accounts.order.price;
     let order_previous = ctx.accounts.order.previous_order;
     let order_next = ctx.accounts.order.next_order;
     let order_remaining_quantity = ctx.accounts.order.remaining_quantity;
@@ -405,6 +409,19 @@ pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64)
         // Any later error still rolls the entire transaction back atomically.
         ctx.accounts.price_level.close(rent_recipient)?;
     }
+
+    emit!(OrderCanceledEvent {
+        market: market_key,
+        order: order_key,
+        order_id,
+        owner: order_owner,
+        side: order_side,
+        price: order_price,
+        canceled_quantity: order_remaining_quantity,
+        released_collateral: locked_collateral,
+        price_level: price_level_key,
+        price_level_closed: removes_price_level,
+    });
 
     Ok(())
 }

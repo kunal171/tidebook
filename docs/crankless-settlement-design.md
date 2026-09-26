@@ -317,10 +317,15 @@ a balance claim.
 
 ## Events and indexers
 
-Tidebook may emit `OrderPlaced`, `Fill`, `OrderCanceled`, `Deposit`, and
-`Withdrawal` events for history and UI indexing. Events do not authorize or
-complete a balance transition. If an indexer is offline, the on-chain order book
-and trader balances remain correct and withdrawals remain possible.
+Tidebook emits typed events for governance, market lifecycle, trader-ledger,
+order-lifecycle, and fill transitions. These events support history and UI
+indexing but do not authorize or complete a balance transition. If an indexer
+is offline, the on-chain order book and trader balances remain correct and
+withdrawals remain possible.
+
+Consumers process events only from successful transactions. A failed
+transaction can retain diagnostic logs from an earlier instruction even though
+Solana rolls back the complete account transition.
 
 This is the defining difference from an event queue containing deferred
 settlement work.
@@ -380,8 +385,9 @@ The safe order is:
 7. ~~Add bounded multi-maker and multi-level client planning with atomic
    rollback tests.~~
 8. ~~Atomically post a non-crossing remainder when safe.~~
-9. **Next:** emit informational events and add broader conservation tests.
-10. Benchmark account count, compute use, contention, and retry rate before
+9. ~~Emit informational events for every successful state transition.~~
+10. **Next:** add broader conservation tests and fee accounting.
+11. Benchmark account count, compute use, contention, and retry rate before
    considering a slab-based redesign.
 
 Every future expansion must preserve the existing atomic balance and book

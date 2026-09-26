@@ -6,6 +6,8 @@
 // instruction size, so this integration-test boundary permits the large error.
 #![allow(clippy::result_large_err)]
 
+mod support;
+
 use {
     anchor_lang::{
         prelude::Pubkey,
@@ -685,6 +687,19 @@ fn canceling_ask_refunds_base_collateral() {
 
     assert!(result.is_ok(), "ask cancellation failed: {result:?}");
     let state = load_order(&fixture.svm, fixture.order);
+
+    let event = support::events::single_event::<tidebook::events::OrderCanceledEvent>(&result);
+    assert_eq!(event.market, fixture.market.market);
+    assert_eq!(event.order, fixture.order);
+    assert_eq!(event.order_id, state.order_id);
+    assert_eq!(event.owner, fixture.owner.pubkey());
+    assert_eq!(event.side, OrderSide::Ask);
+    assert_eq!(event.price, state.price);
+    assert_eq!(event.canceled_quantity, TEST_ORDER_QUANTITY);
+    assert_eq!(event.released_collateral, TEST_ORDER_QUANTITY);
+    assert_eq!(event.price_level, fixture.price_level);
+    assert!(event.price_level_closed);
+
     assert_eq!(state.status, OrderStatus::Canceled);
     assert_eq!(state.locked_collateral, 0);
     assert!(

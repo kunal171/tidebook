@@ -1980,6 +1980,177 @@
       ]
     }
   ],
+  "events": [
+    {
+      "name": "AdminAddedEvent",
+      "discriminator": [
+        68,
+        183,
+        187,
+        200,
+        190,
+        214,
+        20,
+        77
+      ]
+    },
+    {
+      "name": "AdminRemovedEvent",
+      "discriminator": [
+        226,
+        5,
+        12,
+        53,
+        69,
+        56,
+        172,
+        132
+      ]
+    },
+    {
+      "name": "AdminStatusChangedEvent",
+      "discriminator": [
+        103,
+        168,
+        116,
+        72,
+        83,
+        249,
+        142,
+        91
+      ]
+    },
+    {
+      "name": "DepositEvent",
+      "discriminator": [
+        120,
+        248,
+        61,
+        83,
+        31,
+        142,
+        107,
+        144
+      ]
+    },
+    {
+      "name": "FillEvent",
+      "discriminator": [
+        13,
+        89,
+        41,
+        228,
+        105,
+        178,
+        45,
+        112
+      ]
+    },
+    {
+      "name": "MarketClosedEvent",
+      "discriminator": [
+        64,
+        193,
+        117,
+        138,
+        19,
+        11,
+        84,
+        44
+      ]
+    },
+    {
+      "name": "MarketInitializedEvent",
+      "discriminator": [
+        70,
+        173,
+        96,
+        202,
+        100,
+        143,
+        45,
+        25
+      ]
+    },
+    {
+      "name": "MarketStatusChangedEvent",
+      "discriminator": [
+        189,
+        57,
+        199,
+        130,
+        179,
+        34,
+        39,
+        53
+      ]
+    },
+    {
+      "name": "OrderCanceledEvent",
+      "discriminator": [
+        10,
+        31,
+        133,
+        147,
+        181,
+        32,
+        34,
+        30
+      ]
+    },
+    {
+      "name": "OrderPlacedEvent",
+      "discriminator": [
+        245,
+        198,
+        202,
+        247,
+        110,
+        231,
+        254,
+        156
+      ]
+    },
+    {
+      "name": "ProtocolInitializedEvent",
+      "discriminator": [
+        225,
+        159,
+        165,
+        209,
+        78,
+        191,
+        125,
+        73
+      ]
+    },
+    {
+      "name": "TraderBalanceInitializedEvent",
+      "discriminator": [
+        37,
+        85,
+        211,
+        33,
+        106,
+        44,
+        35,
+        255
+      ]
+    },
+    {
+      "name": "WithdrawalEvent",
+      "discriminator": [
+        161,
+        53,
+        185,
+        18,
+        98,
+        254,
+        54,
+        165
+      ]
+    }
+  ],
   "errors": [
     {
       "code": 6000,
@@ -2374,6 +2545,29 @@
   ],
   "types": [
     {
+      "name": "AdminAddedEvent",
+      "docs": [
+        "Records creation of an independently addressable administrator record."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin_record",
+            "type": "pubkey"
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "added_by",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
       "name": "AdminRecord",
       "docs": [
         "Independent role record used to authorize market creation."
@@ -2405,6 +2599,29 @@
       }
     },
     {
+      "name": "AdminRemovedEvent",
+      "docs": [
+        "Records permanent closure of a previously disabled administrator record."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin_record",
+            "type": "pubkey"
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "removed_by",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
       "name": "AdminStatus",
       "type": {
         "kind": "enum",
@@ -2414,6 +2631,173 @@
           },
           {
             "name": "Disabled"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AdminStatusChangedEvent",
+      "docs": [
+        "Records a reversible administrator enable or disable transition."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin_record",
+            "type": "pubkey"
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "changed_by",
+            "type": "pubkey"
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "AdminStatus"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "DepositEvent",
+      "docs": [
+        "Records tokens entering a market vault and the corresponding free-balance",
+        "credit. `free_balance` is the selected asset's post-deposit balance."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "trader_balance",
+            "type": "pubkey"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "market_vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "free_balance",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "FillEvent",
+      "docs": [
+        "Describes one successful maker-price execution.",
+        "",
+        "One `match_limit_order` instruction emits exactly one event. A client may",
+        "include several matching instructions in one transaction, producing several",
+        "events in FIFO execution order."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "docs": [
+              "Market where the execution occurred."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "maker_order",
+            "docs": [
+              "Resting order consumed by this execution."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "maker_order_id",
+            "docs": [
+              "Market-local identifier of the resting order."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "maker",
+            "docs": [
+              "Owner of the resting order."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "taker",
+            "docs": [
+              "Wallet submitting the incoming taker order."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "maker_side",
+            "docs": [
+              "Side of the resting maker order."
+            ],
+            "type": {
+              "defined": {
+                "name": "OrderSide"
+              }
+            }
+          },
+          {
+            "name": "execution_price",
+            "docs": [
+              "Resting maker price used for settlement."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "base_quantity",
+            "docs": [
+              "Base-mint atoms exchanged."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "quote_quantity",
+            "docs": [
+              "Quote-mint atoms exchanged."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "maker_remaining_quantity",
+            "docs": [
+              "Maker quantity remaining after this fill."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "taker_remaining_quantity",
+            "docs": [
+              "Incoming taker quantity remaining after this fill."
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -2508,6 +2892,84 @@
       }
     },
     {
+      "name": "MarketClosedEvent",
+      "docs": [
+        "Records successful closure of a paused, empty market and both vaults."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "base_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "quote_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "base_vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "quote_vault",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MarketInitializedEvent",
+      "docs": [
+        "Records creation of a market and its canonical custody vaults."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "base_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "quote_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "base_vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "quote_vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "price_tick_size",
+            "type": "u64"
+          },
+          {
+            "name": "quantity_lot_size",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
       "name": "MarketStatus",
       "type": {
         "kind": "enum",
@@ -2517,6 +2979,33 @@
           },
           {
             "name": "Paused"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MarketStatusChangedEvent",
+      "docs": [
+        "Records a successful pause or unpause transition."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "MarketStatus"
+              }
+            }
           }
         ]
       }
@@ -2604,6 +3093,112 @@
           {
             "name": "bump",
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OrderCanceledEvent",
+      "docs": [
+        "Records owner-authorized removal of the remaining open quantity."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "order",
+            "type": "pubkey"
+          },
+          {
+            "name": "order_id",
+            "type": "u64"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "side",
+            "type": {
+              "defined": {
+                "name": "OrderSide"
+              }
+            }
+          },
+          {
+            "name": "price",
+            "type": "u64"
+          },
+          {
+            "name": "canceled_quantity",
+            "type": "u64"
+          },
+          {
+            "name": "released_collateral",
+            "type": "u64"
+          },
+          {
+            "name": "price_level",
+            "type": "pubkey"
+          },
+          {
+            "name": "price_level_closed",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OrderPlacedEvent",
+      "docs": [
+        "Records either new-level insertion or same-level FIFO append."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "order",
+            "type": "pubkey"
+          },
+          {
+            "name": "order_id",
+            "type": "u64"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "side",
+            "type": {
+              "defined": {
+                "name": "OrderSide"
+              }
+            }
+          },
+          {
+            "name": "price",
+            "type": "u64"
+          },
+          {
+            "name": "quantity",
+            "type": "u64"
+          },
+          {
+            "name": "locked_collateral",
+            "type": "u64"
+          },
+          {
+            "name": "price_level",
+            "type": "pubkey"
           }
         ]
       }
@@ -2759,6 +3354,30 @@
       }
     },
     {
+      "name": "ProtocolInitializedEvent",
+      "docs": [
+        "Records creation of the singleton governance configuration and the",
+        "deployer's initial active administrator record."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "protocol_config",
+            "type": "pubkey"
+          },
+          {
+            "name": "super_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "admin_record",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
       "name": "TraderBalance",
       "docs": [
         "Canonical internal balance ledger for one trader in one market.",
@@ -2820,6 +3439,69 @@
               "PDA bump stored for future signer and validation logic."
             ],
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TraderBalanceInitializedEvent",
+      "docs": [
+        "Records creation of a trader's canonical per-market internal ledger."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "trader_balance",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "WithdrawalEvent",
+      "docs": [
+        "Records a free-balance debit and its atomic token transfer out of custody.",
+        "`free_balance` is the selected asset's post-withdrawal balance."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "trader_balance",
+            "type": "pubkey"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "market_vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "free_balance",
+            "type": "u64"
           }
         ]
       }
