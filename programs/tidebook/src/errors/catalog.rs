@@ -1,242 +1,246 @@
-//! Program-specific errors for authorization, lifecycle, and order invariants.
+//! Canonical Anchor error catalog.
+//!
+//! Anchor 1.2 permits only one `#[error_code]` definition per program IDL.
+//! Domain modules re-export subsets of these variants for focused call sites,
+//! while this catalog preserves the single public ABI.
 
 use anchor_lang::prelude::*;
 
 /// Stable program errors returned when an authorization, lifecycle, or order
 /// invariant is violated.
 #[error_code]
-pub enum MarketError {
+pub enum TidebookError {
     #[msg("Market is paused")]
-    MarketPaused,
+    MarketPaused = 0,
 
     #[msg("Invalid market status")]
-    InvalidMarketStatus,
+    InvalidMarketStatus = 1,
 
     #[msg("Market already initialized")]
-    MarketAlreadyInitialized,
+    MarketAlreadyInitialized = 2,
 
     #[msg("Market not found")]
-    MarketNotFound,
+    MarketNotFound = 3,
 
     #[msg("Market is already paused")]
-    MarketAlreadyPaused,
+    MarketAlreadyPaused = 4,
 
     #[msg("Market is already active")]
-    MarketAlreadyActive,
+    MarketAlreadyActive = 5,
 
     #[msg("Only the market authority can perform this action")]
-    Unauthorized,
+    Unauthorized = 6,
 
     #[msg("Market must be paused before it can be closed")]
-    MarketMustBePaused,
+    MarketMustBePaused = 7,
 
     #[msg("Market is not active")]
-    MarketNotActive,
+    MarketNotActive = 8,
 
     #[msg("Invalid order ID")]
-    InvalidOrderId,
+    InvalidOrderId = 9,
 
     #[msg("Price must be greater than zero")]
-    InvalidPrice,
+    InvalidPrice = 10,
 
     #[msg("Quantity must be greater than zero")]
-    InvalidQuantity,
+    InvalidQuantity = 11,
 
     #[msg("Base and quote mints must be different")]
-    IdenticalMints,
+    IdenticalMints = 12,
 
     #[msg("Signer is not a protocol administrator")]
-    UnauthorizedAdmin,
+    UnauthorizedAdmin = 13,
 
     #[msg("Signer is not the program upgrade authority")]
-    InvalidDeployer,
+    InvalidDeployer = 14,
 
     #[msg("Only the protocol super admin can perform this action")]
-    UnauthorizedSuperAdmin,
+    UnauthorizedSuperAdmin = 15,
 
     #[msg("Invalid administrator address")]
-    InvalidAdmin,
+    InvalidAdmin = 16,
 
     #[msg("Administrator is already disabled")]
-    AdminAlreadyDisabled,
+    AdminAlreadyDisabled = 17,
 
     #[msg("Administrator is already active")]
-    AdminAlreadyActive,
+    AdminAlreadyActive = 18,
 
     #[msg("The super administrator cannot be disabled or removed")]
-    CannotModifySuperAdmin,
+    CannotModifySuperAdmin = 19,
 
     #[msg("Administrator must be disabled before removal")]
-    AdminMustBeDisabled,
+    AdminMustBeDisabled = 20,
 
     #[msg("Administrator is disabled")]
-    AdminDisabled,
+    AdminDisabled = 21,
 
     #[msg("Only the order owner can cancel this order")]
-    UnauthorizedOrderOwner,
+    UnauthorizedOrderOwner = 22,
 
     #[msg("Order does not belong to the supplied market")]
-    OrderMarketMismatch,
+    OrderMarketMismatch = 23,
 
     #[msg("Only an open order can be canceled")]
-    OrderNotOpen,
+    OrderNotOpen = 24,
 
     #[msg("Price tick size must be greater than zero")]
-    InvalidPriceTickSize,
+    InvalidPriceTickSize = 25,
 
     #[msg("Quantity lot size must be greater than zero")]
-    InvalidQuantityLotSize,
+    InvalidQuantityLotSize = 26,
 
     #[msg("Price must be a multiple of the market tick size")]
-    PriceNotOnTick,
+    PriceNotOnTick = 27,
 
     #[msg("Quantity must be a multiple of the market lot size")]
-    QuantityNotOnLot,
+    QuantityNotOnLot = 28,
 
     #[msg("Order notional arithmetic overflow")]
-    OrderNotionalOverflow,
+    OrderNotionalOverflow = 29,
 
     #[msg("Order notional is below one quote-mint unit")]
-    OrderNotionalTooSmall,
+    OrderNotionalTooSmall = 30,
 
     #[msg("Collateral mint does not match the order side")]
-    InvalidCollateralMint,
+    InvalidCollateralMint = 31,
 
     #[msg("Trader does not own the collateral token account")]
-    InvalidCollateralOwner,
+    InvalidCollateralOwner = 32,
 
     #[msg("Insufficient collateral balance")]
-    InsufficientCollateral,
+    InsufficientCollateral = 33,
 
     #[msg("Open-order counter overflow")]
-    OpenOrderCountOverflow,
+    OpenOrderCountOverflow = 34,
 
     #[msg("Open-order counter underflow")]
-    OpenOrderCountUnderflow,
+    OpenOrderCountUnderflow = 35,
 
     #[msg("Market still contains open orders")]
-    MarketHasOpenOrders,
+    MarketHasOpenOrders = 36,
 
     #[msg("Market vaults must be empty before closing")]
-    MarketVaultNotEmpty,
+    MarketVaultNotEmpty = 37,
 
     #[msg("Invalid market vault authority")]
-    InvalidVaultAuthority,
+    InvalidVaultAuthority = 38,
 
     #[msg("Price level belongs to a different market")]
-    PriceLevelMarketMismatch,
+    PriceLevelMarketMismatch = 39,
 
     #[msg("Price-level side does not match the order side")]
-    PriceLevelSideMismatch,
+    PriceLevelSideMismatch = 40,
 
     #[msg("Price-level price does not match the order price")]
-    PriceLevelPriceMismatch,
+    PriceLevelPriceMismatch = 41,
 
     #[msg("Supplied order is not the current price-level tail")]
-    InvalidPriceLevelTail,
+    InvalidPriceLevelTail = 42,
 
     #[msg("Order does not belong to the supplied price level")]
-    OrderPriceLevelMismatch,
+    OrderPriceLevelMismatch = 43,
 
     #[msg("Price-level order count overflow")]
-    PriceLevelOrderCountOverflow,
+    PriceLevelOrderCountOverflow = 44,
 
     #[msg("Price-level quantity overflow")]
-    PriceLevelQuantityOverflow,
+    PriceLevelQuantityOverflow = 45,
 
     #[msg("Order ID counter overflow")]
-    OrderIdOverflow,
+    OrderIdOverflow = 46,
 
     #[msg("Invalid combination of better and worse price-level neighbors")]
-    InvalidPriceLevelNeighbors,
+    InvalidPriceLevelNeighbors = 47,
 
     #[msg("Supplied level is not the market's current best level")]
-    BestPriceLevelMismatch,
+    BestPriceLevelMismatch = 48,
 
     #[msg("New price does not have better priority than the current best price")]
-    InvalidPriceLevelOrdering,
+    InvalidPriceLevelOrdering = 49,
 
     #[msg("Supplied price-level account is not canonical")]
-    NoncanonicalPriceLevel,
+    NoncanonicalPriceLevel = 50,
 
     #[msg("Supplied FIFO order neighbor does not match the order link")]
-    InvalidOrderNeighbor,
+    InvalidOrderNeighbor = 51,
 
     #[msg("Supplied FIFO neighbor does not link back to the canceled order")]
-    BrokenOrderQueueLink,
+    BrokenOrderQueueLink = 52,
 
     #[msg("Price-level order count underflow")]
-    PriceLevelOrderCountUnderflow,
+    PriceLevelOrderCountUnderflow = 53,
 
     #[msg("Price-level remaining quantity underflow")]
-    PriceLevelQuantityUnderflow,
+    PriceLevelQuantityUnderflow = 54,
 
     #[msg("Supplied order account is not canonical")]
-    NoncanonicalOrder,
+    NoncanonicalOrder = 55,
 
     #[msg("Price-level rent recipient does not match the stored rent payer")]
-    InvalidPriceLevelRentRecipient,
+    InvalidPriceLevelRentRecipient = 56,
 
     #[msg("Final order does not match the price-level queue endpoints")]
-    InvalidPriceLevelEndpoints,
+    InvalidPriceLevelEndpoints = 57,
 
     #[msg("Empty price level has a nonzero remaining quantity")]
-    InvalidPriceLevelAggregate,
+    InvalidPriceLevelAggregate = 58,
 
     #[msg("Deposit amount must be greater than zero")]
-    InvalidDepositAmount,
+    InvalidDepositAmount = 59,
 
     #[msg("Deposit mint is neither the market base nor quote mint")]
-    InvalidDepositMint,
+    InvalidDepositMint = 60,
 
     #[msg("Trader balance belongs to a different market")]
-    TraderBalanceMarketMismatch,
+    TraderBalanceMarketMismatch = 61,
 
     #[msg("Trader balance belongs to a different owner")]
-    TraderBalanceOwnerMismatch,
+    TraderBalanceOwnerMismatch = 62,
 
     #[msg("Free balance overflow")]
-    FreeBalanceOverflow,
+    FreeBalanceOverflow = 63,
 
     #[msg("Locked balance overflow")]
-    LockedBalanceOverflow,
+    LockedBalanceOverflow = 64,
 
     #[msg("Locked balance underflow")]
-    LockedBalanceUnderflow,
+    LockedBalanceUnderflow = 65,
 
     #[msg("Insufficient token balance for deposit")]
-    InsufficientDepositFunds,
+    InsufficientDepositFunds = 66,
 
     #[msg("Withdrawal amount must be greater than zero")]
-    InvalidWithdrawalAmount,
+    InvalidWithdrawalAmount = 67,
 
     #[msg("Withdrawal mint is neither the market base nor quote mint")]
-    InvalidWithdrawalMint,
+    InvalidWithdrawalMint = 68,
 
     #[msg("Insufficient free balance")]
-    InsufficientFreeBalance,
+    InsufficientFreeBalance = 69,
 
     #[msg("Withdrawal destination is not owned by the trader")]
-    InvalidWithdrawalDestinationOwner,
+    InvalidWithdrawalDestinationOwner = 70,
 
     #[msg("Market vault contains insufficient tokens")]
-    InsufficientVaultFunds,
+    InsufficientVaultFunds = 71,
 
     #[msg("Maker and taker orders must be on opposite sides")]
-    MatchingSameSide,
+    MatchingSameSide = 72,
 
     #[msg("Taker limit price does not cross the maker price")]
-    OrdersDoNotCross,
+    OrdersDoNotCross = 73,
 
     #[msg("Maker order has insufficient locked collateral")]
-    InvalidMakerCollateral,
+    InvalidMakerCollateral = 74,
 
     #[msg("A trader cannot match against their own order")]
-    SelfTradeNotAllowed,
+    SelfTradeNotAllowed = 75,
 
     #[msg("Matching must use the best opposing price level")]
-    MakerNotAtBestPrice,
+    MakerNotAtBestPrice = 76,
 
     #[msg("Matching must consume the FIFO head order")]
-    MakerNotFifoHead,
+    MakerNotFifoHead = 77,
 }

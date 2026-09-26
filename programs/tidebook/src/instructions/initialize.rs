@@ -8,7 +8,7 @@ use anchor_spl::token::{Mint, Token, TokenAccount};
 
 use crate::{
     constants::{ADMIN_SEED, MARKET_SEED, VAULT_AUTHORITY_SEED, VAULT_SEED},
-    error::MarketError,
+    errors::{admin, market},
     state::{AdminRecord, AdminStatus, Market, MarketStatus},
 };
 
@@ -20,9 +20,9 @@ pub struct InitializeMarket<'info> {
     #[account(
         seeds = [ADMIN_SEED, authority.key().as_ref()],
         bump = admin_record.bump,
-        has_one = authority @ MarketError::UnauthorizedAdmin,
+        has_one = authority @ admin::UnauthorizedAdmin,
         constraint = admin_record.status == AdminStatus::Active
-            @ MarketError::AdminDisabled
+            @ admin::AdminDisabled
     )]
     pub admin_record: Account<'info, AdminRecord>,
 
@@ -45,7 +45,7 @@ pub struct InitializeMarket<'info> {
     /// SPL mint used to denominate order prices.
     #[account(
     constraint = base_mint.key() != quote_mint.key()
-        @ MarketError::IdenticalMints
+        @ market::IdenticalMints
     )]
     pub quote_mint: Account<'info, Mint>,
 
@@ -101,8 +101,8 @@ pub fn handle_initialize_market(
     quantity_lot_size: u64,
 ) -> Result<()> {
     // Validate configuration before relying on it in order modulo checks.
-    require!(price_tick_size > 0, MarketError::InvalidPriceTickSize);
-    require!(quantity_lot_size > 0, MarketError::InvalidQuantityLotSize);
+    require!(price_tick_size > 0, market::InvalidPriceTickSize);
+    require!(quantity_lot_size > 0, market::InvalidQuantityLotSize);
 
     // Anchor has already created the market and both token vaults at this
     // point. Any later failure rolls the entire instruction back atomically.

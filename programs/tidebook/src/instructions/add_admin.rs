@@ -7,7 +7,7 @@ use anchor_lang::prelude::*;
 
 use crate::{
     constants::{ADMIN_SEED, PROTOCOL_CONFIG_SEED},
-    error::MarketError,
+    errors::admin,
     state::{AdminRecord, AdminStatus, ProtocolConfig},
 };
 
@@ -21,7 +21,7 @@ pub struct AddAdmin<'info> {
     #[account(
         seeds = [PROTOCOL_CONFIG_SEED],
         bump = protocol_config.bump,
-        has_one = super_admin @ MarketError::UnauthorizedSuperAdmin
+        has_one = super_admin @ admin::UnauthorizedSuperAdmin
     )]
     /// Singleton config proves the signer is the immutable super-admin.
     pub protocol_config: Account<'info, ProtocolConfig>,
@@ -41,7 +41,7 @@ pub struct AddAdmin<'info> {
 
 pub fn handle_add_admin(ctx: Context<AddAdmin>, new_admin: Pubkey) -> Result<()> {
     // The all-zero key cannot sign and would create an unusable role record.
-    require!(new_admin != Pubkey::default(), MarketError::InvalidAdmin);
+    require!(new_admin != Pubkey::default(), admin::InvalidAdmin);
 
     let admin_record = &mut ctx.accounts.admin_record;
     admin_record.authority = new_admin;

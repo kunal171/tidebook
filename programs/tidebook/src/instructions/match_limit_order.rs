@@ -10,7 +10,7 @@ use anchor_lang::prelude::*;
 
 use crate::{
     constants::{MARKET_SEED, ORDER_SEED, PRICE_LEVEL_SEED, TRADER_BALANCE_SEED},
-    error::MarketError,
+    errors::{balance, market, matching, order},
     matching::calculate_settlement,
     pda::derive_price_level_pda,
     state::{Market, MarketStatus, Order, OrderSide, OrderStatus, PriceLevel, TraderBalance},
@@ -36,7 +36,7 @@ pub struct MatchLimitOrder<'info> {
         ],
         bump = market.bump,
         constraint = market.status == MarketStatus::Active
-            @ MarketError::MarketNotActive
+            @ market::MarketNotActive
     )]
     pub market: Box<Account<'info, Market>>,
 
@@ -48,11 +48,11 @@ pub struct MatchLimitOrder<'info> {
             maker_order.order_id.to_le_bytes().as_ref(),
         ],
         bump = maker_order.bump,
-        has_one = market @ MarketError::OrderMarketMismatch,
+        has_one = market @ order::OrderMarketMismatch,
         constraint = maker_order.status == OrderStatus::Open
-            @ MarketError::OrderNotOpen,
+            @ order::OrderNotOpen,
         constraint = maker_order.owner != taker.key()
-            @ MarketError::SelfTradeNotAllowed
+            @ matching::SelfTradeNotAllowed
     )]
     pub maker_order: Box<Account<'info, Order>>,
 
@@ -66,19 +66,19 @@ pub struct MatchLimitOrder<'info> {
         ],
         bump = maker_price_level.bump,
         constraint = maker_order.price_level == maker_price_level.key()
-            @ MarketError::OrderPriceLevelMismatch,
+            @ order::OrderPriceLevelMismatch,
         constraint = maker_price_level.market == market.key()
-            @ MarketError::PriceLevelMarketMismatch,
+            @ order::PriceLevelMarketMismatch,
         constraint = maker_price_level.side == maker_order.side
-            @ MarketError::PriceLevelSideMismatch,
+            @ order::PriceLevelSideMismatch,
         constraint = maker_price_level.price == maker_order.price
-            @ MarketError::PriceLevelPriceMismatch,
+            @ order::PriceLevelPriceMismatch,
         constraint = maker_price_level.first_order == Some(maker_order.key())
-            @ MarketError::MakerNotFifoHead,
+            @ matching::MakerNotFifoHead,
         constraint = match maker_order.side {
             OrderSide::Ask => market.best_ask == Some(maker_order.price),
             OrderSide::Bid => market.best_bid == Some(maker_order.price),
-        } @ MarketError::MakerNotAtBestPrice
+        } @ matching::MakerNotAtBestPrice
     )]
     pub maker_price_level: Box<Account<'info, PriceLevel>>,
 
@@ -106,9 +106,9 @@ pub struct MatchLimitOrder<'info> {
         ],
         bump = maker_balance.bump,
         constraint = maker_balance.market == market.key()
-            @ MarketError::TraderBalanceMarketMismatch,
+            @ balance::TraderBalanceMarketMismatch,
         constraint = maker_balance.owner == maker_order.owner
-            @ MarketError::TraderBalanceOwnerMismatch
+            @ balance::TraderBalanceOwnerMismatch
     )]
     pub maker_balance: Box<Account<'info, TraderBalance>>,
 
@@ -121,9 +121,9 @@ pub struct MatchLimitOrder<'info> {
         ],
         bump = taker_balance.bump,
         constraint = taker_balance.market == market.key()
-            @ MarketError::TraderBalanceMarketMismatch,
+            @ balance::TraderBalanceMarketMismatch,
         constraint = taker_balance.owner == taker.key()
-            @ MarketError::TraderBalanceOwnerMismatch
+            @ balance::TraderBalanceOwnerMismatch
     )]
     pub taker_balance: Box<Account<'info, TraderBalance>>,
 }
@@ -134,19 +134,19 @@ pub fn handle_match_limit_order(
     limit_price: u64,
     quantity: u64,
 ) -> Result<()> {
-    require!(limit_price > 0, MarketError::InvalidPrice);
-    require!(quantity > 0, MarketError::InvalidQuantity);
+    require!(limit_price > 0, order::InvalidPrice);
+    require!(quantity > 0, order::InvalidQuantity);
 
     let market = &ctx.accounts.market;
 
     require!(
         limit_price.is_multiple_of(market.price_tick_size),
-        MarketError::PriceNotOnTick
+        order::PriceNotOnTick
     );
 
     require!(
         quantity.is_multiple_of(market.quantity_lot_size),
-        MarketError::QuantityNotOnLot
+        order::QuantityNotOnLot
     );
 
     let plan = calculate_settlement(
@@ -169,21 +169,21 @@ pub fn handle_match_limit_order(
         .maker_order
         .remaining_quantity
         .checked_sub(plan.fill.base_quantity)
-        .ok_or(MarketError::PriceLevelQuantityUnderflow)?;
+        .ok_or(order::PriceLevelQuantityUnderflow)?;
 
     let next_order_collateral = ctx
         .accounts
         .maker_order
         .locked_collateral
         .checked_sub(plan.maker_locked_debit)
-        .ok_or(MarketError::InvalidMakerCollateral)?;
+        .ok_or(matching::InvalidMakerCollateral)?;
 
     let next_level_quantity = ctx
         .accounts
         .maker_price_level
         .total_remaining_quantity
         .checked_sub(plan.fill.base_quantity)
-        .ok_or(MarketError::PriceLevelQuantityUnderflow)?;
+        .ok_or(order::PriceLevelQuantityUnderflow)?;
 
     // Snapshot relationship fields before taking mutable borrows below. These
     // values are the program-owned source of truth; optional accounts supplied
@@ -203,7 +203,7 @@ pub fn handle_match_limit_order(
             .maker_price_level
             .order_count
             .checked_sub(1)
-            .ok_or(MarketError::PriceLevelOrderCountUnderflow)?
+            .ok_or(order::PriceLevelOrderCountUnderflow)?
     } else {
         ctx.accounts.maker_price_level.order_count
     };
@@ -213,7 +213,7 @@ pub fn handle_match_limit_order(
             .market
             .open_order_count
             .checked_sub(1)
-            .ok_or(MarketError::OpenOrderCountUnderflow)?
+            .ok_or(market::OpenOrderCountUnderflow)?
     } else {
         ctx.accounts.market.open_order_count
     };
@@ -227,34 +227,28 @@ pub fn handle_match_limit_order(
         // head therefore cannot point to an older order.
         require!(
             ctx.accounts.maker_order.previous_order.is_none(),
-            MarketError::BrokenOrderQueueLink
+            order::BrokenOrderQueueLink
         );
 
         let supplied_next = ctx.accounts.next_order.as_ref().map(|order| order.key());
 
-        require!(
-            supplied_next == maker_next,
-            MarketError::InvalidOrderNeighbor
-        );
+        require!(supplied_next == maker_next, order::InvalidOrderNeighbor);
 
         if removes_price_level {
             // An empty level must have contained only this maker. Otherwise
             // closing it would orphan another live order.
             require!(
                 maker_next.is_none() && level_last_order == Some(maker_key),
-                MarketError::InvalidPriceLevelEndpoints
+                order::InvalidPriceLevelEndpoints
             );
 
-            require!(
-                next_level_quantity == 0,
-                MarketError::InvalidPriceLevelAggregate
-            );
+            require!(next_level_quantity == 0, order::InvalidPriceLevelAggregate);
 
             // Matching always consumes the best level, so it cannot have a
             // higher-priority predecessor.
             require!(
                 ctx.accounts.maker_price_level.better_price.is_none(),
-                MarketError::BestPriceLevelMismatch
+                order::BestPriceLevelMismatch
             );
 
             let expected_worse = level_worse_price.map(|price| {
@@ -271,7 +265,7 @@ pub fn handle_match_limit_order(
 
             require!(
                 supplied_worse == expected_worse,
-                MarketError::InvalidPriceLevelNeighbors
+                order::InvalidPriceLevelNeighbors
             );
 
             // Price-level rent returns to its recorded creator, not to the
@@ -280,12 +274,12 @@ pub fn handle_match_limit_order(
                 .accounts
                 .level_rent_recipient
                 .as_ref()
-                .ok_or(MarketError::InvalidPriceLevelRentRecipient)?;
+                .ok_or(order::InvalidPriceLevelRentRecipient)?;
 
             require_keys_eq!(
                 rent_recipient.key(),
                 ctx.accounts.maker_price_level.rent_payer,
-                MarketError::InvalidPriceLevelRentRecipient
+                order::InvalidPriceLevelRentRecipient
             );
 
             if let (Some(worse_level), Some(expected_price)) =
@@ -294,14 +288,14 @@ pub fn handle_match_limit_order(
                 require_keys_eq!(
                     worse_level.market,
                     market_key,
-                    MarketError::PriceLevelMarketMismatch
+                    order::PriceLevelMarketMismatch
                 );
 
                 require!(
                     worse_level.side == ctx.accounts.maker_order.side
                         && worse_level.price == expected_price
                         && worse_level.better_price == Some(level_price),
-                    MarketError::InvalidPriceLevelNeighbors
+                    order::InvalidPriceLevelNeighbors
                 );
             }
         } else {
@@ -312,23 +306,16 @@ pub fn handle_match_limit_order(
                 .accounts
                 .next_order
                 .as_ref()
-                .ok_or(MarketError::InvalidOrderNeighbor)?;
+                .ok_or(order::InvalidOrderNeighbor)?;
 
-            require!(
-                next_order.status == OrderStatus::Open,
-                MarketError::OrderNotOpen
-            );
+            require!(next_order.status == OrderStatus::Open, order::OrderNotOpen);
 
-            require_keys_eq!(
-                next_order.market,
-                market_key,
-                MarketError::OrderMarketMismatch
-            );
+            require_keys_eq!(next_order.market, market_key, order::OrderMarketMismatch);
 
             require_keys_eq!(
                 next_order.price_level,
                 level_key,
-                MarketError::OrderPriceLevelMismatch
+                order::OrderPriceLevelMismatch
             );
 
             require!(
@@ -336,17 +323,14 @@ pub fn handle_match_limit_order(
                     && next_order.side == ctx.accounts.maker_order.side
                     && next_order.price == level_price
                     && next_order.previous_order == Some(maker_key),
-                MarketError::BrokenOrderQueueLink
+                order::BrokenOrderQueueLink
             );
 
-            require!(
-                next_level_quantity > 0,
-                MarketError::InvalidPriceLevelAggregate
-            );
+            require!(next_level_quantity > 0, order::InvalidPriceLevelAggregate);
 
             require!(
                 ctx.accounts.worse_level.is_none() && ctx.accounts.level_rent_recipient.is_none(),
-                MarketError::InvalidPriceLevelNeighbors
+                order::InvalidPriceLevelNeighbors
             );
         }
     } else {
@@ -355,12 +339,12 @@ pub fn handle_match_limit_order(
         // explicit for clients.
         require!(
             ctx.accounts.next_order.is_none(),
-            MarketError::InvalidOrderNeighbor
+            order::InvalidOrderNeighbor
         );
 
         require!(
             ctx.accounts.worse_level.is_none() && ctx.accounts.level_rent_recipient.is_none(),
-            MarketError::InvalidPriceLevelNeighbors
+            order::InvalidPriceLevelNeighbors
         );
     }
 
@@ -374,28 +358,28 @@ pub fn handle_match_limit_order(
                 .taker_balance
                 .quote_free
                 .checked_sub(plan.fill.quote_quantity)
-                .ok_or(MarketError::InsufficientFreeBalance)?;
+                .ok_or(balance::InsufficientFreeBalance)?;
 
             let next_taker_base_free = ctx
                 .accounts
                 .taker_balance
                 .base_free
                 .checked_add(plan.fill.base_quantity)
-                .ok_or(MarketError::FreeBalanceOverflow)?;
+                .ok_or(balance::FreeBalanceOverflow)?;
 
             let next_maker_base_locked = ctx
                 .accounts
                 .maker_balance
                 .base_locked
                 .checked_sub(plan.maker_locked_debit)
-                .ok_or(MarketError::LockedBalanceUnderflow)?;
+                .ok_or(balance::LockedBalanceUnderflow)?;
 
             let next_maker_quote_free = ctx
                 .accounts
                 .maker_balance
                 .quote_free
                 .checked_add(plan.fill.quote_quantity)
-                .ok_or(MarketError::FreeBalanceOverflow)?;
+                .ok_or(balance::FreeBalanceOverflow)?;
 
             ctx.accounts.taker_balance.quote_free = next_taker_quote_free;
             ctx.accounts.taker_balance.base_free = next_taker_base_free;
@@ -412,35 +396,35 @@ pub fn handle_match_limit_order(
                 .taker_balance
                 .base_free
                 .checked_sub(plan.fill.base_quantity)
-                .ok_or(MarketError::InsufficientFreeBalance)?;
+                .ok_or(balance::InsufficientFreeBalance)?;
 
             let next_taker_quote_free = ctx
                 .accounts
                 .taker_balance
                 .quote_free
                 .checked_add(plan.fill.quote_quantity)
-                .ok_or(MarketError::FreeBalanceOverflow)?;
+                .ok_or(balance::FreeBalanceOverflow)?;
 
             let next_maker_quote_locked = ctx
                 .accounts
                 .maker_balance
                 .quote_locked
                 .checked_sub(plan.maker_locked_debit)
-                .ok_or(MarketError::LockedBalanceUnderflow)?;
+                .ok_or(balance::LockedBalanceUnderflow)?;
 
             let next_maker_base_free = ctx
                 .accounts
                 .maker_balance
                 .base_free
                 .checked_add(plan.fill.base_quantity)
-                .ok_or(MarketError::FreeBalanceOverflow)?;
+                .ok_or(balance::FreeBalanceOverflow)?;
 
             let next_maker_quote_free = ctx
                 .accounts
                 .maker_balance
                 .quote_free
                 .checked_add(plan.maker_quote_refund)
-                .ok_or(MarketError::FreeBalanceOverflow)?;
+                .ok_or(balance::FreeBalanceOverflow)?;
 
             ctx.accounts.taker_balance.base_free = next_taker_base_free;
             ctx.accounts.taker_balance.quote_free = next_taker_quote_free;
@@ -476,7 +460,7 @@ pub fn handle_match_limit_order(
                 .accounts
                 .next_order
                 .as_mut()
-                .ok_or(MarketError::InvalidOrderNeighbor)?;
+                .ok_or(order::InvalidOrderNeighbor)?;
 
             next_order.previous_order = None;
             ctx.accounts.maker_price_level.first_order = Some(next_order.key());
@@ -500,7 +484,7 @@ pub fn handle_match_limit_order(
                 .accounts
                 .level_rent_recipient
                 .as_ref()
-                .ok_or(MarketError::InvalidPriceLevelRentRecipient)?
+                .ok_or(order::InvalidPriceLevelRentRecipient)?
                 .to_account_info();
 
             // Close only after all market and neighboring-level links have

@@ -7,7 +7,7 @@ use anchor_lang::prelude::*;
 
 use crate::{
     constants::{ORDER_SEED, PRICE_LEVEL_SEED, TRADER_BALANCE_SEED},
-    error::MarketError,
+    errors::{balance, market, order},
     pda::derive_price_level_pda,
     state::{Market, Order, OrderSide, OrderStatus, PriceLevel, TraderBalance},
 };
@@ -33,8 +33,8 @@ pub struct CancelLimitOrder<'info> {
             order_id.to_le_bytes().as_ref()
         ],
         bump = order.bump,
-        has_one = owner @ MarketError::UnauthorizedOrderOwner,
-        has_one = market @ MarketError::OrderMarketMismatch
+        has_one = owner @ order::UnauthorizedOrderOwner,
+        has_one = market @ order::OrderMarketMismatch
     )]
     pub order: Box<Account<'info, Order>>,
 
@@ -48,13 +48,13 @@ pub struct CancelLimitOrder<'info> {
         ],
         bump = price_level.bump,
         constraint = order.price_level == price_level.key()
-            @ MarketError::OrderPriceLevelMismatch,
+            @ order::OrderPriceLevelMismatch,
         constraint = price_level.market == market.key()
-            @ MarketError::PriceLevelMarketMismatch,
+            @ order::PriceLevelMarketMismatch,
         constraint = price_level.side == order.side
-            @ MarketError::PriceLevelSideMismatch,
+            @ order::PriceLevelSideMismatch,
         constraint = price_level.price == order.price
-            @ MarketError::PriceLevelPriceMismatch,
+            @ order::PriceLevelPriceMismatch,
     )]
     pub price_level: Box<Account<'info, PriceLevel>>,
 
@@ -88,9 +88,9 @@ pub struct CancelLimitOrder<'info> {
         ],
         bump = trader_balance.bump,
         constraint = trader_balance.market == market.key()
-            @ MarketError::TraderBalanceMarketMismatch,
+            @ balance::TraderBalanceMarketMismatch,
         constraint = trader_balance.owner == owner.key()
-            @ MarketError::TraderBalanceOwnerMismatch
+            @ balance::TraderBalanceOwnerMismatch
     )]
     pub trader_balance: Box<Account<'info, TraderBalance>>,
 }
@@ -100,7 +100,7 @@ pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64)
     // must retain an exit path while trading is paused.
     require!(
         ctx.accounts.order.status == OrderStatus::Open,
-        MarketError::OrderNotOpen
+        order::OrderNotOpen
     );
 
     // Snapshot immutable order state before borrowing any queue account mutably.
@@ -134,48 +134,42 @@ pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64)
         .as_ref()
         .map(|account| account.key());
 
-    require!(
-        order_previous == previous_key,
-        MarketError::InvalidOrderNeighbor
-    );
+    require!(order_previous == previous_key, order::InvalidOrderNeighbor);
 
-    require!(order_next == next_key, MarketError::InvalidOrderNeighbor);
+    require!(order_next == next_key, order::InvalidOrderNeighbor);
 
     // A matching key is insufficient: reciprocal links prove that the supplied
     // accounts are the adjacent FIFO nodes rather than unrelated orders.
     if let Some(previous_order) = ctx.accounts.previous_order.as_ref() {
         require!(
             previous_order.status == OrderStatus::Open,
-            MarketError::OrderNotOpen
+            order::OrderNotOpen
         );
 
         require_keys_eq!(
             previous_order.price_level,
             price_level_key,
-            MarketError::OrderPriceLevelMismatch
+            order::OrderPriceLevelMismatch
         );
 
         require!(
             previous_order.next_order == Some(order_key),
-            MarketError::BrokenOrderQueueLink
+            order::BrokenOrderQueueLink
         );
     }
 
     if let Some(next_order) = ctx.accounts.next_order.as_ref() {
-        require!(
-            next_order.status == OrderStatus::Open,
-            MarketError::OrderNotOpen
-        );
+        require!(next_order.status == OrderStatus::Open, order::OrderNotOpen);
 
         require_keys_eq!(
             next_order.price_level,
             price_level_key,
-            MarketError::OrderPriceLevelMismatch
+            order::OrderPriceLevelMismatch
         );
 
         require!(
             next_order.previous_order == Some(order_key),
-            MarketError::BrokenOrderQueueLink
+            order::BrokenOrderQueueLink
         );
     }
 
@@ -189,24 +183,24 @@ pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64)
                 .trader_balance
                 .base_free
                 .checked_add(locked_collateral)
-                .ok_or(MarketError::FreeBalanceOverflow)?,
+                .ok_or(balance::FreeBalanceOverflow)?,
             ctx.accounts
                 .trader_balance
                 .base_locked
                 .checked_sub(locked_collateral)
-                .ok_or(MarketError::LockedBalanceUnderflow)?,
+                .ok_or(balance::LockedBalanceUnderflow)?,
         ),
         OrderSide::Bid => (
             ctx.accounts
                 .trader_balance
                 .quote_free
                 .checked_add(locked_collateral)
-                .ok_or(MarketError::FreeBalanceOverflow)?,
+                .ok_or(balance::FreeBalanceOverflow)?,
             ctx.accounts
                 .trader_balance
                 .quote_locked
                 .checked_sub(locked_collateral)
-                .ok_or(MarketError::LockedBalanceUnderflow)?,
+                .ok_or(balance::LockedBalanceUnderflow)?,
         ),
     };
 
@@ -218,21 +212,21 @@ pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64)
         .market
         .open_order_count
         .checked_sub(1)
-        .ok_or(MarketError::OpenOrderCountUnderflow)?;
+        .ok_or(market::OpenOrderCountUnderflow)?;
 
     let next_level_order_count = ctx
         .accounts
         .price_level
         .order_count
         .checked_sub(1)
-        .ok_or(MarketError::PriceLevelOrderCountUnderflow)?;
+        .ok_or(order::PriceLevelOrderCountUnderflow)?;
 
     let next_level_quantity = ctx
         .accounts
         .price_level
         .total_remaining_quantity
         .checked_sub(order_remaining_quantity)
-        .ok_or(MarketError::PriceLevelQuantityUnderflow)?;
+        .ok_or(order::PriceLevelQuantityUnderflow)?;
 
     let removes_price_level = next_level_order_count == 0;
 
@@ -241,25 +235,22 @@ pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64)
             ctx.accounts.better_level.is_none()
                 && ctx.accounts.worse_level.is_none()
                 && ctx.accounts.level_rent_recipient.is_none(),
-            MarketError::InvalidPriceLevelNeighbors
+            order::InvalidPriceLevelNeighbors
         );
     }
 
     if removes_price_level {
         require!(
             order_previous.is_none() && order_next.is_none(),
-            MarketError::InvalidPriceLevelEndpoints
+            order::InvalidPriceLevelEndpoints
         );
 
         require!(
             level_first_order == Some(order_key) && level_last_order == Some(order_key),
-            MarketError::InvalidPriceLevelEndpoints
+            order::InvalidPriceLevelEndpoints
         );
 
-        require!(
-            next_level_quantity == 0,
-            MarketError::InvalidPriceLevelAggregate
-        );
+        require!(next_level_quantity == 0, order::InvalidPriceLevelAggregate);
 
         if level_better_price.is_none() {
             let current_best = match order_side {
@@ -269,7 +260,7 @@ pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64)
 
             require!(
                 current_best == Some(level_price),
-                MarketError::BestPriceLevelMismatch
+                order::BestPriceLevelMismatch
             );
         }
 
@@ -277,12 +268,12 @@ pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64)
             .accounts
             .level_rent_recipient
             .as_ref()
-            .ok_or(MarketError::InvalidPriceLevelRentRecipient)?;
+            .ok_or(order::InvalidPriceLevelRentRecipient)?;
 
         require_keys_eq!(
             rent_recipient.key(),
             ctx.accounts.price_level.rent_payer,
-            MarketError::InvalidPriceLevelRentRecipient
+            order::InvalidPriceLevelRentRecipient
         );
 
         let expected_better_level = level_better_price
@@ -298,7 +289,7 @@ pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64)
         require!(
             supplied_better_level == expected_better_level
                 && supplied_worse_level == expected_worse_level,
-            MarketError::InvalidPriceLevelNeighbors
+            order::InvalidPriceLevelNeighbors
         );
     }
 
@@ -308,14 +299,14 @@ pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64)
         require_keys_eq!(
             better_level.market,
             market_key,
-            MarketError::PriceLevelMarketMismatch
+            order::PriceLevelMarketMismatch
         );
 
         require!(
             better_level.side == order_side
                 && better_level.price == expected_price
                 && better_level.worse_price == Some(level_price),
-            MarketError::InvalidPriceLevelNeighbors
+            order::InvalidPriceLevelNeighbors
         );
     }
 
@@ -325,14 +316,14 @@ pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64)
         require_keys_eq!(
             worse_level.market,
             market_key,
-            MarketError::PriceLevelMarketMismatch
+            order::PriceLevelMarketMismatch
         );
 
         require!(
             worse_level.side == order_side
                 && worse_level.price == expected_price
                 && worse_level.better_price == Some(level_price),
-            MarketError::InvalidPriceLevelNeighbors
+            order::InvalidPriceLevelNeighbors
         );
     }
 
@@ -407,7 +398,7 @@ pub fn handle_cancel_limit_order(ctx: Context<CancelLimitOrder>, _order_id: u64)
             .accounts
             .level_rent_recipient
             .as_ref()
-            .ok_or(MarketError::InvalidPriceLevelRentRecipient)?
+            .ok_or(order::InvalidPriceLevelRentRecipient)?
             .to_account_info();
 
         // The level is closed only after all links and counters are repaired.

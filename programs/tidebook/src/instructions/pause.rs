@@ -6,7 +6,7 @@
 use anchor_lang::prelude::*;
 
 use crate::{
-    error::MarketError,
+    errors::market,
     state::{Market, MarketStatus},
 };
 
@@ -17,7 +17,7 @@ pub struct PauseMarket<'info> {
     #[account(
         mut,
         has_one = authority,
-        constraint = market.status == MarketStatus::Active @ MarketError::MarketAlreadyPaused
+        constraint = market.status == MarketStatus::Active @ market::MarketAlreadyPaused
     )]
     pub market: Account<'info, Market>,
 }

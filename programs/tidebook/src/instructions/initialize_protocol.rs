@@ -8,7 +8,7 @@ use anchor_lang::prelude::*;
 
 use crate::{
     constants::{ADMIN_SEED, PROTOCOL_CONFIG_SEED},
-    error::MarketError,
+    errors::admin,
     state::{AdminRecord, AdminStatus, ProtocolConfig},
 };
 
@@ -43,7 +43,7 @@ pub struct InitializeProtocol<'info> {
 
     #[account(
         constraint = program_data.upgrade_authority_address == Some(deployer.key())
-            @ MarketError::InvalidDeployer
+            @ admin::InvalidDeployer
     )]
     /// Loader state naming the program current upgrade authority.
     pub program_data: Account<'info, ProgramData>,

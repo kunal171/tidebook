@@ -7,7 +7,7 @@ use anchor_lang::prelude::*;
 
 use crate::{
     constants::{ORDER_SEED, PRICE_LEVEL_SEED, TRADER_BALANCE_SEED},
-    error::MarketError,
+    errors::{balance, market, order},
     state::{Market, MarketStatus, Order, OrderSide, OrderStatus, PriceLevel, TraderBalance},
 };
 
@@ -20,7 +20,7 @@ pub struct AppendLimitOrder<'info> {
     #[account(
         mut,
         constraint = market.status == MarketStatus::Active
-            @ MarketError::MarketNotActive
+            @ market::MarketNotActive
     )]
     pub market: Account<'info, Market>,
 
@@ -47,24 +47,24 @@ pub struct AppendLimitOrder<'info> {
         ],
         bump = price_level.bump,
         constraint = price_level.market == market.key()
-            @ MarketError::PriceLevelMarketMismatch,
+            @ order::PriceLevelMarketMismatch,
         constraint = price_level.side == side
-            @ MarketError::PriceLevelSideMismatch,
+            @ order::PriceLevelSideMismatch,
         constraint = price_level.price == price
-            @ MarketError::PriceLevelPriceMismatch
+            @ order::PriceLevelPriceMismatch
     )]
     pub price_level: Account<'info, PriceLevel>,
 
     #[account(
         mut,
         constraint = price_level.last_order == Some(previous_order.key())
-            @ MarketError::InvalidPriceLevelTail,
+            @ order::InvalidPriceLevelTail,
         constraint = previous_order.price_level == price_level.key()
-            @ MarketError::OrderPriceLevelMismatch,
+            @ order::OrderPriceLevelMismatch,
         constraint = previous_order.status == OrderStatus::Open
-            @ MarketError::OrderNotOpen,
+            @ order::OrderNotOpen,
         constraint = previous_order.next_order.is_none()
-            @ MarketError::InvalidPriceLevelTail
+            @ order::InvalidPriceLevelTail
     )]
     pub previous_order: Account<'info, Order>,
 
@@ -78,9 +78,9 @@ pub struct AppendLimitOrder<'info> {
         ],
         bump = trader_balance.bump,
         constraint = trader_balance.market == market.key()
-            @ MarketError::TraderBalanceMarketMismatch,
+            @ balance::TraderBalanceMarketMismatch,
         constraint = trader_balance.owner == trader.key()
-            @ MarketError::TraderBalanceOwnerMismatch
+            @ balance::TraderBalanceOwnerMismatch
     )]
     pub trader_balance: Account<'info, TraderBalance>,
 
@@ -93,8 +93,8 @@ pub fn handle_append_limit_order(
     price: u64,
     quantity: u64,
 ) -> Result<()> {
-    require!(price > 0, MarketError::InvalidPrice);
-    require!(quantity > 0, MarketError::InvalidQuantity);
+    require!(price > 0, order::InvalidPrice);
+    require!(quantity > 0, order::InvalidQuantity);
 
     let market_key = ctx.accounts.market.key();
     let order_key = ctx.accounts.order.key();
@@ -106,30 +106,30 @@ pub fn handle_append_limit_order(
 
     require!(
         price.is_multiple_of(market.price_tick_size),
-        MarketError::PriceNotOnTick
+        order::PriceNotOnTick
     );
 
     require!(
         quantity.is_multiple_of(market.quantity_lot_size),
-        MarketError::QuantityNotOnLot
+        order::QuantityNotOnLot
     );
 
     let base_scale = 10_u128
         .checked_pow(u32::from(market.base_decimals))
-        .ok_or(MarketError::OrderNotionalOverflow)?;
+        .ok_or(order::OrderNotionalOverflow)?;
 
     let quote_notional = u128::from(price)
         .checked_mul(u128::from(quantity))
-        .ok_or(MarketError::OrderNotionalOverflow)?
+        .ok_or(order::OrderNotionalOverflow)?
         .checked_div(base_scale)
-        .ok_or(MarketError::OrderNotionalOverflow)?;
+        .ok_or(order::OrderNotionalOverflow)?;
 
-    require!(quote_notional > 0, MarketError::OrderNotionalTooSmall);
+    require!(quote_notional > 0, order::OrderNotionalTooSmall);
 
     let locked_collateral = match side {
         OrderSide::Ask => quantity,
         OrderSide::Bid => {
-            u64::try_from(quote_notional).map_err(|_| error!(MarketError::OrderNotionalOverflow))?
+            u64::try_from(quote_notional).map_err(|_| error!(order::OrderNotionalOverflow))?
         }
     };
 
@@ -141,50 +141,50 @@ pub fn handle_append_limit_order(
                 .trader_balance
                 .base_free
                 .checked_sub(locked_collateral)
-                .ok_or(MarketError::InsufficientFreeBalance)?,
+                .ok_or(balance::InsufficientFreeBalance)?,
             ctx.accounts
                 .trader_balance
                 .base_locked
                 .checked_add(locked_collateral)
-                .ok_or(MarketError::LockedBalanceOverflow)?,
+                .ok_or(balance::LockedBalanceOverflow)?,
         ),
         OrderSide::Bid => (
             ctx.accounts
                 .trader_balance
                 .quote_free
                 .checked_sub(locked_collateral)
-                .ok_or(MarketError::InsufficientFreeBalance)?,
+                .ok_or(balance::InsufficientFreeBalance)?,
             ctx.accounts
                 .trader_balance
                 .quote_locked
                 .checked_add(locked_collateral)
-                .ok_or(MarketError::LockedBalanceOverflow)?,
+                .ok_or(balance::LockedBalanceOverflow)?,
         ),
     };
 
     let next_order_id = market
         .next_order_id
         .checked_add(1)
-        .ok_or(MarketError::OrderIdOverflow)?;
+        .ok_or(order::OrderIdOverflow)?;
 
     let next_open_order_count = market
         .open_order_count
         .checked_add(1)
-        .ok_or(MarketError::OpenOrderCountOverflow)?;
+        .ok_or(market::OpenOrderCountOverflow)?;
 
     let next_level_quantity = ctx
         .accounts
         .price_level
         .total_remaining_quantity
         .checked_add(quantity)
-        .ok_or(MarketError::PriceLevelQuantityOverflow)?;
+        .ok_or(order::PriceLevelQuantityOverflow)?;
 
     let next_level_count = ctx
         .accounts
         .price_level
         .order_count
         .checked_add(1)
-        .ok_or(MarketError::PriceLevelOrderCountOverflow)?;
+        .ok_or(order::PriceLevelOrderCountOverflow)?;
 
     match side {
         OrderSide::Ask => {
