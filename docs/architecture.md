@@ -252,6 +252,34 @@ FIFO-head and best-level removal, while a partial maker remains at the head.
 | `match_limit_order` | Taker | Market is active; maker is the best opposing FIFO head; prices cross; accounts, optional removal neighbors, rent recipient, and ledgers are canonical; taker is not maker | Settles one maker-price fill; leaves a partial maker in place or marks a full maker `Filled`, promotes its successor, and closes an empty best level atomically |
 | `cancel_limit_order` | Order owner | Order, ledger, level, FIFO neighbors, and optional level neighbors are canonical and reciprocal; status is `Open` | Moves locked to free balance and unlinks the order; final removal repairs levels, closes the empty level, and transitions `Open -> Canceled` even while paused |
 
+### Event architecture
+
+Every successful state-changing instruction emits an Anchor event after its
+validated mutations and CPIs complete:
+
+| Transition | Event |
+| --- | --- |
+| Protocol bootstrap | `ProtocolInitializedEvent` |
+| Add, enable, disable, or remove an administrator | `AdminAddedEvent`, `AdminStatusChangedEvent`, or `AdminRemovedEvent` |
+| Initialize, pause, unpause, or close a market | `MarketInitializedEvent`, `MarketStatusChangedEvent`, or `MarketClosedEvent` |
+| Initialize a trader ledger, deposit, or withdraw | `TraderBalanceInitializedEvent`, `DepositEvent`, or `WithdrawalEvent` |
+| Insert or append an order | `OrderPlacedEvent` |
+| Cancel an order | `OrderCanceledEvent` |
+| Settle one maker | `FillEvent` |
+
+Equivalent economic transitions intentionally share a schema: both placement
+paths emit `OrderPlacedEvent`, and both lifecycle directions emit
+`MarketStatusChangedEvent` with the resulting status. Balance events include
+the selected asset's post-transition free balance. Order and fill events include
+the authoritative remaining quantity or released collateral needed by indexers.
+
+Events are an observation and indexing interface, not protocol state or deferred
+settlement work. Transaction logs from a failed transaction can contain events
+emitted by an earlier instruction even though Solana rolls back all account
+mutations. Consumers must therefore ingest events only when transaction metadata
+reports success. On-chain accounts remain the source of truth and the protocol
+does not depend on an indexer being available.
+
 ### Market initialization flow
 
 ```text
@@ -717,8 +745,9 @@ The recommended implementation order is:
 5. ~~Add partial and full one-maker settlement with FIFO and level removal.~~
 6. ~~Add bounded client-planned multi-maker traversal with atomic rollback.~~
 7. ~~Add automatic non-crossing remainder posting with atomic rollback.~~
-8. **Next:** add events, fees, and broader conservation tests.
+8. ~~Add informational events for every successful state transition.~~
 9. Add order cleanup and rent-reclamation rules.
+10. **Next:** add fee accounting and broader conservation tests.
 
 Each phase should add its invariants and failure-path tests before the next
 state transition is introduced.

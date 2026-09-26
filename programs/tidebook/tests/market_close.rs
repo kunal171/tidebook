@@ -5,6 +5,8 @@
 // instruction size, so this integration-test boundary permits the large error.
 #![allow(clippy::result_large_err)]
 
+mod support;
+
 use {
     anchor_lang::{
         prelude::Pubkey,
@@ -434,6 +436,15 @@ fn paused_empty_market_closes_market_and_both_vaults() {
     let result = send_instruction(&mut context.svm, &context.authority, instruction);
 
     assert!(result.is_ok(), "empty market closure failed: {result:?}");
+
+    let event = support::events::single_event::<tidebook::events::MarketClosedEvent>(&result);
+    assert_eq!(event.market, context.market.market);
+    assert_eq!(event.authority, context.authority.pubkey());
+    assert_eq!(event.base_mint, context.market.base_mint);
+    assert_eq!(event.quote_mint, context.market.quote_mint);
+    assert_eq!(event.base_vault, context.market.base_vault);
+    assert_eq!(event.quote_vault, context.market.quote_vault);
+
     assert!(context.svm.get_account(&context.market.market).is_none());
     assert!(context
         .svm

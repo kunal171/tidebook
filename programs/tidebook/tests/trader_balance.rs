@@ -5,6 +5,8 @@
 // instruction size, so this integration-test boundary permits the large error.
 #![allow(clippy::result_large_err)]
 
+mod support;
+
 use {
     anchor_lang::{
         prelude::Pubkey,
@@ -129,6 +131,12 @@ fn initializes_canonical_zeroed_balance_for_owner_and_market() {
     let (trader_balance, result) = initialize_for(&mut svm, &owner, market);
 
     assert!(result.is_ok(), "balance initialization failed: {result:?}");
+
+    let event =
+        support::events::single_event::<tidebook::events::TraderBalanceInitializedEvent>(&result);
+    assert_eq!(event.market, market);
+    assert_eq!(event.owner, owner.pubkey());
+    assert_eq!(event.trader_balance, trader_balance);
 
     let state = load_trader_balance(&svm, trader_balance);
     let (_, expected_bump) =
@@ -384,6 +392,15 @@ fn base_deposit_moves_tokens_and_credits_only_base_free() {
 
     let result = send_instruction(&mut svm, &owner, instruction);
     assert!(result.is_ok(), "base deposit failed: {result:?}");
+
+    let event = support::events::single_event::<tidebook::events::DepositEvent>(&result);
+    assert_eq!(event.market, fixture.market);
+    assert_eq!(event.owner, owner.pubkey());
+    assert_eq!(event.trader_balance, trader_balance);
+    assert_eq!(event.mint, fixture.base_mint);
+    assert_eq!(event.market_vault, fixture.base_vault);
+    assert_eq!(event.amount, 120);
+    assert_eq!(event.free_balance, 120);
 
     let balance = load_trader_balance(&svm, trader_balance);
     assert_eq!(load_token_amount(&svm, source), 380);
@@ -641,6 +658,15 @@ fn base_withdrawal_debits_only_base_free_and_transfers_tokens() {
 
     let result = send_instruction(&mut svm, &owner, instruction);
     assert!(result.is_ok(), "base withdrawal failed: {result:?}");
+
+    let event = support::events::single_event::<tidebook::events::WithdrawalEvent>(&result);
+    assert_eq!(event.market, fixture.market);
+    assert_eq!(event.owner, owner.pubkey());
+    assert_eq!(event.trader_balance, trader_balance);
+    assert_eq!(event.mint, fixture.base_mint);
+    assert_eq!(event.market_vault, fixture.base_vault);
+    assert_eq!(event.amount, 50);
+    assert_eq!(event.free_balance, 70);
 
     let balance = load_trader_balance(&svm, trader_balance);
     assert_eq!(load_token_amount(&svm, fixture.base_vault), 70);

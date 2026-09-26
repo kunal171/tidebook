@@ -6,6 +6,8 @@
 // instruction size, so this integration-test boundary permits the large error.
 #![allow(clippy::result_large_err)]
 
+mod support;
+
 use {
     anchor_lang::{
         prelude::Pubkey,
@@ -283,6 +285,14 @@ fn upgrade_authority_initializes_protocol() {
     let result = send_instruction(&mut svm, &deployer, instruction);
 
     assert!(result.is_ok(), "protocol initialization failed: {result:?}");
+
+    let (protocol_config, _) = protocol_config_address();
+    let (admin_record, _) = admin_record_address(&deployer.pubkey());
+    let event =
+        support::events::single_event::<tidebook::events::ProtocolInitializedEvent>(&result);
+    assert_eq!(event.protocol_config, protocol_config);
+    assert_eq!(event.super_admin, deployer.pubkey());
+    assert_eq!(event.admin_record, admin_record);
 }
 
 #[test]
@@ -342,12 +352,20 @@ fn super_admin_adds_active_admin() {
     let (mut svm, super_admin, protocol_config) = setup();
     let new_admin = Pubkey::new_unique();
 
-    add_admin(&mut svm, &super_admin, protocol_config, new_admin);
+    let instruction = add_admin_instruction(super_admin.pubkey(), protocol_config, new_admin);
+    let result = send_instruction(&mut svm, &super_admin, instruction);
+    assert!(result.is_ok(), "adding admin failed: {result:?}");
 
     let record = load_admin_record(&svm, &new_admin);
     assert_eq!(record.authority, new_admin);
     assert_eq!(record.added_by, super_admin.pubkey());
     assert_eq!(record.status, AdminStatus::Active);
+
+    let (admin_record, _) = admin_record_address(&new_admin);
+    let event = support::events::single_event::<tidebook::events::AdminAddedEvent>(&result);
+    assert_eq!(event.admin_record, admin_record);
+    assert_eq!(event.authority, new_admin);
+    assert_eq!(event.added_by, super_admin.pubkey());
 }
 
 #[test]
@@ -372,18 +390,30 @@ fn super_admin_disables_and_enables_admin() {
     add_admin(&mut svm, &super_admin, protocol_config, target_admin);
 
     let disable = disable_admin_instruction(super_admin.pubkey(), protocol_config, target_admin);
-    assert!(send_instruction(&mut svm, &super_admin, disable).is_ok());
+    let disable_result = send_instruction(&mut svm, &super_admin, disable);
+    assert!(disable_result.is_ok());
     assert_eq!(
         load_admin_record(&svm, &target_admin).status,
         AdminStatus::Disabled
     );
+    let disabled =
+        support::events::single_event::<tidebook::events::AdminStatusChangedEvent>(&disable_result);
+    assert_eq!(disabled.authority, target_admin);
+    assert_eq!(disabled.changed_by, super_admin.pubkey());
+    assert_eq!(disabled.status, AdminStatus::Disabled);
 
     let enable = enable_admin_instruction(super_admin.pubkey(), protocol_config, target_admin);
-    assert!(send_instruction(&mut svm, &super_admin, enable).is_ok());
+    let enable_result = send_instruction(&mut svm, &super_admin, enable);
+    assert!(enable_result.is_ok());
     assert_eq!(
         load_admin_record(&svm, &target_admin).status,
         AdminStatus::Active
     );
+    let enabled =
+        support::events::single_event::<tidebook::events::AdminStatusChangedEvent>(&enable_result);
+    assert_eq!(enabled.authority, target_admin);
+    assert_eq!(enabled.changed_by, super_admin.pubkey());
+    assert_eq!(enabled.status, AdminStatus::Active);
 }
 
 #[test]
@@ -447,8 +477,15 @@ fn disabled_admin_can_be_removed_and_added_again() {
     assert!(send_instruction(&mut svm, &super_admin, disable).is_ok());
 
     let remove = remove_admin_instruction(super_admin.pubkey(), protocol_config, target_admin);
-    assert!(send_instruction(&mut svm, &super_admin, remove).is_ok());
+    let remove_result = send_instruction(&mut svm, &super_admin, remove);
+    assert!(remove_result.is_ok());
     assert!(svm.get_account(&admin_record).is_none());
+
+    let event =
+        support::events::single_event::<tidebook::events::AdminRemovedEvent>(&remove_result);
+    assert_eq!(event.admin_record, admin_record);
+    assert_eq!(event.authority, target_admin);
+    assert_eq!(event.removed_by, super_admin.pubkey());
 
     add_admin(&mut svm, &super_admin, protocol_config, target_admin);
     assert_eq!(
