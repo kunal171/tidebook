@@ -8,7 +8,7 @@ use anchor_spl::token::{self, Mint, Token, TokenAccount, TransferChecked};
 
 use crate::{
     constants::{TRADER_BALANCE_SEED, VAULT_AUTHORITY_SEED, VAULT_SEED},
-    error::MarketError,
+    errors::balance,
     state::{Market, TraderBalance},
 };
 
@@ -28,9 +28,9 @@ pub struct Deposit<'info> {
         ],
         bump = trader_balance.bump,
         constraint = trader_balance.market == market.key()
-            @ MarketError::TraderBalanceMarketMismatch,
+            @ balance::TraderBalanceMarketMismatch,
         constraint = trader_balance.owner == owner.key()
-            @ MarketError::TraderBalanceOwnerMismatch
+            @ balance::TraderBalanceOwnerMismatch
     )]
     pub trader_balance: Account<'info, TraderBalance>,
 
@@ -41,9 +41,9 @@ pub struct Deposit<'info> {
     #[account(
         mut,
         constraint = trader_token_account.owner == owner.key()
-            @ MarketError::TraderBalanceOwnerMismatch,
+            @ balance::TraderBalanceOwnerMismatch,
         constraint = trader_token_account.mint == deposit_mint.key()
-            @ MarketError::InvalidDepositMint
+            @ balance::InvalidDepositMint
     )]
     pub trader_token_account: Account<'info, TokenAccount>,
 
@@ -74,11 +74,11 @@ pub struct Deposit<'info> {
 }
 
 pub fn handle_deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
-    require!(amount > 0, MarketError::InvalidDepositAmount);
+    require!(amount > 0, balance::InvalidDepositAmount);
 
     require!(
         ctx.accounts.trader_token_account.amount >= amount,
-        MarketError::InsufficientDepositFunds
+        balance::InsufficientDepositFunds
     );
 
     let mint = ctx.accounts.deposit_mint.key();
@@ -90,15 +90,15 @@ pub fn handle_deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
             .trader_balance
             .base_free
             .checked_add(amount)
-            .ok_or(MarketError::FreeBalanceOverflow)?
+            .ok_or(balance::FreeBalanceOverflow)?
     } else if mint == ctx.accounts.market.quote_mint {
         ctx.accounts
             .trader_balance
             .quote_free
             .checked_add(amount)
-            .ok_or(MarketError::FreeBalanceOverflow)?
+            .ok_or(balance::FreeBalanceOverflow)?
     } else {
-        return err!(MarketError::InvalidDepositMint);
+        return err!(balance::InvalidDepositMint);
     };
 
     token::transfer_checked(

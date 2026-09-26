@@ -4,7 +4,7 @@
 //! instruction modules while exposing a stable interface for generated clients.
 
 pub mod constants;
-pub mod error;
+pub mod errors;
 pub mod instructions;
 pub mod matching;
 pub mod pda;

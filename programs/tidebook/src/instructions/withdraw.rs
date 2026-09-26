@@ -8,7 +8,7 @@ use anchor_spl::token::{self, Mint, Token, TokenAccount, TransferChecked};
 
 use crate::{
     constants::{TRADER_BALANCE_SEED, VAULT_AUTHORITY_SEED, VAULT_SEED},
-    error::MarketError,
+    errors::balance,
     state::{Market, TraderBalance},
 };
 
@@ -27,9 +27,9 @@ pub struct Withdraw<'info> {
         ],
         bump = trader_balance.bump,
         constraint = trader_balance.market == market.key()
-            @ MarketError::TraderBalanceMarketMismatch,
+            @ balance::TraderBalanceMarketMismatch,
         constraint = trader_balance.owner == owner.key()
-            @ MarketError::TraderBalanceOwnerMismatch
+            @ balance::TraderBalanceOwnerMismatch
     )]
     pub trader_balance: Account<'info, TraderBalance>,
 
@@ -40,9 +40,9 @@ pub struct Withdraw<'info> {
     #[account(
         mut,
         constraint = owner_token_account.owner == owner.key()
-            @ MarketError::InvalidWithdrawalDestinationOwner,
+            @ balance::InvalidWithdrawalDestinationOwner,
         constraint = owner_token_account.mint == withdrawal_mint.key()
-            @ MarketError::InvalidWithdrawalMint
+            @ balance::InvalidWithdrawalMint
     )]
     pub owner_token_account: Account<'info, TokenAccount>,
 
@@ -73,7 +73,7 @@ pub struct Withdraw<'info> {
 }
 
 pub fn handle_withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
-    require!(amount > 0, MarketError::InvalidWithdrawalAmount);
+    require!(amount > 0, balance::InvalidWithdrawalAmount);
 
     let mint = ctx.accounts.withdrawal_mint.key();
 
@@ -83,22 +83,22 @@ pub fn handle_withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
             .trader_balance
             .base_free
             .checked_sub(amount)
-            .ok_or(MarketError::InsufficientFreeBalance)?
+            .ok_or(balance::InsufficientFreeBalance)?
     } else if mint == ctx.accounts.market.quote_mint {
         ctx.accounts
             .trader_balance
             .quote_free
             .checked_sub(amount)
-            .ok_or(MarketError::InsufficientFreeBalance)?
+            .ok_or(balance::InsufficientFreeBalance)?
     } else {
-        return err!(MarketError::InvalidWithdrawalMint);
+        return err!(balance::InvalidWithdrawalMint);
     };
 
     // A violation here indicates broken internal accounting because the vault
     // should always back every free and locked balance.
     require!(
         ctx.accounts.market_vault.amount >= amount,
-        MarketError::InsufficientVaultFunds
+        balance::InsufficientVaultFunds
     );
 
     let market_key = ctx.accounts.market.key();

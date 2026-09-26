@@ -19,7 +19,7 @@ use anchor_lang::prelude::*;
 
 use crate::{
     constants::{ORDER_SEED, PRICE_LEVEL_SEED, TRADER_BALANCE_SEED},
-    error::MarketError,
+    errors::{balance, market, order},
     pda::derive_price_level_pda,
     state::{Market, MarketStatus, Order, OrderSide, OrderStatus, PriceLevel, TraderBalance},
 };
@@ -33,7 +33,7 @@ pub struct InsertLimitOrder<'info> {
     #[account(
         mut,
         constraint = market.status == MarketStatus::Active
-            @ MarketError::MarketNotActive
+            @ market::MarketNotActive
     )]
     pub market: Account<'info, Market>,
 
@@ -74,9 +74,9 @@ pub struct InsertLimitOrder<'info> {
         ],
         bump = trader_balance.bump,
         constraint = trader_balance.market == market.key()
-            @ MarketError::TraderBalanceMarketMismatch,
+            @ balance::TraderBalanceMarketMismatch,
         constraint = trader_balance.owner == trader.key()
-            @ MarketError::TraderBalanceOwnerMismatch
+            @ balance::TraderBalanceOwnerMismatch
     )]
     pub trader_balance: Account<'info, TraderBalance>,
 
@@ -100,8 +100,8 @@ pub fn handle_insert_limit_order(
     price: u64,
     quantity: u64,
 ) -> Result<()> {
-    require!(price > 0, MarketError::InvalidPrice);
-    require!(quantity > 0, MarketError::InvalidQuantity);
+    require!(price > 0, order::InvalidPrice);
+    require!(quantity > 0, order::InvalidQuantity);
 
     let market_key = ctx.accounts.market.key();
     let order_key = ctx.accounts.order.key();
@@ -115,12 +115,12 @@ pub fn handle_insert_limit_order(
     // and keeps later matching arithmetic deterministic.
     require!(
         price.is_multiple_of(market.price_tick_size),
-        MarketError::PriceNotOnTick
+        order::PriceNotOnTick
     );
 
     require!(
         quantity.is_multiple_of(market.quantity_lot_size),
-        MarketError::QuantityNotOnLot
+        order::QuantityNotOnLot
     );
 
     // The market stores only the best price for O(1) matching entry. It does
@@ -145,22 +145,16 @@ pub fn handle_insert_limit_order(
         (Some(current_best), None, Some(worse)) => {
             validate_level(worse, market_key, side)?;
 
-            require!(
-                worse.price == current_best,
-                MarketError::BestPriceLevelMismatch
-            );
+            require!(worse.price == current_best, order::BestPriceLevelMismatch);
 
-            require!(
-                worse.better_price.is_none(),
-                MarketError::BestPriceLevelMismatch
-            );
+            require!(worse.better_price.is_none(), order::BestPriceLevelMismatch);
 
             let correctly_ordered = match side {
                 OrderSide::Bid => price > worse.price,
                 OrderSide::Ask => price < worse.price,
             };
 
-            require!(correctly_ordered, MarketError::InvalidPriceLevelOrdering);
+            require!(correctly_ordered, order::InvalidPriceLevelOrdering);
         }
 
         // Middle insertion: two canonical levels are insufficient by
@@ -172,12 +166,12 @@ pub fn handle_insert_limit_order(
 
             require!(
                 better.worse_price == Some(worse.price),
-                MarketError::InvalidPriceLevelNeighbors
+                order::InvalidPriceLevelNeighbors
             );
 
             require!(
                 worse.better_price == Some(better.price),
-                MarketError::InvalidPriceLevelNeighbors
+                order::InvalidPriceLevelNeighbors
             );
 
             let correctly_ordered = match side {
@@ -185,7 +179,7 @@ pub fn handle_insert_limit_order(
                 OrderSide::Ask => better.price < price && price < worse.price,
             };
 
-            require!(correctly_ordered, MarketError::InvalidPriceLevelOrdering);
+            require!(correctly_ordered, order::InvalidPriceLevelOrdering);
         }
 
         // New worst: because Market intentionally has no worst pointer, the
@@ -195,7 +189,7 @@ pub fn handle_insert_limit_order(
 
             require!(
                 better.worse_price.is_none(),
-                MarketError::InvalidPriceLevelNeighbors
+                order::InvalidPriceLevelNeighbors
             );
 
             let correctly_ordered = match side {
@@ -203,11 +197,11 @@ pub fn handle_insert_limit_order(
                 OrderSide::Ask => better.price < price,
             };
 
-            require!(correctly_ordered, MarketError::InvalidPriceLevelOrdering);
+            require!(correctly_ordered, order::InvalidPriceLevelOrdering);
         }
         // A neighbor was supplied for an empty side, or omitted for a
         // non-empty side. Both indicate stale or malformed client state.
-        _ => return err!(MarketError::InvalidPriceLevelNeighbors),
+        _ => return err!(order::InvalidPriceLevelNeighbors),
     }
 
     // Bid collateral is quote notional, while ask collateral is base quantity.
@@ -215,20 +209,20 @@ pub fn handle_insert_limit_order(
     // final checked conversion back to the SPL Token program's u64 amount.
     let base_scale = 10_u128
         .checked_pow(u32::from(market.base_decimals))
-        .ok_or(MarketError::OrderNotionalOverflow)?;
+        .ok_or(order::OrderNotionalOverflow)?;
 
     let quote_notional = u128::from(price)
         .checked_mul(u128::from(quantity))
-        .ok_or(MarketError::OrderNotionalOverflow)?
+        .ok_or(order::OrderNotionalOverflow)?
         .checked_div(base_scale)
-        .ok_or(MarketError::OrderNotionalOverflow)?;
+        .ok_or(order::OrderNotionalOverflow)?;
 
-    require!(quote_notional > 0, MarketError::OrderNotionalTooSmall);
+    require!(quote_notional > 0, order::OrderNotionalTooSmall);
 
     let locked_collateral = match side {
         OrderSide::Ask => quantity,
         OrderSide::Bid => {
-            u64::try_from(quote_notional).map_err(|_| error!(MarketError::OrderNotionalOverflow))?
+            u64::try_from(quote_notional).map_err(|_| error!(order::OrderNotionalOverflow))?
         }
     };
 
@@ -240,37 +234,35 @@ pub fn handle_insert_limit_order(
                 .trader_balance
                 .base_free
                 .checked_sub(locked_collateral)
-                .ok_or(MarketError::InsufficientFreeBalance)?,
+                .ok_or(balance::InsufficientFreeBalance)?,
             ctx.accounts
                 .trader_balance
                 .base_locked
                 .checked_add(locked_collateral)
-                .ok_or(MarketError::LockedBalanceOverflow)?,
+                .ok_or(balance::LockedBalanceOverflow)?,
         ),
         OrderSide::Bid => (
             ctx.accounts
                 .trader_balance
                 .quote_free
                 .checked_sub(locked_collateral)
-                .ok_or(MarketError::InsufficientFreeBalance)?,
+                .ok_or(balance::InsufficientFreeBalance)?,
             ctx.accounts
                 .trader_balance
                 .quote_locked
                 .checked_add(locked_collateral)
-                .ok_or(MarketError::LockedBalanceOverflow)?,
+                .ok_or(balance::LockedBalanceOverflow)?,
         ),
     };
 
     let order_id = market.next_order_id;
 
-    let next_order_id = order_id
-        .checked_add(1)
-        .ok_or(MarketError::OrderIdOverflow)?;
+    let next_order_id = order_id.checked_add(1).ok_or(order::OrderIdOverflow)?;
 
     let next_open_order_count = market
         .open_order_count
         .checked_add(1)
-        .ok_or(MarketError::OpenOrderCountOverflow)?;
+        .ok_or(market::OpenOrderCountOverflow)?;
 
     match side {
         OrderSide::Ask => {
@@ -355,16 +347,13 @@ pub fn handle_insert_limit_order(
 /// `PriceLevel`. The stored market/side fields and the re-derived PDA establish
 /// that it is the unique canonical level eligible for this particular list.
 fn validate_level(level: &Account<PriceLevel>, market: Pubkey, side: OrderSide) -> Result<()> {
-    require!(
-        level.market == market,
-        MarketError::PriceLevelMarketMismatch
-    );
+    require!(level.market == market, order::PriceLevelMarketMismatch);
 
-    require!(level.side == side, MarketError::PriceLevelSideMismatch);
+    require!(level.side == side, order::PriceLevelSideMismatch);
 
     let (expected, _) = derive_price_level_pda(&crate::ID, &market, side, level.price);
 
-    require_keys_eq!(level.key(), expected, MarketError::NoncanonicalPriceLevel);
+    require_keys_eq!(level.key(), expected, order::NoncanonicalPriceLevel);
 
     Ok(())
 }

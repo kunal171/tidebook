@@ -6,7 +6,10 @@
 
 use anchor_lang::prelude::*;
 
-use crate::{error::MarketError, state::OrderSide};
+use crate::{
+    errors::{matching, order},
+    state::OrderSide,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FillCalculation {
@@ -58,22 +61,22 @@ pub fn calculate_fill(
 ) -> Result<FillCalculation> {
     let base_quantity = taker_remaining.min(maker_remaining);
 
-    require!(base_quantity > 0, MarketError::InvalidQuantity);
+    require!(base_quantity > 0, order::InvalidQuantity);
 
     let base_scale = 10_u128
         .checked_pow(u32::from(base_decimals))
-        .ok_or(MarketError::OrderNotionalOverflow)?;
+        .ok_or(order::OrderNotionalOverflow)?;
 
     let quote_quantity = u128::from(maker_price)
         .checked_mul(u128::from(base_quantity))
-        .ok_or(MarketError::OrderNotionalOverflow)?
+        .ok_or(order::OrderNotionalOverflow)?
         .checked_div(base_scale)
-        .ok_or(MarketError::OrderNotionalOverflow)?;
+        .ok_or(order::OrderNotionalOverflow)?;
 
-    require!(quote_quantity > 0, MarketError::OrderNotionalTooSmall);
+    require!(quote_quantity > 0, order::OrderNotionalTooSmall);
 
     let quote_quantity =
-        u64::try_from(quote_quantity).map_err(|_| error!(MarketError::OrderNotionalOverflow))?;
+        u64::try_from(quote_quantity).map_err(|_| error!(order::OrderNotionalOverflow))?;
 
     Ok(FillCalculation {
         base_quantity,
@@ -96,11 +99,11 @@ pub fn calculate_settlement(
     // A match must always consume liquidity from the opposite side. Checking
     // this before price crossing avoids interpreting a same-side price as a
     // valid trade.
-    require!(taker_side != maker_side, MarketError::MatchingSameSide);
+    require!(taker_side != maker_side, matching::MatchingSameSide);
 
     require!(
         prices_cross(taker_side, taker_limit_price, maker_price),
-        MarketError::OrdersDoNotCross
+        matching::OrdersDoNotCross
     );
 
     let fill = calculate_fill(maker_price, taker_remaining, maker_remaining, base_decimals)?;
@@ -115,7 +118,7 @@ pub fn calculate_settlement(
             // no fixed-point rounding dust is possible.
             require!(
                 maker_locked_collateral == maker_remaining,
-                MarketError::InvalidMakerCollateral
+                matching::InvalidMakerCollateral
             );
 
             (fill.base_quantity, 0)
@@ -133,7 +136,7 @@ pub fn calculate_settlement(
 
             require!(
                 locked_debit >= fill.quote_quantity && maker_locked_collateral >= locked_debit,
-                MarketError::InvalidMakerCollateral
+                matching::InvalidMakerCollateral
             );
 
             (locked_debit, locked_debit - fill.quote_quantity)

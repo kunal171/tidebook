@@ -662,14 +662,40 @@ The 154-test suite currently covers:
 - rejection without mutation of non-crossing, same-side, self-trading,
   underfunded, paused, non-head, and non-best match attempts.
 
-## 8. Dependency boundary
+## 8. Error architecture
+
+Anchor 1.2 permits only one `#[error_code]` enum in a generated program IDL.
+Tidebook therefore keeps its canonical on-chain error ABI in
+`programs/tidebook/src/errors/catalog.rs`. The `admin`, `market`, `order`,
+`balance`, and `matching` modules re-export only the variants used by their
+domain, so instruction code can use focused names such as
+`order::PriceNotOnTick` without defining incompatible independent Anchor error
+enums.
+
+Every catalog variant has an explicit discriminant. This preserves the existing
+public codes `6000` through `6077`, as well as their names and messages, even
+though the Rust source is now organized by domain. Existing discriminants must
+never be changed or reused; a new error receives the next unused discriminant
+and is then re-exported from the appropriate domain module.
+
+This design deliberately separates two concerns:
+
+- `catalog.rs` is the stable external ABI consumed by clients and the IDL;
+- domain modules are the internal organization used by program call sites.
+
+The tradeoff is that a new variant must be added in two places: once to the
+catalog and once to its domain re-export. In return, Tidebook keeps a single
+Anchor-compatible error definition while avoiding one undifferentiated error
+namespace throughout the instruction code.
+
+## 9. Dependency boundary
 
 The program uses Anchor `1.2.0`. Tests use LiteSVM `0.16.0` and its compatible
 Solana SDK type family. The direct SDK dependencies are pinned because LiteSVM's
 public APIs exchange concrete `Address`, `Message`, `Transaction`, `Signer`, and
 `Keypair` types with the test code.
 
-## 9. Planned evolution
+## 10. Planned evolution
 
 The proposed account model and its alternatives are documented in
 [`price-level-fifo-design.md`](price-level-fifo-design.md).

@@ -7,7 +7,7 @@ use anchor_spl::token::{self, CloseAccount, Token, TokenAccount};
 
 use crate::{
     constants::{VAULT_AUTHORITY_SEED, VAULT_SEED},
-    error::MarketError,
+    errors::market,
     state::{Market, MarketStatus},
 };
 
@@ -20,7 +20,7 @@ pub struct CloseMarket<'info> {
         mut,
         has_one = authority,
         close = authority,
-        constraint = market.status == MarketStatus::Paused @ MarketError::MarketMustBePaused
+        constraint = market.status == MarketStatus::Paused @ market::MarketMustBePaused
     )]
     pub market: Account<'info, Market>,
 
@@ -43,9 +43,9 @@ pub struct CloseMarket<'info> {
         ],
         bump,
         constraint = base_vault.mint == market.base_mint
-            @ MarketError::InvalidCollateralMint,
+            @ market::InvalidCollateralMint,
         constraint = base_vault.owner == vault_authority.key()
-            @ MarketError::InvalidVaultAuthority
+            @ market::InvalidVaultAuthority
     )]
     pub base_vault: Account<'info, TokenAccount>,
 
@@ -58,9 +58,9 @@ pub struct CloseMarket<'info> {
         ],
         bump,
         constraint = quote_vault.mint == market.quote_mint
-            @ MarketError::InvalidCollateralMint,
+            @ market::InvalidCollateralMint,
         constraint = quote_vault.owner == vault_authority.key()
-            @ MarketError::InvalidVaultAuthority
+            @ market::InvalidVaultAuthority
     )]
     pub quote_vault: Account<'info, TokenAccount>,
 
@@ -72,12 +72,12 @@ pub fn handle_close_market(ctx: Context<CloseMarket>) -> Result<()> {
     // also catches unsolicited transfers and accounting bugs before shutdown.
     require!(
         ctx.accounts.market.open_order_count == 0,
-        MarketError::MarketHasOpenOrders
+        market::MarketHasOpenOrders
     );
 
     require!(
         ctx.accounts.base_vault.amount == 0 && ctx.accounts.quote_vault.amount == 0,
-        MarketError::MarketVaultNotEmpty
+        market::MarketVaultNotEmpty
     );
     msg!("Closing market {}", ctx.accounts.market.key());
 
