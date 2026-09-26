@@ -7,6 +7,7 @@ use anchor_lang::prelude::*;
 
 use crate::{
     errors::market,
+    events::MarketStatusChangedEvent,
     state::{Market, MarketStatus},
 };
 
@@ -24,5 +25,12 @@ pub struct UnpauseMarket<'info> {
 
 pub fn handle_unpause_market(ctx: Context<UnpauseMarket>) -> Result<()> {
     ctx.accounts.market.status = MarketStatus::Active;
+
+    emit!(MarketStatusChangedEvent {
+        market: ctx.accounts.market.key(),
+        authority: ctx.accounts.authority.key(),
+        status: MarketStatus::Active,
+    });
+
     Ok(())
 }

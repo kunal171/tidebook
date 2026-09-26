@@ -8,6 +8,7 @@ use anchor_lang::prelude::*;
 use crate::{
     constants::{ADMIN_SEED, PROTOCOL_CONFIG_SEED},
     errors::admin,
+    events::AdminAddedEvent,
     state::{AdminRecord, AdminStatus, ProtocolConfig},
 };
 
@@ -48,6 +49,12 @@ pub fn handle_add_admin(ctx: Context<AddAdmin>, new_admin: Pubkey) -> Result<()>
     admin_record.added_by = ctx.accounts.super_admin.key();
     admin_record.status = AdminStatus::Active;
     admin_record.bump = ctx.bumps.admin_record;
+
+    emit!(AdminAddedEvent {
+        admin_record: ctx.accounts.admin_record.key(),
+        authority: new_admin,
+        added_by: ctx.accounts.super_admin.key(),
+    });
 
     Ok(())
 }

@@ -9,6 +9,7 @@ use anchor_lang::prelude::*;
 use crate::{
     constants::{ADMIN_SEED, PROTOCOL_CONFIG_SEED},
     errors::admin,
+    events::AdminStatusChangedEvent,
     state::{AdminRecord, AdminStatus, ProtocolConfig},
 };
 
@@ -45,6 +46,13 @@ pub fn handle_disable_admin(ctx: Context<ManageAdmin>, _target_admin: Pubkey) ->
 
     ctx.accounts.admin_record.status = AdminStatus::Disabled;
 
+    emit!(AdminStatusChangedEvent {
+        admin_record: ctx.accounts.admin_record.key(),
+        authority: ctx.accounts.admin_record.authority,
+        changed_by: ctx.accounts.super_admin.key(),
+        status: AdminStatus::Disabled,
+    });
+
     Ok(())
 }
 
@@ -56,6 +64,13 @@ pub fn handle_enable_admin(ctx: Context<ManageAdmin>, _target_admin: Pubkey) -> 
     );
 
     ctx.accounts.admin_record.status = AdminStatus::Active;
+
+    emit!(AdminStatusChangedEvent {
+        admin_record: ctx.accounts.admin_record.key(),
+        authority: ctx.accounts.admin_record.authority,
+        changed_by: ctx.accounts.super_admin.key(),
+        status: AdminStatus::Active,
+    });
 
     Ok(())
 }

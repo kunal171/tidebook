@@ -8,6 +8,7 @@ use anchor_spl::token::{self, CloseAccount, Token, TokenAccount};
 use crate::{
     constants::{VAULT_AUTHORITY_SEED, VAULT_SEED},
     errors::market,
+    events::MarketClosedEvent,
     state::{Market, MarketStatus},
 };
 
@@ -113,5 +114,15 @@ pub fn handle_close_market(ctx: Context<CloseMarket>) -> Result<()> {
         },
         signer_seeds,
     ))?;
+
+    emit!(MarketClosedEvent {
+        market: market_key,
+        authority: ctx.accounts.authority.key(),
+        base_mint: ctx.accounts.market.base_mint,
+        quote_mint: ctx.accounts.market.quote_mint,
+        base_vault: ctx.accounts.base_vault.key(),
+        quote_vault: ctx.accounts.quote_vault.key(),
+    });
+
     Ok(())
 }

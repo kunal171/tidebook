@@ -7,6 +7,7 @@ use anchor_lang::prelude::*;
 
 use crate::{
     errors::market,
+    events::MarketStatusChangedEvent,
     state::{Market, MarketStatus},
 };
 
@@ -26,5 +27,12 @@ pub fn handle_pause_market(ctx: Context<PauseMarket>) -> Result<()> {
     // Cancellation has no Active constraint, so this transition freezes only
     // placement and preserves owner-controlled collateral withdrawal.
     ctx.accounts.market.status = MarketStatus::Paused;
+
+    emit!(MarketStatusChangedEvent {
+        market: ctx.accounts.market.key(),
+        authority: ctx.accounts.authority.key(),
+        status: MarketStatus::Paused,
+    });
+
     Ok(())
 }

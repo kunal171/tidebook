@@ -9,6 +9,7 @@ use anchor_spl::token::{Mint, Token, TokenAccount};
 use crate::{
     constants::{ADMIN_SEED, MARKET_SEED, VAULT_AUTHORITY_SEED, VAULT_SEED},
     errors::{admin, market},
+    events::MarketInitializedEvent,
     state::{AdminRecord, AdminStatus, Market, MarketStatus},
 };
 
@@ -121,6 +122,17 @@ pub fn handle_initialize_market(
     market.best_ask = None;
     market.open_order_count = 0;
     market.bump = ctx.bumps.market;
+
+    emit!(MarketInitializedEvent {
+        market: ctx.accounts.market.key(),
+        authority: ctx.accounts.authority.key(),
+        base_mint: ctx.accounts.base_mint.key(),
+        quote_mint: ctx.accounts.quote_mint.key(),
+        base_vault: ctx.accounts.base_vault.key(),
+        quote_vault: ctx.accounts.quote_vault.key(),
+        price_tick_size,
+        quantity_lot_size,
+    });
 
     Ok(())
 }

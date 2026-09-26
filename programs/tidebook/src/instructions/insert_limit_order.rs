@@ -20,6 +20,7 @@ use anchor_lang::prelude::*;
 use crate::{
     constants::{ORDER_SEED, PRICE_LEVEL_SEED, TRADER_BALANCE_SEED},
     errors::{balance, market, order},
+    events::OrderPlacedEvent,
     pda::derive_price_level_pda,
     state::{Market, MarketStatus, Order, OrderSide, OrderStatus, PriceLevel, TraderBalance},
 };
@@ -337,6 +338,18 @@ pub fn handle_insert_limit_order(
 
     market.next_order_id = next_order_id;
     market.open_order_count = next_open_order_count;
+
+    emit!(OrderPlacedEvent {
+        market: market_key,
+        order: order_key,
+        order_id,
+        owner: trader_key,
+        side,
+        price,
+        quantity,
+        locked_collateral,
+        price_level: price_level_key,
+    });
 
     Ok(())
 }
