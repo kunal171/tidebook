@@ -149,6 +149,14 @@ vault amount = sum(free balances) + sum(locked balances) + protocol fees
 
 Fees are a future term and are zero until fee accounting is introduced.
 
+Integration tests enforce the current fee-free form after custody and book
+transitions. Deposit, placement, cancellation, withdrawal, partial and complete
+matching, fixed-point rounding refunds, bounded batches, automatic remainder
+posting, and rollback are checked against both canonical vault amounts and the
+aggregate free-plus-locked claims of every fixture participant. Matching-only
+fixtures that inject small auditable ledger values explicitly fund the
+canonical vaults to the same totals before settlement.
+
 ## Order lifecycle under this model
 
 ### Deposit
@@ -386,8 +394,10 @@ The safe order is:
    rollback tests.~~
 8. ~~Atomically post a non-crossing remainder when safe.~~
 9. ~~Emit informational events for every successful state transition.~~
-10. **Next:** add broader conservation tests and fee accounting.
-11. Benchmark account count, compute use, contention, and retry rate before
+10. ~~Add broader fee-free asset-conservation tests.~~
+11. **Next:** add fee accounting and extend conservation with protocol-fee
+    claims.
+12. Benchmark account count, compute use, contention, and retry rate before
    considering a slab-based redesign.
 
 Every future expansion must preserve the existing atomic balance and book

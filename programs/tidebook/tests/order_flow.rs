@@ -637,6 +637,17 @@ fn token_balance(svm: &LiteSVM, address: Pubkey) -> u64 {
     SplTokenAccount::unpack(&account.data).unwrap().amount
 }
 
+/// Replaces a test vault's token amount while preserving its canonical mint
+/// and owner. Matching moves only internal claims, so explicitly backing
+/// injected fixture ledgers lets conservation tests start from valid custody.
+fn set_token_balance(svm: &mut LiteSVM, address: Pubkey, amount: u64) {
+    let mut account = svm.get_account(&address).unwrap();
+    let mut token = SplTokenAccount::unpack(&account.data).unwrap();
+    token.amount = amount;
+    SplTokenAccount::pack(token, &mut account.data).unwrap();
+    svm.set_account(address, account).unwrap();
+}
+
 fn load_market(svm: &LiteSVM, address: Pubkey) -> tidebook::state::Market {
     let account = svm.get_account(&address).unwrap();
     let mut data: &[u8] = &account.data;
@@ -658,6 +669,81 @@ fn load_trader_balance(
     let account = svm.get_account(&address).unwrap();
     let mut data: &[u8] = &account.data;
     tidebook::state::TraderBalance::try_deserialize(&mut data).unwrap()
+}
+
+/// Returns aggregate base and quote claims for a unique set of market owners.
+///
+/// Aggregation uses `u128` so the test itself cannot hide a protocol defect by
+/// overflowing while several valid `u64` balances are summed.
+fn aggregate_market_claims(svm: &LiteSVM, market: Pubkey, owners: &[Pubkey]) -> (u128, u128) {
+    for (index, owner) in owners.iter().enumerate() {
+        assert!(
+            !owners[..index].contains(owner),
+            "duplicate owner would double-count conservation claims"
+        );
+    }
+
+    owners
+        .iter()
+        .fold((0_u128, 0_u128), |(base_total, quote_total), owner| {
+            let balance = load_trader_balance(svm, market, *owner);
+            (
+                base_total
+                    .checked_add(u128::from(balance.base_free))
+                    .and_then(|total| total.checked_add(u128::from(balance.base_locked)))
+                    .expect("base claim total overflowed"),
+                quote_total
+                    .checked_add(u128::from(balance.quote_free))
+                    .and_then(|total| total.checked_add(u128::from(balance.quote_locked)))
+                    .expect("quote claim total overflowed"),
+            )
+        })
+}
+
+/// Makes canonical vault amounts exactly back the injected fixture claims.
+fn back_market_claims(svm: &mut LiteSVM, market: Pubkey, owners: &[Pubkey]) {
+    let market_state = load_market(svm, market);
+    let (_, base_vault, quote_vault) = derive_market_vault_addresses(
+        &tidebook::id(),
+        &market,
+        &market_state.base_mint,
+        &market_state.quote_mint,
+    );
+    let (base_claims, quote_claims) = aggregate_market_claims(svm, market, owners);
+
+    set_token_balance(
+        svm,
+        base_vault,
+        u64::try_from(base_claims).expect("fixture base claims exceed vault representation"),
+    );
+    set_token_balance(
+        svm,
+        quote_vault,
+        u64::try_from(quote_claims).expect("fixture quote claims exceed vault representation"),
+    );
+}
+
+/// Proves that physical custody equals all free and locked internal claims.
+fn assert_market_asset_conservation(svm: &LiteSVM, market: Pubkey, owners: &[Pubkey]) {
+    let market_state = load_market(svm, market);
+    let (_, base_vault, quote_vault) = derive_market_vault_addresses(
+        &tidebook::id(),
+        &market,
+        &market_state.base_mint,
+        &market_state.quote_mint,
+    );
+    let (base_claims, quote_claims) = aggregate_market_claims(svm, market, owners);
+
+    assert_eq!(
+        u128::from(token_balance(svm, base_vault)),
+        base_claims,
+        "base vault does not back all trader claims"
+    );
+    assert_eq!(
+        u128::from(token_balance(svm, quote_vault)),
+        quote_claims,
+        "quote vault does not back all trader claims"
+    );
 }
 
 fn store_trader_balance(
@@ -911,6 +997,8 @@ fn setup_partial_match(maker_side: tidebook::state::OrderSide) -> MatchFixture {
 
     store_trader_balance(&mut svm, maker_balance, &maker_ledger);
     store_trader_balance(&mut svm, taker_balance, &taker_ledger);
+    back_market_claims(&mut svm, market, &[maker.pubkey(), taker.pubkey()]);
+    assert_market_asset_conservation(&svm, market, &[maker.pubkey(), taker.pubkey()]);
 
     let price_level = load_order(&svm, maker_order).price_level;
 
@@ -3253,6 +3341,7 @@ fn bid_taker_settles_against_partial_maker_ask() {
     assert_eq!(taker_balance.base_free, 2_000_000);
     assert_eq!(market_state.best_ask, Some(MATCH_PRICE));
     assert_eq!(market_state.open_order_count, 1);
+    assert_market_asset_conservation(&svm, market, &[maker.owner, taker.pubkey()]);
 }
 
 #[test]
@@ -3293,6 +3382,7 @@ fn ask_taker_settles_against_partial_maker_bid() {
     assert_eq!(taker_balance.quote_free, 50_000_000);
     assert_eq!(market_state.best_bid, Some(MATCH_PRICE));
     assert_eq!(market_state.open_order_count, 1);
+    assert_market_asset_conservation(&svm, market, &[maker.owner, taker.pubkey()]);
 }
 
 #[test]
@@ -3725,6 +3815,8 @@ fn final_bid_fill_returns_fixed_point_rounding_dust() {
     svm.airdrop(&taker.pubkey(), 1_000_000_000).unwrap();
     set_trader_balance(&mut svm, market, maker.pubkey(), 0, 0, 0, 3);
     set_trader_balance(&mut svm, market, taker.pubkey(), 2, 0, 0, 0);
+    back_market_claims(&mut svm, market, &[maker.pubkey(), taker.pubkey()]);
+    assert_market_asset_conservation(&svm, market, &[maker.pubkey(), taker.pubkey()]);
 
     let partial_result = send_match_limit_order(
         &mut svm,
@@ -3740,6 +3832,7 @@ fn final_bid_fill_returns_fixed_point_rounding_dust() {
         "partial fill failed: {partial_result:?}"
     );
     assert_eq!(load_order(&svm, maker_order).locked_collateral, 2);
+    assert_market_asset_conservation(&svm, market, &[maker.pubkey(), taker.pubkey()]);
 
     let price_level = load_order(&svm, maker_order).price_level;
     let final_result = send_match_limit_order_with_removal_accounts(
@@ -3769,6 +3862,7 @@ fn final_bid_fill_returns_fixed_point_rounding_dust() {
     );
     assert_eq!(load_market(&svm, market).best_bid, None);
     assert!(svm.get_account(&price_level).is_none());
+    assert_market_asset_conservation(&svm, market, &[maker.pubkey(), taker.pubkey()]);
 }
 
 #[test]
@@ -4163,6 +4257,16 @@ fn batch_match_consumes_same_price_fifo_head_then_partially_fills_successor() {
         0,
     );
     set_trader_balance(&mut svm, market, taker.pubkey(), 0, 0, 300_000_000, 0);
+    back_market_claims(
+        &mut svm,
+        market,
+        &[first_maker.pubkey(), second_maker.pubkey(), taker.pubkey()],
+    );
+    assert_market_asset_conservation(
+        &svm,
+        market,
+        &[first_maker.pubkey(), second_maker.pubkey(), taker.pubkey()],
+    );
 
     let price_level = load_order(&svm, first_order).price_level;
     let result = send_match_limit_order_batch(
@@ -4227,6 +4331,11 @@ fn batch_match_consumes_same_price_fifo_head_then_partially_fills_successor() {
     assert_eq!(second_balance.quote_free, 75_000_000);
     assert_eq!(taker_balance.base_free, 8_000_000);
     assert_eq!(taker_balance.quote_free, 100_000_000);
+    assert_market_asset_conservation(
+        &svm,
+        market,
+        &[first_maker.pubkey(), second_maker.pubkey(), taker.pubkey()],
+    );
 }
 
 #[test]
@@ -4288,6 +4397,16 @@ fn batch_match_closes_best_level_then_partially_fills_worse_level() {
         0,
     );
     set_trader_balance(&mut svm, market, taker.pubkey(), 0, 0, 250_000_000, 0);
+    back_market_claims(
+        &mut svm,
+        market,
+        &[best_maker.pubkey(), worse_maker.pubkey(), taker.pubkey()],
+    );
+    assert_market_asset_conservation(
+        &svm,
+        market,
+        &[best_maker.pubkey(), worse_maker.pubkey(), taker.pubkey()],
+    );
 
     let result = send_match_limit_order_batch(
         &mut svm,
@@ -4338,6 +4457,11 @@ fn batch_match_closes_best_level_then_partially_fills_worse_level() {
     assert_eq!(worse_balance.quote_free, 60_000_000);
     assert_eq!(taker_balance.base_free, 7_000_000);
     assert_eq!(taker_balance.quote_free, 65_000_000);
+    assert_market_asset_conservation(
+        &svm,
+        market,
+        &[best_maker.pubkey(), worse_maker.pubkey(), taker.pubkey()],
+    );
 }
 
 #[test]
@@ -4399,6 +4523,16 @@ fn failed_later_batch_match_rolls_back_earlier_fill_and_level_close() {
         0,
     );
     let taker_balance = set_trader_balance(&mut svm, market, taker.pubkey(), 0, 0, 250_000_000, 0);
+    back_market_claims(
+        &mut svm,
+        market,
+        &[best_maker.pubkey(), worse_maker.pubkey(), taker.pubkey()],
+    );
+    assert_market_asset_conservation(
+        &svm,
+        market,
+        &[best_maker.pubkey(), worse_maker.pubkey(), taker.pubkey()],
+    );
 
     let tracked = [
         market,
@@ -4450,6 +4584,11 @@ fn failed_later_batch_match_rolls_back_earlier_fill_and_level_close() {
         tidebook::state::OrderStatus::Open
     );
     assert_eq!(load_market(&svm, market).best_ask, Some(MATCH_PRICE));
+    assert_market_asset_conservation(
+        &svm,
+        market,
+        &[best_maker.pubkey(), worse_maker.pubkey(), taker.pubkey()],
+    );
 }
 
 /// Builds one match instruction without submitting it so tests can compose the
@@ -4648,6 +4787,8 @@ fn full_match_then_new_level_remainder_posts_atomically() {
         0,
     );
     set_trader_balance(&mut svm, market, taker.pubkey(), 0, 0, 300_000_000, 0);
+    back_market_claims(&mut svm, market, &[maker.pubkey(), taker.pubkey()]);
+    assert_market_asset_conservation(&svm, market, &[maker.pubkey(), taker.pubkey()]);
 
     let match_instruction = build_atomic_match_instruction(
         &svm,
@@ -4705,6 +4846,7 @@ fn full_match_then_new_level_remainder_posts_atomically() {
     assert_eq!(taker_balance.base_free, MATCH_MAKER_QUANTITY);
     assert_eq!(taker_balance.quote_free, 85_000_000);
     assert_eq!(taker_balance.quote_locked, 90_000_000);
+    assert_market_asset_conservation(&svm, market, &[maker.pubkey(), taker.pubkey()]);
 }
 
 #[test]
@@ -4767,6 +4909,24 @@ fn full_match_then_existing_level_remainder_appends_atomically() {
         0,
     );
     set_trader_balance(&mut svm, market, taker.pubkey(), 0, 0, 300_000_000, 0);
+    back_market_claims(
+        &mut svm,
+        market,
+        &[
+            resting_bid_owner.pubkey(),
+            ask_maker.pubkey(),
+            taker.pubkey(),
+        ],
+    );
+    assert_market_asset_conservation(
+        &svm,
+        market,
+        &[
+            resting_bid_owner.pubkey(),
+            ask_maker.pubkey(),
+            taker.pubkey(),
+        ],
+    );
 
     let match_instruction = build_atomic_match_instruction(
         &svm,
@@ -4817,6 +4977,15 @@ fn full_match_then_existing_level_remainder_appends_atomically() {
     assert_eq!(taker_balance.base_free, MATCH_MAKER_QUANTITY);
     assert_eq!(taker_balance.quote_free, 85_000_000);
     assert_eq!(taker_balance.quote_locked, 90_000_000);
+    assert_market_asset_conservation(
+        &svm,
+        market,
+        &[
+            resting_bid_owner.pubkey(),
+            ask_maker.pubkey(),
+            taker.pubkey(),
+        ],
+    );
 }
 
 #[test]
@@ -4854,6 +5023,8 @@ fn failed_remainder_placement_rolls_back_preceding_match() {
         0,
     );
     let taker_balance = set_trader_balance(&mut svm, market, taker.pubkey(), 0, 0, 300_000_000, 0);
+    back_market_claims(&mut svm, market, &[maker.pubkey(), taker.pubkey()]);
+    assert_market_asset_conservation(&svm, market, &[maker.pubkey(), taker.pubkey()]);
 
     let match_instruction = build_atomic_match_instruction(
         &svm,
@@ -4900,6 +5071,7 @@ fn failed_remainder_placement_rolls_back_preceding_match() {
         tidebook::state::OrderStatus::Open
     );
     assert_eq!(load_market(&svm, market).best_ask, Some(MATCH_PRICE));
+    assert_market_asset_conservation(&svm, market, &[maker.pubkey(), taker.pubkey()]);
 }
 
 #[test]
@@ -4958,6 +5130,8 @@ fn three_match_cap_leaves_fourth_crossing_maker_and_remainder_unposted() {
     svm.airdrop(&taker.pubkey(), 1_000_000_000).unwrap();
     set_trader_balance(&mut svm, market, maker.pubkey(), 0, 4_000_000, 0, 0);
     set_trader_balance(&mut svm, market, taker.pubkey(), 0, 0, 200_000_000, 0);
+    back_market_claims(&mut svm, market, &[maker.pubkey(), taker.pubkey()]);
+    assert_market_asset_conservation(&svm, market, &[maker.pubkey(), taker.pubkey()]);
 
     let market_before = load_market(&svm, market);
     let unposted_order = Pubkey::find_program_address(
@@ -5041,4 +5215,5 @@ fn three_match_cap_leaves_fourth_crossing_maker_and_remainder_unposted() {
     assert_eq!(maker_balance.quote_free, 75_000_000);
     assert_eq!(taker_balance.base_free, 3_000_000);
     assert_eq!(taker_balance.quote_free, 125_000_000);
+    assert_market_asset_conservation(&svm, market, &[maker.pubkey(), taker.pubkey()]);
 }
