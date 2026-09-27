@@ -368,6 +368,51 @@ fn load_token_amount(svm: &LiteSVM, address: Pubkey) -> u64 {
     SplTokenAccount::unpack(&account.data).unwrap().amount
 }
 
+/// Proves that both canonical vaults exactly back every supplied trader claim.
+///
+/// Fee accounting is not implemented yet, so there is deliberately no
+/// protocol-fee term in this equation.
+fn assert_market_asset_conservation(
+    svm: &LiteSVM,
+    fixture: &DepositFixture,
+    trader_balances: &[Pubkey],
+) {
+    for (index, address) in trader_balances.iter().enumerate() {
+        assert!(
+            !trader_balances[..index].contains(address),
+            "duplicate balance would double-count conservation claims"
+        );
+    }
+
+    let (base_claims, quote_claims) =
+        trader_balances
+            .iter()
+            .fold((0_u128, 0_u128), |(base_total, quote_total), address| {
+                let balance = load_trader_balance(svm, *address);
+                (
+                    base_total
+                        .checked_add(u128::from(balance.base_free))
+                        .and_then(|total| total.checked_add(u128::from(balance.base_locked)))
+                        .expect("base claim total overflowed"),
+                    quote_total
+                        .checked_add(u128::from(balance.quote_free))
+                        .and_then(|total| total.checked_add(u128::from(balance.quote_locked)))
+                        .expect("quote claim total overflowed"),
+                )
+            });
+
+    assert_eq!(
+        u128::from(load_token_amount(svm, fixture.base_vault)),
+        base_claims,
+        "base vault does not back all trader claims"
+    );
+    assert_eq!(
+        u128::from(load_token_amount(svm, fixture.quote_vault)),
+        quote_claims,
+        "quote vault does not back all trader claims"
+    );
+}
+
 fn store_trader_balance(svm: &mut LiteSVM, address: Pubkey, state: &TraderBalance) {
     let mut account = svm.get_account(&address).unwrap();
     let mut data = Vec::new();
@@ -742,6 +787,7 @@ fn withdrawal_remains_available_while_market_is_paused() {
     assert_eq!(load_token_amount(&svm, fixture.base_vault), 30);
     assert_eq!(load_token_amount(&svm, destination), 20);
     assert_eq!(load_trader_balance(&svm, trader_balance).base_free, 30);
+    assert_market_asset_conservation(&svm, &fixture, &[trader_balance]);
 }
 
 #[test]
@@ -942,6 +988,7 @@ fn deposit_place_cancel_and_withdraw_preserve_vault_backing() {
     );
     let deposit_result = send_instruction(&mut svm, &owner, deposit);
     assert!(deposit_result.is_ok(), "deposit failed: {deposit_result:?}");
+    assert_market_asset_conservation(&svm, &fixture, &[trader_balance]);
 
     let (order, _) = Pubkey::find_program_address(
         &[
@@ -980,6 +1027,7 @@ fn deposit_place_cancel_and_withdraw_preserve_vault_backing() {
     assert_eq!(placed_balance.quote_free, DEPOSIT_AMOUNT - LOCKED_QUOTE);
     assert_eq!(placed_balance.quote_locked, LOCKED_QUOTE);
     assert_eq!(load_token_amount(&svm, fixture.quote_vault), DEPOSIT_AMOUNT);
+    assert_market_asset_conservation(&svm, &fixture, &[trader_balance]);
 
     let cancel = Instruction::new_with_bytes(
         tidebook::id(),
@@ -1008,6 +1056,7 @@ fn deposit_place_cancel_and_withdraw_preserve_vault_backing() {
     assert_eq!(canceled_balance.quote_free, DEPOSIT_AMOUNT);
     assert_eq!(canceled_balance.quote_locked, 0);
     assert_eq!(load_token_amount(&svm, fixture.quote_vault), DEPOSIT_AMOUNT);
+    assert_market_asset_conservation(&svm, &fixture, &[trader_balance]);
 
     let destination = create_test_token_account(&mut svm, fixture.quote_mint, owner.pubkey(), 0);
     let withdraw = withdraw_instruction(
@@ -1030,4 +1079,5 @@ fn deposit_place_cancel_and_withdraw_preserve_vault_backing() {
     assert_eq!(final_balance.quote_locked, 0);
     assert_eq!(load_token_amount(&svm, fixture.quote_vault), 0);
     assert_eq!(load_token_amount(&svm, destination), DEPOSIT_AMOUNT);
+    assert_market_asset_conservation(&svm, &fixture, &[trader_balance]);
 }

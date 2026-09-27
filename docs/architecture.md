@@ -687,6 +687,10 @@ The 154-test suite currently covers:
 - rollback of preceding fills when remainder placement fails;
 - cap-boundary behavior that leaves later crossing makers and the taker
   remainder untouched;
+- global base and quote conservation across deposits, free-to-locked placement,
+  cancellation, withdrawal, partial and complete fills, rounding-dust refunds,
+  same-level and cross-level batches, remainder posting, capped matching, and
+  failed-transaction rollback;
 - rejection without mutation of non-crossing, same-side, self-trading,
   underfunded, paused, non-head, and non-best match attempts.
 
@@ -747,7 +751,10 @@ The recommended implementation order is:
 7. ~~Add automatic non-crossing remainder posting with atomic rollback.~~
 8. ~~Add informational events for every successful state transition.~~
 9. Add order cleanup and rent-reclamation rules.
-10. **Next:** add fee accounting and broader conservation tests.
+10. ~~Add broader fee-free asset-conservation assertions across every balance
+    and matching transition.~~
+11. **Next:** add fee accounting and extend conservation with protocol-fee
+    claims.
 
 Each phase should add its invariants and failure-path tests before the next
 state transition is introduced.
