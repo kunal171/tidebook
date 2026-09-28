@@ -13,6 +13,7 @@ pub mod manage_admin;
 pub mod match_limit_order;
 pub mod pause;
 pub mod remove_admin;
+pub mod set_taker_fee;
 pub mod unpause;
 pub mod withdraw;
 
@@ -29,5 +30,6 @@ pub use manage_admin::*;
 pub use match_limit_order::*;
 pub use pause::*;
 pub use remove_admin::*;
+pub use set_taker_fee::*;
 pub use unpause::*;
 pub use withdraw::*;

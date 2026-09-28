@@ -80,6 +80,11 @@ pub mod tidebook {
         crate::instructions::remove_admin::handle_remove_admin(ctx, target_admin)
     }
 
+    /// Updates the global quote-denominated taker fee in basis points.
+    pub fn set_taker_fee(ctx: Context<SetTakerFee>, taker_fee_bps: u16) -> Result<()> {
+        crate::instructions::set_taker_fee::handle_set_taker_fee(ctx, taker_fee_bps)
+    }
+
     /// Lets an order owner cancel an open order, including while paused.
     pub fn cancel_limit_order(ctx: Context<CancelLimitOrder>, order_id: u64) -> Result<()> {
         crate::instructions::cancel_limit_order::handle_cancel_limit_order(ctx, order_id)
