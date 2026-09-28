@@ -15,6 +15,7 @@ import { PROGRAM_ID } from "./solana";
 export const PROTOCOL_CONFIG_SEED = "protocol_config";
 export const ADMIN_SEED = "admin";
 export const MARKET_SEED = "market";
+export const MARKET_FEES_SEED = "market_fees";
 export const ORDER_SEED = "order";
 export const PRICE_LEVEL_SEED = "price_level";
 export const TRADER_BALANCE_SEED = "trader_balance";
@@ -48,6 +49,14 @@ export type OrderStatus = "open" | "filled" | "canceled";
 
 export interface ProtocolConfigAccount {
   superAdmin: PublicKey;
+  takerFeeBps: number;
+  bump: number;
+}
+
+export interface MarketFeesAccount {
+  market: PublicKey;
+  quoteMint: PublicKey;
+  accruedQuoteFees: BN;
   bump: number;
 }
 
@@ -152,6 +161,7 @@ interface TidebookAccounts {
   protocolConfig: AccountClient<ProtocolConfigAccount>;
   adminRecord: AccountClient<AdminRecordAccount>;
   market: AccountClient<MarketAccount>;
+  marketFees: AccountClient<MarketFeesAccount>;
   priceLevel: AccountClient<PriceLevelAccount>;
   order: AccountClient<OrderAccount>;
   traderBalance: AccountClient<TraderBalanceAccount>;
@@ -212,6 +222,13 @@ export function deriveAdminRecordPda(authority: PublicKey) {
 export function deriveMarketPda(baseMint: PublicKey, quoteMint: PublicKey) {
   return PublicKey.findProgramAddressSync(
     [Buffer.from(MARKET_SEED), baseMint.toBuffer(), quoteMint.toBuffer()],
+    PROGRAM_ID,
+  )[0];
+}
+
+export function deriveMarketFeesPda(market: PublicKey) {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(MARKET_FEES_SEED), market.toBuffer()],
     PROGRAM_ID,
   )[0];
 }

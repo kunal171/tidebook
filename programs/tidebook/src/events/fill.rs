@@ -39,6 +39,9 @@ pub struct FillEvent {
     /// Quote-mint atoms exchanged.
     pub quote_quantity: u64,
 
+    /// Quote atoms charged to the taker and accrued to the protocol.
+    pub taker_fee_quote: u64,
+
     /// Maker quantity remaining after this fill.
     pub maker_remaining_quantity: u64,
 

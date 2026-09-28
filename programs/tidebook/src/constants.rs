@@ -48,3 +48,10 @@ pub const PRICE_LEVEL_SEED: &[u8] = b"price_level";
 /// ["trader_balance", market, trader]
 #[constant]
 pub const TRADER_BALANCE_SEED: &[u8] = b"trader_balance";
+
+/// Namespace for one market's quote-denominated protocol-fee accumulator.
+///
+/// PDA:
+/// ["market_fees", market]
+#[constant]
+pub const MARKET_FEES_SEED: &[u8] = b"market_fees";

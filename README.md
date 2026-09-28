@@ -20,6 +20,8 @@ built incrementally with Anchor, LiteSVM, and a companion web application.
 - Atomically settle against up to three best-price FIFO makers per client
   transaction, including partial fills, complete maker removal, FIFO-head
   promotion, multi-level traversal, and empty-level closure.
+- Charge a governance-controlled quote-denominated taker fee, account for it
+  per market, and allow only the super-admin to withdraw accrued fees.
 - Exercise program behavior through LiteSVM integration tests.
 
 Sorted multi-price insertion, indexed cancellation, deposits, withdrawals, and
@@ -29,7 +31,9 @@ three instructions in one atomic transaction. When those fills exhaust the
 crossing book or reach a non-crossing price, the client atomically inserts or
 appends any valid remainder at the taker limit. A remainder stays free only when
 more crossing liquidity remains beyond the cap or its bid notional rounds to
-zero. Events and fees remain planned milestones.
+zero. Every successful state transition emits an informational event. Matching
+charges the configured taker fee per fill and preserves vault conservation by
+recording the protocol's quote-token claim in a canonical `MarketFees` PDA.
 
 ## Architecture
 
@@ -40,6 +44,7 @@ The principal trading-state PDA schemes are:
 
 ```text
 Market = ["market", base_mint, quote_mint]
+Fees  = ["market_fees", market]
 Order  = ["order", market, order_id.to_le_bytes()]
 Level  = ["price_level", market, side, price.to_le_bytes()]
 ```

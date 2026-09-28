@@ -1,15 +1,16 @@
-//! Safely closes a paused market and its empty canonical token vaults.
+//! Safely closes a paused market, fee accumulator, and canonical token vaults.
 //!
-//! Shutdown is rejected while open orders or vault balances remain.
+//! Shutdown is rejected while open orders, protocol fees, or vault balances
+//! remain.
 
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, CloseAccount, Token, TokenAccount};
 
 use crate::{
-    constants::{VAULT_AUTHORITY_SEED, VAULT_SEED},
-    errors::market,
+    constants::{MARKET_FEES_SEED, VAULT_AUTHORITY_SEED, VAULT_SEED},
+    errors::{fee, market},
     events::MarketClosedEvent,
-    state::{Market, MarketStatus},
+    state::{Market, MarketFees, MarketStatus},
 };
 
 #[derive(Accounts)]
@@ -24,6 +25,25 @@ pub struct CloseMarket<'info> {
         constraint = market.status == MarketStatus::Paused @ market::MarketMustBePaused
     )]
     pub market: Account<'info, Market>,
+
+    /// Canonical protocol-fee claim backed by the quote vault.
+    ///
+    /// Anchor closes this account only after the handler succeeds, returning
+    /// its rent to the same authority that receives the market and vault rent.
+    #[account(
+        mut,
+        close = authority,
+        seeds = [
+            MARKET_FEES_SEED,
+            market.key().as_ref()
+        ],
+        bump = market_fees.bump,
+        constraint = market_fees.market == market.key()
+            @ fee::MarketFeesMarketMismatch,
+        constraint = market_fees.quote_mint == market.quote_mint
+            @ fee::MarketFeesQuoteMintMismatch
+    )]
+    pub market_fees: Account<'info, MarketFees>,
 
     /// CHECK: Seed-constrained authority for both market vaults.
     #[account(
@@ -76,6 +96,14 @@ pub fn handle_close_market(ctx: Context<CloseMarket>) -> Result<()> {
         market::MarketHasOpenOrders
     );
 
+    // Protocol revenue is a real claim on quote-vault assets. It must be
+    // withdrawn through the future governed fee-withdrawal instruction rather
+    // than silently discarded during market shutdown.
+    require!(
+        ctx.accounts.market_fees.accrued_quote_fees == 0,
+        fee::MarketFeesNotEmpty
+    );
+
     require!(
         ctx.accounts.base_vault.amount == 0 && ctx.accounts.quote_vault.amount == 0,
         market::MarketVaultNotEmpty
@@ -117,6 +145,7 @@ pub fn handle_close_market(ctx: Context<CloseMarket>) -> Result<()> {
 
     emit!(MarketClosedEvent {
         market: market_key,
+        market_fees: ctx.accounts.market_fees.key(),
         authority: ctx.accounts.authority.key(),
         base_mint: ctx.accounts.market.base_mint,
         quote_mint: ctx.accounts.market.quote_mint,

@@ -41,3 +41,13 @@ pub struct AdminRemovedEvent {
     pub authority: Pubkey,
     pub removed_by: Pubkey,
 }
+
+/// Records a global taker-fee policy change made by the super-admin.
+#[event]
+#[derive(Debug, PartialEq, Eq)]
+pub struct TakerFeeUpdatedEvent {
+    pub protocol_config: Pubkey,
+    pub super_admin: Pubkey,
+    pub previous_taker_fee_bps: u16,
+    pub new_taker_fee_bps: u16,
+}

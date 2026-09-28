@@ -72,7 +72,11 @@ fn set_program_upgrade_authority(svm: &mut LiteSVM, authority: Pubkey) -> Pubkey
 
 fn store_protocol_config(svm: &mut LiteSVM, super_admin: Pubkey) -> Pubkey {
     let (address, bump) = protocol_config_address();
-    let state = ProtocolConfig { super_admin, bump };
+    let state = ProtocolConfig {
+        super_admin,
+        taker_fee_bps: 0,
+        bump,
+    };
     let mut data = Vec::new();
     state.try_serialize(&mut data).unwrap();
 
@@ -207,6 +211,22 @@ fn initialize_protocol_instruction(deployer: Pubkey, program_data: Pubkey) -> In
     )
 }
 
+fn set_taker_fee_instruction(
+    super_admin: Pubkey,
+    protocol_config: Pubkey,
+    taker_fee_bps: u16,
+) -> Instruction {
+    Instruction::new_with_bytes(
+        tidebook::id(),
+        &tidebook::instruction::SetTakerFee { taker_fee_bps }.data(),
+        tidebook::accounts::SetTakerFee {
+            super_admin,
+            protocol_config,
+        }
+        .to_account_metas(None),
+    )
+}
+
 fn disable_admin_instruction(
     super_admin: Pubkey,
     protocol_config: Pubkey,
@@ -271,6 +291,12 @@ fn load_admin_record(svm: &LiteSVM, authority: &Pubkey) -> AdminRecord {
     AdminRecord::try_deserialize(&mut data).unwrap()
 }
 
+fn load_protocol_config(svm: &LiteSVM, address: Pubkey) -> ProtocolConfig {
+    let account = svm.get_account(&address).unwrap();
+    let mut data: &[u8] = &account.data;
+    ProtocolConfig::try_deserialize(&mut data).unwrap()
+}
+
 fn add_admin(svm: &mut LiteSVM, super_admin: &Keypair, protocol_config: Pubkey, new_admin: Pubkey) {
     let instruction = add_admin_instruction(super_admin.pubkey(), protocol_config, new_admin);
     let result = send_instruction(svm, super_admin, instruction);
@@ -306,6 +332,7 @@ fn protocol_initialization_creates_config_and_deployer_admin() {
     let mut config_data: &[u8] = &config_account.data;
     let config = ProtocolConfig::try_deserialize(&mut config_data).unwrap();
     assert_eq!(config.super_admin, deployer.pubkey());
+    assert_eq!(config.taker_fee_bps, 0);
     assert_eq!(config.bump, config_bump);
 
     let (_, admin_bump) = admin_record_address(&deployer.pubkey());
@@ -381,6 +408,73 @@ fn non_super_admin_cannot_add_admin() {
     assert!(result.is_err(), "unauthorized signer added an admin");
     let (admin_record, _) = admin_record_address(&new_admin);
     assert!(svm.get_account(&admin_record).is_none());
+}
+
+#[test]
+fn super_admin_updates_the_global_taker_fee() {
+    let (mut svm, super_admin, protocol_config) = setup();
+    let taker_fee_bps = 25;
+    let instruction =
+        set_taker_fee_instruction(super_admin.pubkey(), protocol_config, taker_fee_bps);
+
+    let result = send_instruction(&mut svm, &super_admin, instruction);
+
+    assert!(result.is_ok(), "fee update failed: {result:?}");
+    assert_eq!(
+        load_protocol_config(&svm, protocol_config).taker_fee_bps,
+        taker_fee_bps
+    );
+
+    let event = support::events::single_event::<tidebook::events::TakerFeeUpdatedEvent>(&result);
+    assert_eq!(event.protocol_config, protocol_config);
+    assert_eq!(event.super_admin, super_admin.pubkey());
+    assert_eq!(event.previous_taker_fee_bps, 0);
+    assert_eq!(event.new_taker_fee_bps, taker_fee_bps);
+}
+
+#[test]
+fn super_admin_can_disable_taker_fees() {
+    let (mut svm, super_admin, protocol_config) = setup();
+    let enable = set_taker_fee_instruction(super_admin.pubkey(), protocol_config, 25);
+    assert!(send_instruction(&mut svm, &super_admin, enable).is_ok());
+
+    let disable = set_taker_fee_instruction(super_admin.pubkey(), protocol_config, 0);
+    let result = send_instruction(&mut svm, &super_admin, disable);
+
+    assert!(result.is_ok(), "fee disable failed: {result:?}");
+    assert_eq!(load_protocol_config(&svm, protocol_config).taker_fee_bps, 0);
+
+    let event = support::events::single_event::<tidebook::events::TakerFeeUpdatedEvent>(&result);
+    assert_eq!(event.previous_taker_fee_bps, 25);
+    assert_eq!(event.new_taker_fee_bps, 0);
+}
+
+#[test]
+fn non_super_admin_cannot_update_the_taker_fee() {
+    let (mut svm, _super_admin, protocol_config) = setup();
+    let unauthorized = Keypair::new();
+    svm.airdrop(&unauthorized.pubkey(), 1_000_000_000).unwrap();
+    let instruction = set_taker_fee_instruction(unauthorized.pubkey(), protocol_config, 25);
+
+    let result = send_instruction(&mut svm, &unauthorized, instruction);
+
+    assert!(result.is_err(), "unauthorized signer updated the fee");
+    assert_eq!(load_protocol_config(&svm, protocol_config).taker_fee_bps, 0);
+}
+
+#[test]
+fn taker_fee_above_the_maximum_is_rejected_without_mutation() {
+    let (mut svm, super_admin, protocol_config) = setup();
+    let instruction = set_taker_fee_instruction(
+        super_admin.pubkey(),
+        protocol_config,
+        tidebook::MAX_TAKER_FEE_BPS + 1,
+    );
+
+    let result = send_instruction(&mut svm, &super_admin, instruction);
+
+    assert!(result.is_err(), "fee above the maximum was accepted");
+    assert_eq!(load_protocol_config(&svm, protocol_config).taker_fee_bps, 0);
 }
 
 #[test]

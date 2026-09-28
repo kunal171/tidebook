@@ -461,6 +461,40 @@
           "writable": true
         },
         {
+          "name": "market_fees",
+          "docs": [
+            "Canonical protocol-fee claim backed by the quote vault.",
+            "",
+            "Anchor closes this account only after the handler succeeds, returning",
+            "its rent to the same authority that receives the market and vault rent."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116,
+                  95,
+                  102,
+                  101,
+                  101,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
           "name": "vault_authority",
           "pda": {
             "seeds": [
@@ -921,6 +955,34 @@
               {
                 "kind": "account",
                 "path": "quote_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "market_fees",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116,
+                  95,
+                  102,
+                  101,
+                  101,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
               }
             ]
           }
@@ -1437,6 +1499,67 @@
           ]
         },
         {
+          "name": "protocol_config",
+          "docs": [
+            "Singleton configuration supplying the current global taker-fee rate."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "market_fees",
+          "docs": [
+            "Canonical quote-denominated fee accumulator for this market."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116,
+                  95,
+                  102,
+                  101,
+                  101,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
           "name": "maker_order",
           "writable": true,
           "pda": {
@@ -1730,6 +1853,68 @@
       ]
     },
     {
+      "name": "set_taker_fee",
+      "docs": [
+        "Updates the global quote-denominated taker fee in basis points."
+      ],
+      "discriminator": [
+        182,
+        139,
+        233,
+        12,
+        57,
+        127,
+        45,
+        244
+      ],
+      "accounts": [
+        {
+          "name": "super_admin",
+          "docs": [
+            "Only the authority stored in the singleton config may change fees."
+          ],
+          "signer": true,
+          "relations": [
+            "protocol_config"
+          ]
+        },
+        {
+          "name": "protocol_config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "taker_fee_bps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
       "name": "unpause_market",
       "docs": [
         "Returns a paused market to active trading state."
@@ -1898,6 +2083,191 @@
           "type": "u64"
         }
       ]
+    },
+    {
+      "name": "withdraw_protocol_fees",
+      "docs": [
+        "Transfers accrued quote-denominated protocol revenue to a treasury."
+      ],
+      "discriminator": [
+        11,
+        68,
+        165,
+        98,
+        18,
+        208,
+        134,
+        73
+      ],
+      "accounts": [
+        {
+          "name": "super_admin",
+          "signer": true,
+          "relations": [
+            "protocol_config"
+          ]
+        },
+        {
+          "name": "protocol_config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "market",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.base_mint",
+                "account": "Market"
+              },
+              {
+                "kind": "account",
+                "path": "market.quote_mint",
+                "account": "Market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "market_fees",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116,
+                  95,
+                  102,
+                  101,
+                  101,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "quote_mint"
+        },
+        {
+          "name": "destination_quote_account",
+          "docs": [
+            "Treasury chosen by the super-admin; only its mint is constrained."
+          ],
+          "writable": true
+        },
+        {
+          "name": "vault_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116,
+                  45,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "quote_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              },
+              {
+                "kind": "account",
+                "path": "quote_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
     }
   ],
   "accounts": [
@@ -1925,6 +2295,19 @@
         227,
         198,
         154
+      ]
+    },
+    {
+      "name": "MarketFees",
+      "discriminator": [
+        84,
+        145,
+        151,
+        64,
+        236,
+        42,
+        216,
+        117
       ]
     },
     {
@@ -2112,6 +2495,19 @@
       ]
     },
     {
+      "name": "ProtocolFeesWithdrawnEvent",
+      "discriminator": [
+        142,
+        109,
+        101,
+        78,
+        169,
+        208,
+        188,
+        216
+      ]
+    },
+    {
       "name": "ProtocolInitializedEvent",
       "discriminator": [
         225,
@@ -2122,6 +2518,19 @@
         191,
         125,
         73
+      ]
+    },
+    {
+      "name": "TakerFeeUpdatedEvent",
+      "discriminator": [
+        99,
+        217,
+        115,
+        77,
+        244,
+        244,
+        75,
+        248
       ]
     },
     {
@@ -2541,6 +2950,51 @@
       "code": 6077,
       "name": "MakerNotFifoHead",
       "msg": "Matching must consume the FIFO head order"
+    },
+    {
+      "code": 6078,
+      "name": "FeeRateTooHigh",
+      "msg": "Taker fee rate exceeds the protocol maximum"
+    },
+    {
+      "code": 6079,
+      "name": "FeeCalculationOverflow",
+      "msg": "Fee calculation overflow"
+    },
+    {
+      "code": 6080,
+      "name": "MarketFeesMarketMismatch",
+      "msg": "Market fee account belongs to a different market"
+    },
+    {
+      "code": 6081,
+      "name": "MarketFeesQuoteMintMismatch",
+      "msg": "Market fee account uses a different quote mint"
+    },
+    {
+      "code": 6082,
+      "name": "MarketFeesNotEmpty",
+      "msg": "Accrued protocol fees must be withdrawn before closing the market"
+    },
+    {
+      "code": 6083,
+      "name": "FeeAccrualOverflow",
+      "msg": "Market fee accumulator overflow"
+    },
+    {
+      "code": 6084,
+      "name": "InvalidFeeWithdrawalAmount",
+      "msg": "Protocol fee withdrawal amount must be greater than zero"
+    },
+    {
+      "code": 6085,
+      "name": "InsufficientAccruedFees",
+      "msg": "Protocol fee withdrawal exceeds accrued fees"
+    },
+    {
+      "code": 6086,
+      "name": "InvalidFeeDestinationMint",
+      "msg": "Protocol fee destination must use the market quote mint"
     }
   ],
   "types": [
@@ -2786,6 +3240,13 @@
             "type": "u64"
           },
           {
+            "name": "taker_fee_quote",
+            "docs": [
+              "Quote atoms charged to the taker and accrued to the protocol."
+            ],
+            "type": "u64"
+          },
+          {
             "name": "maker_remaining_quantity",
             "docs": [
               "Maker quantity remaining after this fill."
@@ -2894,13 +3355,17 @@
     {
       "name": "MarketClosedEvent",
       "docs": [
-        "Records successful closure of a paused, empty market and both vaults."
+        "Records successful closure of a paused, empty market, fee state, and vaults."
       ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "market_fees",
             "type": "pubkey"
           },
           {
@@ -2927,15 +3392,64 @@
       }
     },
     {
-      "name": "MarketInitializedEvent",
+      "name": "MarketFees",
       "docs": [
-        "Records creation of a market and its canonical custody vaults."
+        "Quote-denominated protocol fees accumulated by one market.",
+        "",
+        "The corresponding tokens remain inside the market's canonical quote vault.",
+        "This account records how many quote atoms belong to the protocol instead of",
+        "traders, preserving the conservation equation:",
+        "",
+        "quote vault = trader claims + accrued protocol fees"
       ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "market",
+            "docs": [
+              "Market whose quote vault backs this accumulator."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "quote_mint",
+            "docs": [
+              "Quote mint in which all fees are denominated."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "accrued_quote_fees",
+            "docs": [
+              "Quote atoms earned by the protocol but not yet withdrawn."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "Canonical market-fees PDA bump."
+            ],
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MarketInitializedEvent",
+      "docs": [
+        "Records creation of a market, fee accumulator, and canonical custody vaults."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "market_fees",
             "type": "pubkey"
           },
           {
@@ -3347,8 +3861,61 @@
             "type": "pubkey"
           },
           {
+            "name": "taker_fee_bps",
+            "docs": [
+              "Global fee charged to takers, expressed in basis points.",
+              "",
+              "One basis point is 0.01%. The value is validated against",
+              "`MAX_TAKER_FEE_BPS` whenever governance updates it."
+            ],
+            "type": "u16"
+          },
+          {
             "name": "bump",
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ProtocolFeesWithdrawnEvent",
+      "docs": [
+        "Records quote-denominated protocol revenue leaving market custody."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "market_fees",
+            "type": "pubkey"
+          },
+          {
+            "name": "super_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "quote_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "quote_vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "destination_quote_account",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "remaining_accrued_quote_fees",
+            "type": "u64"
           }
         ]
       }
@@ -3373,6 +3940,33 @@
           {
             "name": "admin_record",
             "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TakerFeeUpdatedEvent",
+      "docs": [
+        "Records a global taker-fee policy change made by the super-admin."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "protocol_config",
+            "type": "pubkey"
+          },
+          {
+            "name": "super_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "previous_taker_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "new_taker_fee_bps",
+            "type": "u16"
           }
         ]
       }
@@ -3515,6 +4109,17 @@
       ],
       "type": "bytes",
       "value": "[97, 100, 109, 105, 110]"
+    },
+    {
+      "name": "MARKET_FEES_SEED",
+      "docs": [
+        "Namespace for one market's quote-denominated protocol-fee accumulator.",
+        "",
+        "PDA:",
+        "[\"market_fees\", market]"
+      ],
+      "type": "bytes",
+      "value": "[109, 97, 114, 107, 101, 116, 95, 102, 101, 101, 115]"
     },
     {
       "name": "MARKET_SEED",

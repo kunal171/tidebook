@@ -59,6 +59,7 @@ pub fn handle_initialize_protocol(ctx: Context<InitializeProtocol>) -> Result<()
     // protocol never exists without an administrator able to operate it.
     let protocol_config = &mut ctx.accounts.protocol_config;
     protocol_config.super_admin = deployer;
+    protocol_config.taker_fee_bps = 0;
     protocol_config.bump = ctx.bumps.protocol_config;
 
     let deployer_admin = &mut ctx.accounts.deployer_admin;

@@ -15,6 +15,8 @@ import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 import {
   accountExplorerUrl,
   decodeMarketStatus,
+  deriveMarketFeesPda,
+  deriveProtocolConfigPda,
   deriveTraderBalancePda,
   deriveVaultAuthorityPda,
   formatAtomicAmount,
@@ -26,6 +28,7 @@ import {
   deriveVaultPda,
   TOKEN_PROGRAM_ID,
   type MarketAccount,
+  type MarketFeesAccount,
   type OrderSide,
   type TraderBalanceAccount,
 } from "../lib/tidebook";
@@ -35,6 +38,7 @@ import {
 } from "../lib/matching-plan";
 import { AppHeader } from "./app-header";
 import { buildRestingOrderInstruction } from "../lib/resting-order";
+import { useProtocolRole } from "./protocol-role-provider";
 
 function shortAddress(value: string) {
   return `${value.slice(0, 8)}…${value.slice(-8)}`;
@@ -81,7 +85,9 @@ export function MarketDetail({ address }: { address: string }) {
   const router = useRouter();
   const { connection } = useConnection();
   const wallet = useAnchorWallet();
+  const { role } = useProtocolRole();
   const [market, setMarket] = useState<MarketAccount | null>(null);
+  const [marketFees, setMarketFees] = useState<MarketFeesAccount | null>(null);
   const [loading, setLoading] = useState(true);
   const [side, setSide] = useState<OrderSide>("bid");
   const [price, setPrice] = useState("");
@@ -105,6 +111,11 @@ export function MarketDetail({ address }: { address: string }) {
   );
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<SubmissionResult | null>(null);
+  const [feeDestination, setFeeDestination] = useState("");
+  const [feeAmount, setFeeAmount] = useState("");
+  const [feePending, setFeePending] = useState(false);
+  const [feeError, setFeeError] = useState<string | null>(null);
+  const [feeSignature, setFeeSignature] = useState<string | null>(null);
   const marketAddress = useMemo(() => {
     try {
       return new PublicKey(address);
@@ -152,10 +163,13 @@ export function MarketDetail({ address }: { address: string }) {
     setError(null);
 
     try {
-      const account = await getTidebookAccounts(readProgram).market.fetchNullable(
-        marketAddress,
-      );
+      const accounts = getTidebookAccounts(readProgram);
+      const [account, fees] = await Promise.all([
+        accounts.market.fetchNullable(marketAddress),
+        accounts.marketFees.fetchNullable(deriveMarketFeesPda(marketAddress)),
+      ]);
       setMarket(account);
+      setMarketFees(fees);
 
       if (!account) {
         setError("Market account was not found on devnet");
@@ -340,6 +354,23 @@ export function MarketDetail({ address }: { address: string }) {
       );
 
       if (crossesBest && opposingBest) {
+        const protocolConfig = await getTidebookAccounts(
+          readProgram,
+        ).protocolConfig.fetchNullable(deriveProtocolConfigPda());
+        if (!protocolConfig) {
+          throw new Error("Protocol configuration was not found");
+        }
+        const marketFeesAddress = deriveMarketFeesPda(marketAddress);
+        const feeDenominator = new BN(10_000);
+        const feeRoundingOffset = feeDenominator.subn(1);
+        const takerFee = (grossQuote: BN) =>
+          protocolConfig.takerFeeBps === 0
+            ? new BN(0)
+            : grossQuote
+                .muln(protocolConfig.takerFeeBps)
+                .add(feeRoundingOffset)
+                .div(feeDenominator);
+
         // Build a bounded read-only snapshot of the FIFO path. Every matching
         // instruction still validates these relationships on-chain. If any
         // account changes before confirmation, the entire transaction rolls
@@ -379,10 +410,12 @@ export function MarketDetail({ address }: { address: string }) {
         const matchedCollateral =
           side === "bid"
             ? plan.steps.reduce(
-                (total, step) =>
-                  total.add(
-                    step.makerPrice.mul(step.fillQuantity).div(baseScale),
-                  ),
+                (total, step) => {
+                  const grossQuote = step.makerPrice
+                    .mul(step.fillQuantity)
+                    .div(baseScale);
+                  return total.add(grossQuote).add(takerFee(grossQuote));
+                },
                 new BN(0),
               )
             : filledQuantity;
@@ -406,6 +439,8 @@ export function MarketDetail({ address }: { address: string }) {
             .accountsPartial({
               taker: wallet.publicKey,
               market: marketAddress,
+              protocolConfig: deriveProtocolConfigPda(),
+              marketFees: marketFeesAddress,
               makerOrder: step.makerOrder,
               makerPriceLevel: step.makerPriceLevel,
               nextOrder: step.nextOrder ?? signedProgram.programId,
@@ -505,6 +540,52 @@ export function MarketDetail({ address }: { address: string }) {
     }
   };
 
+  const withdrawProtocolFees = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (
+      !signedProgram ||
+      !wallet ||
+      !marketAddress ||
+      !market ||
+      !marketFees ||
+      role !== "super-admin"
+    ) {
+      return;
+    }
+
+    setFeePending(true);
+    setFeeError(null);
+    setFeeSignature(null);
+    try {
+      const amount = parsePositiveU64(feeAmount, "Fee amount");
+      if (amount.gt(marketFees.accruedQuoteFees)) {
+        throw new Error("Amount exceeds accrued protocol fees");
+      }
+      const destination = new PublicKey(feeDestination.trim());
+      const signature = await signedProgram.methods
+        .withdrawProtocolFees(amount)
+        .accounts({
+          superAdmin: wallet.publicKey,
+          protocolConfig: deriveProtocolConfigPda(),
+          market: marketAddress,
+          marketFees: deriveMarketFeesPda(marketAddress),
+          quoteMint: market.quoteMint,
+          destinationQuoteAccount: destination,
+          vaultAuthority: deriveVaultAuthorityPda(marketAddress),
+          quoteVault: deriveVaultPda(marketAddress, market.quoteMint),
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .rpc();
+      setFeeAmount("");
+      setFeeSignature(signature);
+      await loadMarket();
+    } catch (cause) {
+      setFeeError(getErrorMessage(cause));
+    } finally {
+      setFeePending(false);
+    }
+  };
+
   const manageMarket = async (action: "pause" | "unpause" | "close") => {
     if (!signedProgram || !wallet || !marketAddress || !market) return;
     if (
@@ -537,12 +618,16 @@ export function MarketDetail({ address }: { address: string }) {
         if (!market.openOrderCount.isZero()) {
           throw new Error("Cancel every open order before closing this market");
         }
+        if (marketFees && !marketFees.accruedQuoteFees.isZero()) {
+          throw new Error("Withdraw all accrued protocol fees before closing");
+        }
 
         signature = await signedProgram.methods
           .closeMarket()
           .accounts({
             authority: wallet.publicKey,
             market: marketAddress,
+            marketFees: deriveMarketFeesPda(marketAddress),
             vaultAuthority: deriveVaultAuthorityPda(marketAddress),
             baseVault: deriveVaultPda(marketAddress, market.baseMint),
             quoteVault: deriveVaultPda(marketAddress, market.quoteMint),
@@ -726,6 +811,14 @@ export function MarketDetail({ address }: { address: string }) {
                         >
                           {shortAddress(quoteVault.toBase58())} ↗
                         </a>
+                      </dd>
+                    </div>
+                  )}
+                  {marketFees && (
+                    <div>
+                      <dt>Protocol fees</dt>
+                      <dd>
+                        {marketFees.accruedQuoteFees.toString()} raw quote
                       </dd>
                     </div>
                   )}
@@ -1021,6 +1114,68 @@ export function MarketDetail({ address }: { address: string }) {
                       rel="noreferrer"
                     >
                       View transaction ↗
+                    </a>
+                  </div>
+                )}
+              </section>
+            )}
+
+            {role === "super-admin" && marketFees && (
+              <section className="admin-card market-balance-card">
+                <div className="card-label">Protocol treasury</div>
+                <h2>Withdraw accrued fees</h2>
+                <p>
+                  Available: {marketFees.accruedQuoteFees.toString()} raw quote
+                  atoms. The destination may be any token account for this
+                  market&apos;s quote mint.
+                </p>
+                <form className="admin-form" onSubmit={withdrawProtocolFees}>
+                  <label>
+                    Destination quote-token account
+                    <input
+                      value={feeDestination}
+                      onChange={(event) => setFeeDestination(event.target.value)}
+                      placeholder="Treasury token account"
+                      autoComplete="off"
+                    />
+                  </label>
+                  <label>
+                    Raw quote amount
+                    <input
+                      inputMode="numeric"
+                      value={feeAmount}
+                      onChange={(event) => setFeeAmount(event.target.value)}
+                      placeholder="0"
+                      autoComplete="off"
+                    />
+                  </label>
+                  <button
+                    className="primary-button"
+                    type="submit"
+                    disabled={
+                      feePending ||
+                      !feeDestination.trim() ||
+                      !feeAmount.trim() ||
+                      marketFees.accruedQuoteFees.isZero()
+                    }
+                  >
+                    {feePending ? "Withdrawing…" : "Withdraw fees"}
+                  </button>
+                </form>
+                {feeError && (
+                  <div className="transaction-message transaction-error">
+                    {feeError}
+                  </div>
+                )}
+                {feeSignature && (
+                  <div className="transaction-message transaction-success">
+                    Fee withdrawal confirmed.{" "}
+                    <a
+                      href={transactionExplorerUrl(feeSignature)}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      View on Explorer ↗
                     </a>
                   </div>
                 )}

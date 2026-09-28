@@ -6,6 +6,7 @@ import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
 import {
   deriveAdminRecordPda,
+  deriveMarketFeesPda,
   deriveMarketPda,
   deriveVaultAuthorityPda,
   deriveVaultPda,
@@ -73,9 +74,10 @@ export function CreateMarket() {
       const tickSize = parsePositiveU64(priceTickSize, "Price tick size");
       const lotSize = parsePositiveU64(quantityLotSize, "Quantity lot size");
 
-      // Derive the same canonical account graph enforced by Anchor. The market
-      // and both vaults are created atomically by initialize_market.
+      // Derive the same canonical account graph enforced by Anchor. The market,
+      // fee accumulator, and both vaults are created atomically.
       const market = deriveMarketPda(base, quote);
+      const marketFees = deriveMarketFeesPda(market);
       const vaultAuthority = deriveVaultAuthorityPda(market);
       const baseVault = deriveVaultPda(market, base);
       const quoteVault = deriveVaultPda(market, quote);
@@ -85,6 +87,7 @@ export function CreateMarket() {
           authority: wallet.publicKey,
           adminRecord: deriveAdminRecordPda(wallet.publicKey),
           market,
+          marketFees,
           baseMint: base,
           quoteMint: quote,
           vaultAuthority,

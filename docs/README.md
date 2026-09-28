@@ -2,7 +2,7 @@
 
 This directory describes the design of the Solana limit order book as it exists
 today. It also records the boundary between the implemented foundation and the
-exchange functionality that is still planned.
+remaining research milestones that are still planned.
 
 ## Documents
 

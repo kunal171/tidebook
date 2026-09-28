@@ -118,7 +118,7 @@ resting orders. If a large taker order needs more work, the client submits
 another transaction with the next matching path. Every successfully processed
 chunk is final and settled; there is no event waiting for a cranker.
 
-## Proposed TraderBalance PDA
+## TraderBalance PDA
 
 Each `(market, trader)` pair has one deterministic account:
 
@@ -126,7 +126,7 @@ Each `(market, trader)` pair has one deterministic account:
 TraderBalance = ["trader_balance", market, trader]
 ```
 
-Proposed fields:
+Fields:
 
 | Field | Meaning |
 | --- | --- |
@@ -147,15 +147,24 @@ For each mint, this conservation relationship must hold across all traders:
 vault amount = sum(free balances) + sum(locked balances) + protocol fees
 ```
 
-Fees are a future term and are zero until fee accounting is introduced.
+For base, `protocol fees` is always zero. For quote, the term is the canonical
+`MarketFees.accrued_quote_fees` claim. Fee tokens are not moved during a match;
+they remain in the quote vault until a super-admin withdrawal. Integration
+tests enforce both forms after custody and book transitions, including partial
+and complete matching, bounded batches, automatic remainder posting, fee
+withdrawal, and failed-transaction rollback.
 
-Integration tests enforce the current fee-free form after custody and book
-transitions. Deposit, placement, cancellation, withdrawal, partial and complete
-matching, fixed-point rounding refunds, bounded batches, automatic remainder
-posting, and rollback are checked against both canonical vault amounts and the
-aggregate free-plus-locked claims of every fixture participant. Matching-only
-fixtures that inject small auditable ledger values explicitly fund the
-canonical vaults to the same totals before settlement.
+The global fee rate is stored in `ProtocolConfig.taker_fee_bps` and is capped at
+1,000 bps (10%). Each fill independently charges:
+
+```text
+fee = ceil(fill_quote_quantity * taker_fee_bps / 10,000)
+```
+
+A bid taker spends gross quote plus the fee. An ask taker receives gross quote
+minus the fee. Makers always settle at the full resting-price gross amount.
+Per-fill ceiling prevents fee avoidance by fragmenting a trade into tiny fills,
+but can charge proportionally more when a fill contains very few quote atoms.
 
 ## Order lifecycle under this model
 
@@ -352,6 +361,12 @@ settlement work.
 10. A canceled order cannot later be matched.
 11. Pausing blocks new placement and matching but not cancellation or withdrawal.
 12. Events are never used as unfinished settlement state.
+13. Each match reads the canonical global fee rate and accrues its fee in the
+    canonical market accumulator.
+14. Quote-vault conservation includes both trader claims and unwithdrawn
+    protocol fees.
+15. Only the super-admin can withdraw accrued fees, and only to a token account
+    for the market quote mint. Withdrawal is allowed while active or paused.
 
 ## Tradeoffs accepted by Tidebook
 
@@ -394,10 +409,10 @@ The safe order is:
    rollback tests.~~
 8. ~~Atomically post a non-crossing remainder when safe.~~
 9. ~~Emit informational events for every successful state transition.~~
-10. ~~Add broader fee-free asset-conservation tests.~~
-11. **Next:** add fee accounting and extend conservation with protocol-fee
-    claims.
-12. Benchmark account count, compute use, contention, and retry rate before
+10. ~~Add broader asset-conservation tests.~~
+11. ~~Add fee accounting and extend conservation with protocol-fee claims.~~
+12. ~~Add super-admin fee-rate control and accrued-fee withdrawal.~~
+13. **Next:** benchmark account count, compute use, contention, and retry rate before
    considering a slab-based redesign.
 
 Every future expansion must preserve the existing atomic balance and book

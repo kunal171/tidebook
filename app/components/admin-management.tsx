@@ -38,6 +38,8 @@ export function AdminManagement() {
     refresh: refreshRole,
   } = useProtocolRole();
   const [newAdmin, setNewAdmin] = useState("");
+  const [takerFeeBps, setTakerFeeBps] = useState<number | null>(null);
+  const [feeRateInput, setFeeRateInput] = useState("0");
   const [admins, setAdmins] = useState<AdminRecordView[]>([]);
   const [loadingAdmins, setLoadingAdmins] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
@@ -56,7 +58,16 @@ export function AdminManagement() {
     setError(null);
 
     try {
-      const records = await getTidebookAccounts(program).adminRecord.all();
+      const accounts = getTidebookAccounts(program);
+      const [records, protocolConfig] = await Promise.all([
+        accounts.adminRecord.all(),
+        accounts.protocolConfig.fetchNullable(deriveProtocolConfigPda()),
+      ]);
+      if (!protocolConfig) {
+        throw new Error("Protocol configuration was not found");
+      }
+      setTakerFeeBps(protocolConfig.takerFeeBps);
+      setFeeRateInput(protocolConfig.takerFeeBps.toString());
       setAdmins(
         records
           .map(({ publicKey, account }) => ({
@@ -158,6 +169,42 @@ export function AdminManagement() {
     }
   };
 
+  const updateTakerFee = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!program || !wallet) return;
+
+    const normalized = feeRateInput.trim();
+    if (!/^[0-9]+$/.test(normalized)) {
+      setError("Taker fee must be a whole number of basis points");
+      return;
+    }
+    const nextFeeBps = Number(normalized);
+    if (!Number.isSafeInteger(nextFeeBps) || nextFeeBps > 1_000) {
+      setError("Taker fee must be between 0 and 1,000 basis points");
+      return;
+    }
+
+    setPending("set-fee");
+    setError(null);
+    setSignature(null);
+    try {
+      const tx = await program.methods
+        .setTakerFee(nextFeeBps)
+        .accounts({
+          superAdmin: wallet.publicKey,
+          protocolConfig: deriveProtocolConfigPda(),
+        })
+        .rpc();
+      setSignature(tx);
+      setTakerFeeBps(nextFeeBps);
+      await loadAdmins();
+    } catch (cause) {
+      setError(getErrorMessage(cause));
+    } finally {
+      setPending(null);
+    }
+  };
+
   return (
     <div className="app-shell">
       <AppHeader />
@@ -202,6 +249,35 @@ export function AdminManagement() {
 
         {wallet && !roleLoading && role === "super-admin" && (
           <div className="admin-layout">
+            <section className="admin-card">
+              <div className="card-label">Trading fees</div>
+              <h2>Global taker fee</h2>
+              <p>
+                Current rate: {takerFeeBps ?? "—"} bps
+                {takerFeeBps === null
+                  ? ""
+                  : ` (${(takerFeeBps / 100).toFixed(2)}%)`}
+              </p>
+              <form className="admin-form" onSubmit={updateTakerFee}>
+                <label>
+                  Basis points (0–1,000)
+                  <input
+                    inputMode="numeric"
+                    value={feeRateInput}
+                    onChange={(event) => setFeeRateInput(event.target.value)}
+                    autoComplete="off"
+                  />
+                </label>
+                <button
+                  className="primary-button"
+                  type="submit"
+                  disabled={pending !== null}
+                >
+                  {pending === "set-fee" ? "Updating…" : "Update fee"}
+                </button>
+              </form>
+            </section>
+
             <section className="admin-card">
               <div className="card-label">Add administrator</div>
               <form className="admin-form" onSubmit={(event) => void submitNewAdmin(event)}>

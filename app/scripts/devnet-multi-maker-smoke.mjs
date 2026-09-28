@@ -77,6 +77,11 @@ const market = derivePda(programId, [
   baseMint.toBuffer(),
   quoteMint.toBuffer(),
 ]);
+const protocolConfig = derivePda(programId, [Buffer.from("protocol_config")]);
+const marketFees = derivePda(programId, [
+  Buffer.from("market_fees"),
+  market.toBuffer(),
+]);
 const adminRecord = derivePda(programId, [
   Buffer.from("admin"),
   deployer.publicKey.toBuffer(),
@@ -117,6 +122,7 @@ const initializeMarketSignature = await deployerProgram.methods
     authority: deployer.publicKey,
     adminRecord,
     market,
+    marketFees,
     baseMint,
     quoteMint,
     vaultAuthority,
@@ -257,6 +263,8 @@ const firstMatchInstruction = await takerProgram.methods
   .accountsPartial({
     taker: taker.publicKey,
     market,
+    protocolConfig,
+    marketFees,
     makerOrder: firstOrder,
     makerPriceLevel: priceLevel,
     nextOrder: secondOrder,
@@ -271,6 +279,8 @@ const secondMatchInstruction = await takerProgram.methods
   .accountsPartial({
     taker: taker.publicKey,
     market,
+    protocolConfig,
+    marketFees,
     makerOrder: secondOrder,
     makerPriceLevel: priceLevel,
     nextOrder: programId,
@@ -294,6 +304,8 @@ const [
   firstMakerLedger,
   secondMakerLedger,
   takerLedger,
+  feeState,
+  configState,
 ] = await Promise.all([
   takerProgram.account.market.fetch(market),
   takerProgram.account.order.fetch(firstOrder),
@@ -301,7 +313,21 @@ const [
   takerProgram.account.traderBalance.fetch(firstMakerBalance),
   takerProgram.account.traderBalance.fetch(secondMakerBalance),
   takerProgram.account.traderBalance.fetch(takerBalance),
+  takerProgram.account.marketFees.fetch(marketFees),
+  takerProgram.account.protocolConfig.fetch(protocolConfig),
 ]);
+
+// Matching charges the global fee independently for each fill. Mirror the
+// program's ceiling division so this smoke test remains correct when
+// governance enables a nonzero devnet fee rate.
+const feeFor = (grossQuote) => {
+  const bps = new BN(configState.takerFeeBps);
+  if (bps.isZero()) return new BN(0);
+  return grossQuote.mul(bps).addn(9_999).divn(10_000);
+};
+const firstGrossQuote = new BN("100000");
+const secondGrossQuote = new BN("100000");
+const expectedFees = feeFor(firstGrossQuote).add(feeFor(secondGrossQuote));
 
 if (!("filled" in firstOrderState.status)) {
   throw new Error("First FIFO maker was not filled");
@@ -327,13 +353,19 @@ assertBn(
   "second maker quote free",
 );
 assertBn(takerLedger.baseFree, TAKER_QUANTITY, "taker base free");
-assertBn(takerLedger.quoteFree, new BN("800000"), "taker quote free");
+assertBn(
+  takerLedger.quoteFree,
+  new BN("800000").sub(expectedFees),
+  "taker quote free",
+);
+assertBn(feeState.accruedQuoteFees, expectedFees, "market accrued fees");
 
 console.log(
   JSON.stringify(
     {
       program: programId.toBase58(),
       market: market.toBase58(),
+      marketFees: marketFees.toBase58(),
       baseMint: baseMint.toBase58(),
       quoteMint: quoteMint.toBase58(),
       firstMaker: deployer.publicKey.toBase58(),
@@ -361,10 +393,11 @@ console.log(
         marketOpenOrderCount: finalMarket.openOrderCount.toString(),
         takerBaseFree: takerLedger.baseFree.toString(),
         takerQuoteFree: takerLedger.quoteFree.toString(),
+        takerFeeBps: configState.takerFeeBps,
+        accruedQuoteFees: feeState.accruedQuoteFees.toString(),
       },
     },
     null,
     2,
   ),
 );
-

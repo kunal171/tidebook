@@ -83,6 +83,36 @@ pub struct Order {
 #[derive(InitSpace)]
 pub struct ProtocolConfig {
     pub super_admin: Pubkey,
+
+    /// Global fee charged to takers, expressed in basis points.
+    ///
+    /// One basis point is 0.01%. The value is validated against
+    /// `MAX_TAKER_FEE_BPS` whenever governance updates it.
+    pub taker_fee_bps: u16,
+
+    pub bump: u8,
+}
+
+/// Quote-denominated protocol fees accumulated by one market.
+///
+/// The corresponding tokens remain inside the market's canonical quote vault.
+/// This account records how many quote atoms belong to the protocol instead of
+/// traders, preserving the conservation equation:
+///
+/// quote vault = trader claims + accrued protocol fees
+#[account]
+#[derive(InitSpace)]
+pub struct MarketFees {
+    /// Market whose quote vault backs this accumulator.
+    pub market: Pubkey,
+
+    /// Quote mint in which all fees are denominated.
+    pub quote_mint: Pubkey,
+
+    /// Quote atoms earned by the protocol but not yet withdrawn.
+    pub accrued_quote_fees: u64,
+
+    /// Canonical market-fees PDA bump.
     pub bump: u8,
 }
 
@@ -196,6 +226,19 @@ mod tests {
     fn trader_balance_account_size_is_stable() {
         // Excludes Anchor's 8-byte account discriminator.
         assert_eq!(TraderBalance::INIT_SPACE, 97);
+    }
+
+    #[test]
+    fn protocol_config_account_size_is_stable() {
+        // Pubkey + u16 fee rate + PDA bump. Excludes Anchor's discriminator.
+        assert_eq!(ProtocolConfig::INIT_SPACE, 35);
+    }
+
+    #[test]
+    fn market_fees_account_size_is_stable() {
+        // Market + quote mint + accrued u64 fees + PDA bump. Excludes the
+        // 8-byte Anchor account discriminator.
+        assert_eq!(MarketFees::INIT_SPACE, 73);
     }
 
     #[test]

@@ -6,6 +6,7 @@
 pub mod constants;
 pub mod errors;
 pub mod events;
+pub mod fees;
 pub mod instructions;
 pub mod matching;
 pub mod pda;
@@ -15,6 +16,7 @@ use anchor_lang::prelude::*;
 
 pub use constants::*;
 pub use events::*;
+pub use fees::*;
 pub use instructions::*;
 pub use matching::*;
 pub use pda::*;
@@ -78,6 +80,11 @@ pub mod tidebook {
         crate::instructions::remove_admin::handle_remove_admin(ctx, target_admin)
     }
 
+    /// Updates the global quote-denominated taker fee in basis points.
+    pub fn set_taker_fee(ctx: Context<SetTakerFee>, taker_fee_bps: u16) -> Result<()> {
+        crate::instructions::set_taker_fee::handle_set_taker_fee(ctx, taker_fee_bps)
+    }
+
     /// Lets an order owner cancel an open order, including while paused.
     pub fn cancel_limit_order(ctx: Context<CancelLimitOrder>, order_id: u64) -> Result<()> {
         crate::instructions::cancel_limit_order::handle_cancel_limit_order(ctx, order_id)
@@ -120,6 +127,11 @@ pub mod tidebook {
     /// Withdraws free base or quote tokens to the caller's token account.
     pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
         crate::instructions::withdraw::handle_withdraw(ctx, amount)
+    }
+
+    /// Transfers accrued quote-denominated protocol revenue to a treasury.
+    pub fn withdraw_protocol_fees(ctx: Context<WithdrawProtocolFees>, amount: u64) -> Result<()> {
+        crate::instructions::withdraw_protocol_fees::handle_withdraw_protocol_fees(ctx, amount)
     }
 
     /// Settles against one best FIFO maker and removes it when fully filled.

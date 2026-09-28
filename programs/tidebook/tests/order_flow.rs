@@ -66,6 +66,14 @@ const TEST_QUANTITY_LOT_SIZE: u64 = 1_000_000;
 const TEST_ORDER_PRICE: u64 = 100_000_000;
 const TEST_ORDER_QUANTITY: u64 = 5_000_000;
 
+fn protocol_config_address() -> Pubkey {
+    Pubkey::find_program_address(
+        &[tidebook::constants::PROTOCOL_CONFIG_SEED],
+        &tidebook::id(),
+    )
+    .0
+}
+
 /// Mirrors the program's canonical market custody graph for instruction setup
 /// and post-transaction assertions.
 fn derive_market_vault_addresses(
@@ -136,6 +144,7 @@ fn send_initialize_market_with_config(
         &[tidebook::constants::ADMIN_SEED, payer.pubkey().as_ref()],
         &program_id,
     );
+    let (market_fees, _) = tidebook::derive_market_fees_pda(&program_id, &market);
     let (vault_authority, base_vault, quote_vault) =
         derive_market_vault_addresses(&program_id, &market, &base_mint, &quote_mint);
 
@@ -150,6 +159,7 @@ fn send_initialize_market_with_config(
             authority: payer.pubkey(),
             admin_record,
             market,
+            market_fees,
             base_mint,
             quote_mint,
             vault_authority,
@@ -500,6 +510,7 @@ fn setup_active_market(
         payer.pubkey(),
         tidebook::state::AdminStatus::Active,
     );
+    store_protocol_config(&mut svm, payer.pubkey(), 0);
     let base_mint = create_test_mint(&mut svm, base_decimals);
     let quote_mint = create_test_mint(&mut svm, 6);
     let (market, result) = send_initialize_market_with_config(
@@ -535,6 +546,32 @@ fn store_admin_record(svm: &mut LiteSVM, authority: Pubkey, status: tidebook::st
         authority,
         added_by: authority,
         status,
+        bump,
+    };
+    let mut data = Vec::new();
+    state.try_serialize(&mut data).unwrap();
+
+    svm.set_account(
+        address,
+        Account {
+            lamports: svm.minimum_balance_for_rent_exemption(data.len()),
+            data,
+            owner: tidebook::id(),
+            executable: false,
+            rent_epoch: 0,
+        },
+    )
+    .unwrap();
+}
+
+fn store_protocol_config(svm: &mut LiteSVM, super_admin: Pubkey, taker_fee_bps: u16) {
+    let (address, bump) = Pubkey::find_program_address(
+        &[tidebook::constants::PROTOCOL_CONFIG_SEED],
+        &tidebook::id(),
+    );
+    let state = tidebook::state::ProtocolConfig {
+        super_admin,
+        taker_fee_bps,
         bump,
     };
     let mut data = Vec::new();
@@ -654,6 +691,20 @@ fn load_market(svm: &LiteSVM, address: Pubkey) -> tidebook::state::Market {
     tidebook::state::Market::try_deserialize(&mut data).unwrap()
 }
 
+fn load_market_fees(svm: &LiteSVM, address: Pubkey) -> tidebook::state::MarketFees {
+    let account = svm.get_account(&address).unwrap();
+    let mut data: &[u8] = &account.data;
+    tidebook::state::MarketFees::try_deserialize(&mut data).unwrap()
+}
+
+fn store_market_fees(svm: &mut LiteSVM, address: Pubkey, state: &tidebook::state::MarketFees) {
+    let mut account = svm.get_account(&address).unwrap();
+    let mut data = Vec::new();
+    state.try_serialize(&mut data).unwrap();
+    account.data = data;
+    svm.set_account(address, account).unwrap();
+}
+
 fn load_order(svm: &LiteSVM, address: Pubkey) -> tidebook::state::Order {
     let account = svm.get_account(&address).unwrap();
     let mut data: &[u8] = &account.data;
@@ -710,6 +761,12 @@ fn back_market_claims(svm: &mut LiteSVM, market: Pubkey, owners: &[Pubkey]) {
         &market_state.quote_mint,
     );
     let (base_claims, quote_claims) = aggregate_market_claims(svm, market, owners);
+    let market_fees_address = tidebook::derive_market_fees_pda(&tidebook::id(), &market).0;
+    let protocol_quote_fees =
+        u128::from(load_market_fees(svm, market_fees_address).accrued_quote_fees);
+    let quote_backing = quote_claims
+        .checked_add(protocol_quote_fees)
+        .expect("fixture quote claims plus protocol fees overflowed");
 
     set_token_balance(
         svm,
@@ -719,11 +776,11 @@ fn back_market_claims(svm: &mut LiteSVM, market: Pubkey, owners: &[Pubkey]) {
     set_token_balance(
         svm,
         quote_vault,
-        u64::try_from(quote_claims).expect("fixture quote claims exceed vault representation"),
+        u64::try_from(quote_backing).expect("fixture quote backing exceeds vault representation"),
     );
 }
 
-/// Proves that physical custody equals all free and locked internal claims.
+/// Proves that physical custody equals trader claims plus protocol revenue.
 fn assert_market_asset_conservation(svm: &LiteSVM, market: Pubkey, owners: &[Pubkey]) {
     let market_state = load_market(svm, market);
     let (_, base_vault, quote_vault) = derive_market_vault_addresses(
@@ -733,6 +790,9 @@ fn assert_market_asset_conservation(svm: &LiteSVM, market: Pubkey, owners: &[Pub
         &market_state.quote_mint,
     );
     let (base_claims, quote_claims) = aggregate_market_claims(svm, market, owners);
+    let market_fees_address = tidebook::derive_market_fees_pda(&tidebook::id(), &market).0;
+    let protocol_quote_fees =
+        u128::from(load_market_fees(svm, market_fees_address).accrued_quote_fees);
 
     assert_eq!(
         u128::from(token_balance(svm, base_vault)),
@@ -741,8 +801,10 @@ fn assert_market_asset_conservation(svm: &LiteSVM, market: Pubkey, owners: &[Pub
     );
     assert_eq!(
         u128::from(token_balance(svm, quote_vault)),
-        quote_claims,
-        "quote vault does not back all trader claims"
+        quote_claims
+            .checked_add(protocol_quote_fees)
+            .expect("quote claims plus protocol fees overflowed"),
+        "quote vault does not back trader claims plus protocol fees"
     );
 }
 
@@ -828,6 +890,8 @@ fn send_match_limit_order_with_removal_accounts(
     let maker_balance =
         tidebook::derive_trader_balance_pda(&tidebook::id(), &market, &maker.owner).0;
     let taker_balance = ensure_trader_balance(svm, market, taker.pubkey());
+    let protocol_config = protocol_config_address();
+    let market_fees = tidebook::derive_market_fees_pda(&tidebook::id(), &market).0;
 
     let instruction = Instruction::new_with_bytes(
         tidebook::id(),
@@ -840,6 +904,8 @@ fn send_match_limit_order_with_removal_accounts(
         tidebook::accounts::MatchLimitOrder {
             taker: taker.pubkey(),
             market,
+            protocol_config,
+            market_fees,
             maker_order,
             maker_price_level: maker.price_level,
             next_order,
@@ -885,6 +951,8 @@ fn send_match_limit_order_batch(
     steps: &[BatchMatchStep],
 ) -> litesvm::types::TransactionResult {
     let taker_balance = ensure_trader_balance(svm, market, taker.pubkey());
+    let protocol_config = protocol_config_address();
+    let market_fees = tidebook::derive_market_fees_pda(&tidebook::id(), &market).0;
     let instructions = steps
         .iter()
         .map(|step| {
@@ -903,6 +971,8 @@ fn send_match_limit_order_batch(
                 tidebook::accounts::MatchLimitOrder {
                     taker: taker.pubkey(),
                     market,
+                    protocol_config,
+                    market_fees,
                     maker_order: step.maker_order,
                     maker_price_level: maker.price_level,
                     next_order: step.next_order,
@@ -1474,8 +1544,18 @@ fn valid_mints_initialize_market() {
 
     let (_, base_vault, quote_vault) =
         derive_market_vault_addresses(&tidebook::id(), &market, &base_mint, &quote_mint);
+    let (market_fees, market_fees_bump) =
+        tidebook::derive_market_fees_pda(&tidebook::id(), &market);
+    let fee_state = load_market_fees(&svm, market_fees);
+
+    assert_eq!(fee_state.market, market);
+    assert_eq!(fee_state.quote_mint, quote_mint);
+    assert_eq!(fee_state.accrued_quote_fees, 0);
+    assert_eq!(fee_state.bump, market_fees_bump);
+
     let event = support::events::single_event::<tidebook::events::MarketInitializedEvent>(&result);
     assert_eq!(event.market, market);
+    assert_eq!(event.market_fees, market_fees);
     assert_eq!(event.authority, payer.pubkey());
     assert_eq!(event.base_mint, base_mint);
     assert_eq!(event.quote_mint, quote_mint);
@@ -1818,6 +1898,7 @@ fn noncanonical_vault_address_is_rejected() {
         &[tidebook::constants::ADMIN_SEED, payer.pubkey().as_ref()],
         &program_id,
     );
+    let (market_fees, _) = tidebook::derive_market_fees_pda(&program_id, &market);
     let (vault_authority, _base_vault, quote_vault) =
         derive_market_vault_addresses(&program_id, &market, &base_mint, &quote_mint);
     let noncanonical_base_vault = Pubkey::new_unique();
@@ -1832,6 +1913,7 @@ fn noncanonical_vault_address_is_rejected() {
             authority: payer.pubkey(),
             admin_record,
             market,
+            market_fees,
             base_mint,
             quote_mint,
             vault_authority,
@@ -3325,6 +3407,7 @@ fn bid_taker_settles_against_partial_maker_ask() {
     assert_eq!(event.execution_price, MATCH_PRICE);
     assert_eq!(event.base_quantity, MATCH_TAKER_QUANTITY);
     assert_eq!(event.quote_quantity, 50_000_000);
+    assert_eq!(event.taker_fee_quote, 0);
     assert_eq!(event.maker_remaining_quantity, 3_000_000);
     assert_eq!(event.taker_remaining_quantity, 0);
 
@@ -3866,6 +3949,168 @@ fn final_bid_fill_returns_fixed_point_rounding_dust() {
 }
 
 #[test]
+fn bid_taker_pays_quote_fee_and_preserves_asset_conservation() {
+    let MatchFixture {
+        mut svm,
+        maker,
+        taker,
+        market,
+        maker_order,
+        ..
+    } = setup_partial_match(tidebook::state::OrderSide::Ask);
+    store_protocol_config(&mut svm, maker.pubkey(), 25);
+
+    let result = send_match_limit_order(
+        &mut svm,
+        &taker,
+        market,
+        maker_order,
+        tidebook::state::OrderSide::Bid,
+        30_000_000,
+        MATCH_TAKER_QUANTITY,
+    );
+    assert!(result.is_ok(), "fee-bearing bid failed: {result:?}");
+
+    let maker_balance = load_trader_balance(&svm, market, maker.pubkey());
+    let taker_balance = load_trader_balance(&svm, market, taker.pubkey());
+    let market_fees = tidebook::derive_market_fees_pda(&tidebook::id(), &market).0;
+    let fee_state = load_market_fees(&svm, market_fees);
+    let event = support::events::single_event::<tidebook::events::FillEvent>(&result);
+
+    assert_eq!(event.quote_quantity, 50_000_000);
+    assert_eq!(event.taker_fee_quote, 125_000);
+    assert_eq!(maker_balance.quote_free, 50_000_000);
+    assert_eq!(taker_balance.quote_free, 49_875_000);
+    assert_eq!(taker_balance.base_free, MATCH_TAKER_QUANTITY);
+    assert_eq!(fee_state.accrued_quote_fees, 125_000);
+    assert_market_asset_conservation(&svm, market, &[maker.pubkey(), taker.pubkey()]);
+}
+
+#[test]
+fn ask_taker_receives_net_quote_and_preserves_asset_conservation() {
+    let MatchFixture {
+        mut svm,
+        maker,
+        taker,
+        market,
+        maker_order,
+        ..
+    } = setup_partial_match(tidebook::state::OrderSide::Bid);
+    store_protocol_config(&mut svm, maker.pubkey(), 25);
+
+    let result = send_match_limit_order(
+        &mut svm,
+        &taker,
+        market,
+        maker_order,
+        tidebook::state::OrderSide::Ask,
+        20_000_000,
+        MATCH_TAKER_QUANTITY,
+    );
+    assert!(result.is_ok(), "fee-bearing ask failed: {result:?}");
+
+    let maker_balance = load_trader_balance(&svm, market, maker.pubkey());
+    let taker_balance = load_trader_balance(&svm, market, taker.pubkey());
+    let market_fees = tidebook::derive_market_fees_pda(&tidebook::id(), &market).0;
+    let fee_state = load_market_fees(&svm, market_fees);
+    let event = support::events::single_event::<tidebook::events::FillEvent>(&result);
+
+    assert_eq!(event.quote_quantity, 50_000_000);
+    assert_eq!(event.taker_fee_quote, 125_000);
+    assert_eq!(maker_balance.quote_locked, 75_000_000);
+    assert_eq!(maker_balance.base_free, MATCH_TAKER_QUANTITY);
+    assert_eq!(taker_balance.quote_free, 49_875_000);
+    assert_eq!(taker_balance.base_free, 8_000_000);
+    assert_eq!(fee_state.accrued_quote_fees, 125_000);
+    assert_market_asset_conservation(&svm, market, &[maker.pubkey(), taker.pubkey()]);
+}
+
+#[test]
+fn bid_taker_must_cover_gross_quote_plus_fee() {
+    let MatchFixture {
+        mut svm,
+        maker,
+        taker,
+        market,
+        maker_order,
+        price_level,
+        maker_balance,
+        taker_balance,
+    } = setup_partial_match(tidebook::state::OrderSide::Ask);
+    store_protocol_config(&mut svm, maker.pubkey(), 25);
+    set_trader_balance(&mut svm, market, taker.pubkey(), 0, 0, 50_000_000, 0);
+    back_market_claims(&mut svm, market, &[maker.pubkey(), taker.pubkey()]);
+
+    let market_fees = tidebook::derive_market_fees_pda(&tidebook::id(), &market).0;
+    let tracked = [
+        market,
+        market_fees,
+        maker_order,
+        price_level,
+        maker_balance,
+        taker_balance,
+    ];
+    let before = account_data_snapshot(&svm, &tracked);
+
+    let result = send_match_limit_order(
+        &mut svm,
+        &taker,
+        market,
+        maker_order,
+        tidebook::state::OrderSide::Bid,
+        30_000_000,
+        MATCH_TAKER_QUANTITY,
+    );
+
+    assert!(result.is_err(), "bid without fee funds succeeded");
+    assert_eq!(account_data_snapshot(&svm, &tracked), before);
+    assert_market_asset_conservation(&svm, market, &[maker.pubkey(), taker.pubkey()]);
+}
+
+#[test]
+fn fee_accumulator_overflow_rolls_back_the_fill() {
+    let MatchFixture {
+        mut svm,
+        maker,
+        taker,
+        market,
+        maker_order,
+        price_level,
+        maker_balance,
+        taker_balance,
+    } = setup_partial_match(tidebook::state::OrderSide::Ask);
+    store_protocol_config(&mut svm, maker.pubkey(), 25);
+
+    let market_fees = tidebook::derive_market_fees_pda(&tidebook::id(), &market).0;
+    let mut fee_state = load_market_fees(&svm, market_fees);
+    fee_state.accrued_quote_fees = u64::MAX;
+    store_market_fees(&mut svm, market_fees, &fee_state);
+
+    let tracked = [
+        market,
+        market_fees,
+        maker_order,
+        price_level,
+        maker_balance,
+        taker_balance,
+    ];
+    let before = account_data_snapshot(&svm, &tracked);
+
+    let result = send_match_limit_order(
+        &mut svm,
+        &taker,
+        market,
+        maker_order,
+        tidebook::state::OrderSide::Bid,
+        30_000_000,
+        MATCH_TAKER_QUANTITY,
+    );
+
+    assert!(result.is_err(), "overflowing fee accrual succeeded");
+    assert_eq!(account_data_snapshot(&svm, &tracked), before);
+}
+
+#[test]
 fn full_fill_requires_the_stored_fifo_successor_without_mutation() {
     let ActiveMarketFixture {
         mut svm,
@@ -4207,6 +4452,7 @@ fn batch_match_consumes_same_price_fifo_head_then_partially_fills_successor() {
         market,
         ..
     } = setup_active_market(6, 1_000_000, 1_000_000);
+    store_protocol_config(&mut svm, first_maker.pubkey(), 25);
 
     let (first_order, first_result) = send_insert_limit_order(
         &mut svm,
@@ -4299,9 +4545,11 @@ fn batch_match_consumes_same_price_fifo_head_then_partially_fills_successor() {
     let events = support::events::events::<tidebook::events::FillEvent>(&result);
     assert_eq!(events.len(), 2);
     assert_eq!(events[0].maker_order, first_order);
+    assert_eq!(events[0].taker_fee_quote, 312_500);
     assert_eq!(events[0].maker_remaining_quantity, 0);
     assert_eq!(events[0].taker_remaining_quantity, 3_000_000);
     assert_eq!(events[1].maker_order, second_order);
+    assert_eq!(events[1].taker_fee_quote, 187_500);
     assert_eq!(events[1].maker_remaining_quantity, 2_000_000);
     assert_eq!(events[1].taker_remaining_quantity, 0);
 
@@ -4312,6 +4560,8 @@ fn batch_match_consumes_same_price_fifo_head_then_partially_fills_successor() {
     let first_balance = load_trader_balance(&svm, market, first_maker.pubkey());
     let second_balance = load_trader_balance(&svm, market, second_maker.pubkey());
     let taker_balance = load_trader_balance(&svm, market, taker.pubkey());
+    let market_fees = tidebook::derive_market_fees_pda(&tidebook::id(), &market).0;
+    let fee_state = load_market_fees(&svm, market_fees);
 
     assert_eq!(first.status, tidebook::state::OrderStatus::Filled);
     assert_eq!(first.remaining_quantity, 0);
@@ -4330,7 +4580,8 @@ fn batch_match_consumes_same_price_fifo_head_then_partially_fills_successor() {
     assert_eq!(second_balance.base_locked, 2_000_000);
     assert_eq!(second_balance.quote_free, 75_000_000);
     assert_eq!(taker_balance.base_free, 8_000_000);
-    assert_eq!(taker_balance.quote_free, 100_000_000);
+    assert_eq!(taker_balance.quote_free, 99_500_000);
+    assert_eq!(fee_state.accrued_quote_fees, 500_000);
     assert_market_asset_conservation(
         &svm,
         market,
@@ -4604,6 +4855,8 @@ fn build_atomic_match_instruction(
         tidebook::derive_trader_balance_pda(&tidebook::id(), &market, &maker.owner).0;
     let taker_balance =
         tidebook::derive_trader_balance_pda(&tidebook::id(), &market, &taker.pubkey()).0;
+    let protocol_config = protocol_config_address();
+    let market_fees = tidebook::derive_market_fees_pda(&tidebook::id(), &market).0;
 
     Instruction::new_with_bytes(
         tidebook::id(),
@@ -4616,6 +4869,8 @@ fn build_atomic_match_instruction(
         tidebook::accounts::MatchLimitOrder {
             taker: taker.pubkey(),
             market,
+            protocol_config,
+            market_fees,
             maker_order: step.maker_order,
             maker_price_level: maker.price_level,
             next_order: step.next_order,

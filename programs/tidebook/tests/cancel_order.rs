@@ -219,6 +219,7 @@ fn initialize_market(svm: &mut LiteSVM, authority: &Keypair) -> MarketFixture {
         ],
         &tidebook::id(),
     );
+    let (market_fees, _) = tidebook::derive_market_fees_pda(&tidebook::id(), &market);
     let (vault_authority, _) = Pubkey::find_program_address(
         &[tidebook::constants::VAULT_AUTHORITY_SEED, market.as_ref()],
         &tidebook::id(),
@@ -250,6 +251,7 @@ fn initialize_market(svm: &mut LiteSVM, authority: &Keypair) -> MarketFixture {
             authority: authority.pubkey(),
             admin_record,
             market,
+            market_fees,
             base_mint,
             quote_mint,
             vault_authority,

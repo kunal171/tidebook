@@ -19,6 +19,8 @@ The current implementation establishes the account and authorization foundation:
 - settle against up to three best-price FIFO makers per client transaction,
   preserving partial makers or atomically removing complete makers and
   repairing their queues and levels;
+- charge a configurable quote-denominated taker fee, track each market's
+  protocol claim, and permit super-admin treasury withdrawal;
 - validate behavior with in-process LiteSVM integration tests.
 
 Each on-chain instruction settles one best FIFO maker. The client may compose
@@ -35,12 +37,12 @@ The program has three external roles:
 
 | Role | Current capabilities |
 | --- | --- |
-| Super-admin | Add, disable, enable, and remove administrator records |
+| Super-admin | Manage administrator records, set the global taker-fee rate, and withdraw accrued market fees |
 | Market authority | Initialize a market, pause it, unpause it, and close it while paused |
 | Trader | Initialize a market balance, deposit/withdraw, place or cancel orders, and atomically settle against a bounded best-price FIFO path while active |
 
 The program invokes the Token Program only at custody boundaries: deposit,
-withdrawal, market-vault initialization, and safe closure. Placement reserves
+withdrawal, protocol-fee withdrawal, market-vault initialization, and safe closure. Placement reserves
 already-deposited internal balance: asks lock base quantity and bids lock their
 calculated quote notional.
 
@@ -122,8 +124,9 @@ seeds = ["protocol_config"]
 ```
 
 The singleton config stores the immutable super-admin authority selected during
-protocol initialization. Initialization verifies that the signer is the
-program's current upgrade authority.
+protocol initialization and the global `taker_fee_bps`. Initialization verifies
+that the signer is the program's current upgrade authority. The super-admin can
+later change the rate from 0 through 1,000 basis points.
 
 ### Admin record PDA
 
@@ -176,8 +179,28 @@ quote vault     = ["vault", market, quote_mint]
 The base vault's token mint is the market's base mint, and the quote vault's
 token mint is the market's quote mint. Both token accounts use the same vault
 authority and begin with a zero balance. Market and vault creation occur in one
-transaction, so a failed validation or account initialization leaves none of
-them behind.
+transaction together with the market fee accumulator, so a failed validation
+or account initialization leaves none of them behind.
+
+### Market-fees PDA
+
+```text
+seeds = ["market_fees", market]
+```
+
+Each market has one quote-denominated fee accumulator containing the market,
+quote mint, unwithdrawn `accrued_quote_fees`, and bump. The number is an
+accounting claim, not a second token balance: the corresponding SPL tokens stay
+inside the canonical quote vault until withdrawal. Consequently:
+
+```text
+base vault  = sum(base_free + base_locked)
+quote vault = sum(quote_free + quote_locked) + accrued_quote_fees
+```
+
+Only the super-admin may transfer that claim to a treasury token account. The
+destination owner is deliberately unrestricted so governance can use a
+multisig or dedicated treasury, but its mint must equal the market quote mint.
 
 ### Order PDA
 
@@ -240,17 +263,19 @@ FIFO-head and best-level removal, while a partial maker remains at the head.
 | `disable_admin` | Super-admin | Signer matches config; target is active and is not the super-admin | `Active -> Disabled` |
 | `enable_admin` | Super-admin | Signer matches config; target is disabled | `Disabled -> Active` |
 | `remove_admin` | Super-admin | Signer matches config; target is disabled | Closes the admin record |
-| `initialize_market` | Active admin | Admin record belongs to signer, is canonical and active; both accounts deserialize as SPL mints; base and quote differ; tick and lot sizes are nonzero; market, vault authority, and vault PDAs are canonical | Atomically creates an active market and empty base/quote SPL Token vaults |
+| `set_taker_fee` | Super-admin | Signer matches config; rate is at most 1,000 bps | Updates the global fee rate used by subsequent fills |
+| `initialize_market` | Active admin | Admin record belongs to signer, is canonical and active; both accounts deserialize as SPL mints; base and quote differ; tick and lot sizes are nonzero; market, fee accumulator, vault authority, and vault PDAs are canonical | Atomically creates an active market, zeroed fee accumulator, and empty base/quote SPL Token vaults |
 | `pause_market` | Market authority | `has_one = authority`; market is active | `Active -> Paused` |
 | `unpause_market` | Market authority | `has_one = authority`; market is paused | `Paused -> Active` |
-| `close_market` | Market authority | Market is paused; `open_order_count` is zero; both canonical vaults are empty | Closes both vaults and the market atomically, returning their rent to the authority |
+| `close_market` | Market authority | Market is paused; `open_order_count` and accrued fees are zero; both canonical vaults are empty | Closes both vaults, the fee accumulator, and the market atomically, returning their rent to the authority |
 | `initialize_trader_balance` | Trader | Market exists; canonical market/owner ledger does not exist | Creates a zeroed `TraderBalance` PDA |
 | `deposit` | Balance owner | Mint belongs to market; source belongs to owner; ledger and vault are canonical; amount and arithmetic are valid | Transfers tokens into the vault and credits the matching free balance atomically, including while paused |
 | `withdraw` | Balance owner | Mint belongs to market; destination belongs to owner; sufficient free balance and vault backing exist | Debits free balance and transfers tokens out of the vault atomically, including while paused |
 | `insert_limit_order` | Trader | Market is active; canonical ledger has sufficient free balance; grid checks pass; optional neighbors are canonical, ordered, and reciprocal | Moves free to locked balance, creates a new level and first order, splices the level, and increments counters atomically |
 | `append_limit_order` | Trader | Existing level is canonical for market/side/price; previous order is its open tail; canonical ledger has sufficient free balance | Moves free to locked balance, creates an order behind the tail, and updates aggregates and counters atomically |
-| `match_limit_order` | Taker | Market is active; maker is the best opposing FIFO head; prices cross; accounts, optional removal neighbors, rent recipient, and ledgers are canonical; taker is not maker | Settles one maker-price fill; leaves a partial maker in place or marks a full maker `Filled`, promotes its successor, and closes an empty best level atomically |
+| `match_limit_order` | Taker | Market is active; maker is the best opposing FIFO head; prices cross; config, fee accumulator, accounts, optional removal neighbors, rent recipient, and ledgers are canonical; taker is not maker | Settles one maker-price fill and accrues the taker fee; leaves a partial maker in place or marks a full maker `Filled`, promotes its successor, and closes an empty best level atomically |
 | `cancel_limit_order` | Order owner | Order, ledger, level, FIFO neighbors, and optional level neighbors are canonical and reciprocal; status is `Open` | Moves locked to free balance and unlinks the order; final removal repairs levels, closes the empty level, and transitions `Open -> Canceled` even while paused |
+| `withdraw_protocol_fees` | Super-admin | Config, market, fee accumulator, quote mint, vault authority, and quote vault are canonical; destination uses the quote mint; amount is nonzero and accrued | Transfers quote tokens to the selected treasury and reduces accrued fees atomically, while active or paused |
 
 ### Event architecture
 
@@ -261,11 +286,13 @@ validated mutations and CPIs complete:
 | --- | --- |
 | Protocol bootstrap | `ProtocolInitializedEvent` |
 | Add, enable, disable, or remove an administrator | `AdminAddedEvent`, `AdminStatusChangedEvent`, or `AdminRemovedEvent` |
+| Change the global taker fee | `TakerFeeUpdatedEvent` |
 | Initialize, pause, unpause, or close a market | `MarketInitializedEvent`, `MarketStatusChangedEvent`, or `MarketClosedEvent` |
 | Initialize a trader ledger, deposit, or withdraw | `TraderBalanceInitializedEvent`, `DepositEvent`, or `WithdrawalEvent` |
 | Insert or append an order | `OrderPlacedEvent` |
 | Cancel an order | `OrderCanceledEvent` |
 | Settle one maker | `FillEvent` |
+| Withdraw protocol fees | `ProtocolFeesWithdrawnEvent` |
 
 Equivalent economic transitions intentionally share a schema: both placement
 paths emit `OrderPlacedEvent`, and both lifecycle directions emit
@@ -299,6 +326,7 @@ Anchor account validation
    v
 Create Market PDA as Active
    |
+   |-- create zeroed MarketFees PDA
    |-- create empty base SPL Token vault
    |-- create empty quote SPL Token vault
    `-- set both token-account authorities to the vault-authority PDA
@@ -386,10 +414,12 @@ Validate active canonical market and both TraderBalance PDAs
    v
 Calculate one fill at the resting maker price
    |
-   |-- bid taker: quote_free -> maker quote_free
+   |-- calculate ceil(gross quote * taker_fee_bps / 10,000)
+   |-- bid taker: quote_free pays maker gross + protocol fee
    |               maker base_locked -> taker base_free
    |-- ask taker: base_free -> maker base_free
-   |               maker quote_locked -> taker quote_free
+   |               taker receives maker gross - protocol fee
+   `-- add fee to MarketFees.accrued_quote_fees
    v
 Reduce maker remaining quantity, maker locked collateral,
 and price-level aggregate quantity
@@ -574,12 +604,25 @@ The program currently enforces:
     book is exhausted or the next opposing price no longer crosses.
 54. Matching and remainder insertion or append succeed or roll back together; a
     cap-blocked or zero-notional remainder stays in free balance.
+55. The fee charged for each fill is ceiling-divided from its gross quote
+    quantity using the canonical global rate.
+56. A bid taker pays gross plus fee; an ask taker receives gross minus fee;
+    makers receive or spend the full gross maker-price amount.
+57. Every accrued quote fee remains backed by the quote vault until an
+    authorized withdrawal reduces both the token balance and protocol claim.
+58. Fee withdrawal requires the super-admin and a destination using the market
+    quote mint; it is allowed for both active and paused markets.
+59. Market closure requires zero accrued fees and closes the canonical
+    `MarketFees` account with the market and vaults.
 
 ## 6. Known architectural gaps
 
-These are planned features, not defects in the current research milestone:
+These are known limitations, not defects in the current research milestone:
 
-- Fee accounting is not implemented.
+- The fee rate is global rather than per-market or tiered, and there are no
+  maker rebates.
+- Fee calculation rounds upward per fill; this prevents fragmentation-based
+  fee avoidance but can overcharge economically tiny fills.
 - Canceled order accounts are retained as history and their rent is not yet
   reclaimed.
 - Orders created by the earlier direct-vault-transfer design do not have a
@@ -605,7 +648,7 @@ The test harness:
 5. sends transactions through LiteSVM;
 6. deserializes resulting Anchor accounts and checks state.
 
-The 154-test suite currently covers:
+The 184-test suite currently covers:
 
 - upgrade-authority-only, one-time protocol initialization;
 - creation of the deployer's config and active admin record;
@@ -693,6 +736,13 @@ The 154-test suite currently covers:
   failed-transaction rollback;
 - rejection without mutation of non-crossing, same-side, self-trading,
   underfunded, paused, non-head, and non-best match attempts.
+- fee calculation boundaries, maximum-rate governance, authorization, and
+  fee-aware bid/ask settlement;
+- per-fill fee rounding and multi-fill accrual with quote-vault conservation;
+- partial and full protocol-fee withdrawals to a quote-mint treasury;
+- rejection of non-super-admin, zero, excessive, wrong-mint, and underfunded
+  fee withdrawals without state mutation;
+- prevention of market closure until accrued fees are fully withdrawn.
 
 ## 8. Error architecture
 
@@ -751,10 +801,11 @@ The recommended implementation order is:
 7. ~~Add automatic non-crossing remainder posting with atomic rollback.~~
 8. ~~Add informational events for every successful state transition.~~
 9. Add order cleanup and rent-reclamation rules.
-10. ~~Add broader fee-free asset-conservation assertions across every balance
+10. ~~Add broader asset-conservation assertions across every balance
     and matching transition.~~
-11. **Next:** add fee accounting and extend conservation with protocol-fee
-    claims.
+11. ~~Add fee accounting and extend conservation with protocol-fee claims.~~
+12. ~~Add super-admin fee-rate control and accrued-fee withdrawal.~~
+13. **Next:** benchmark account count, compute use, contention, and retry rate.
 
 Each phase should add its invariants and failure-path tests before the next
 state transition is introduced.
