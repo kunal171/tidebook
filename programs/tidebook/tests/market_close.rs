@@ -73,6 +73,7 @@ const TEST_ORDER_QUANTITY: u64 = 5_000_000;
 
 struct MarketFixture {
     market: Pubkey,
+    market_fees: Pubkey,
     base_mint: Pubkey,
     quote_mint: Pubkey,
     vault_authority: Pubkey,
@@ -173,6 +174,48 @@ fn set_token_balance(svm: &mut LiteSVM, address: Pubkey, amount: u64) {
     svm.set_account(address, account).unwrap();
 }
 
+fn mutate_market_fees(
+    svm: &mut LiteSVM,
+    address: Pubkey,
+    mutate: impl FnOnce(&mut tidebook::state::MarketFees),
+) {
+    let mut account = svm.get_account(&address).unwrap();
+    let mut account_data: &[u8] = &account.data;
+    let mut state = tidebook::state::MarketFees::try_deserialize(&mut account_data).unwrap();
+    mutate(&mut state);
+
+    let mut serialized = Vec::new();
+    state.try_serialize(&mut serialized).unwrap();
+    account.data = serialized;
+    svm.set_account(address, account).unwrap();
+}
+
+fn store_noncanonical_market_fees(svm: &mut LiteSVM, market: Pubkey, quote_mint: Pubkey) -> Pubkey {
+    let address = Pubkey::new_unique();
+    let state = tidebook::state::MarketFees {
+        market,
+        quote_mint,
+        accrued_quote_fees: 0,
+        bump: 0,
+    };
+    let mut data = Vec::new();
+    state.try_serialize(&mut data).unwrap();
+
+    svm.set_account(
+        address,
+        Account {
+            lamports: svm.minimum_balance_for_rent_exemption(data.len()),
+            data,
+            owner: tidebook::id(),
+            executable: false,
+            rent_epoch: 0,
+        },
+    )
+    .unwrap();
+
+    address
+}
+
 fn store_active_admin(svm: &mut LiteSVM, authority: Pubkey) {
     let (address, bump) = Pubkey::find_program_address(
         &[tidebook::constants::ADMIN_SEED, authority.as_ref()],
@@ -215,6 +258,7 @@ fn initialize_market(svm: &mut LiteSVM, authority: &Keypair) -> MarketFixture {
         ],
         &tidebook::id(),
     );
+    let (market_fees, _) = tidebook::derive_market_fees_pda(&tidebook::id(), &market);
     let (vault_authority, _) = Pubkey::find_program_address(
         &[tidebook::constants::VAULT_AUTHORITY_SEED, market.as_ref()],
         &tidebook::id(),
@@ -246,6 +290,7 @@ fn initialize_market(svm: &mut LiteSVM, authority: &Keypair) -> MarketFixture {
             authority: authority.pubkey(),
             admin_record,
             market,
+            market_fees,
             base_mint,
             quote_mint,
             vault_authority,
@@ -262,6 +307,7 @@ fn initialize_market(svm: &mut LiteSVM, authority: &Keypair) -> MarketFixture {
 
     MarketFixture {
         market,
+        market_fees,
         base_mint,
         quote_mint,
         vault_authority,
@@ -309,6 +355,7 @@ fn pause_market(context: &mut TestContext) {
 fn close_market_instruction_with_accounts(
     authority: Pubkey,
     market: Pubkey,
+    market_fees: Pubkey,
     vault_authority: Pubkey,
     base_vault: Pubkey,
     quote_vault: Pubkey,
@@ -319,6 +366,7 @@ fn close_market_instruction_with_accounts(
         tidebook::accounts::CloseMarket {
             authority,
             market,
+            market_fees,
             vault_authority,
             base_vault,
             quote_vault,
@@ -332,6 +380,7 @@ fn close_market_instruction(authority: Pubkey, market: &MarketFixture) -> Instru
     close_market_instruction_with_accounts(
         authority,
         market.market,
+        market.market_fees,
         market.vault_authority,
         market.base_vault,
         market.quote_vault,
@@ -439,6 +488,7 @@ fn paused_empty_market_closes_market_and_both_vaults() {
 
     let event = support::events::single_event::<tidebook::events::MarketClosedEvent>(&result);
     assert_eq!(event.market, context.market.market);
+    assert_eq!(event.market_fees, context.market.market_fees);
     assert_eq!(event.authority, context.authority.pubkey());
     assert_eq!(event.base_mint, context.market.base_mint);
     assert_eq!(event.quote_mint, context.market.quote_mint);
@@ -446,6 +496,10 @@ fn paused_empty_market_closes_market_and_both_vaults() {
     assert_eq!(event.quote_vault, context.market.quote_vault);
 
     assert!(context.svm.get_account(&context.market.market).is_none());
+    assert!(context
+        .svm
+        .get_account(&context.market.market_fees)
+        .is_none());
     assert!(context
         .svm
         .get_account(&context.market.base_vault)
@@ -524,6 +578,10 @@ fn final_cancellation_allows_paused_market_to_close() {
     assert!(context.svm.get_account(&context.market.market).is_none());
     assert!(context
         .svm
+        .get_account(&context.market.market_fees)
+        .is_none());
+    assert!(context
+        .svm
         .get_account(&context.market.base_vault)
         .is_none());
     assert!(context
@@ -558,6 +616,99 @@ fn nonzero_vault_balance_prevents_closure_without_open_orders() {
 }
 
 #[test]
+fn accrued_protocol_fees_prevent_market_closure() {
+    let mut context = setup_market();
+    mutate_market_fees(&mut context.svm, context.market.market_fees, |fees| {
+        fees.accrued_quote_fees = 1
+    });
+    pause_market(&mut context);
+    let instruction = close_market_instruction(context.authority.pubkey(), &context.market);
+
+    let result = send_instruction(&mut context.svm, &context.authority, instruction);
+
+    assert!(result.is_err(), "market discarded accrued protocol fees");
+    assert!(context.svm.get_account(&context.market.market).is_some());
+    assert!(context
+        .svm
+        .get_account(&context.market.market_fees)
+        .is_some());
+    assert!(context
+        .svm
+        .get_account(&context.market.base_vault)
+        .is_some());
+    assert!(context
+        .svm
+        .get_account(&context.market.quote_vault)
+        .is_some());
+}
+
+#[test]
+fn noncanonical_market_fees_account_is_rejected() {
+    let mut context = setup_market();
+    pause_market(&mut context);
+    let noncanonical_market_fees = store_noncanonical_market_fees(
+        &mut context.svm,
+        context.market.market,
+        context.market.quote_mint,
+    );
+    let instruction = close_market_instruction_with_accounts(
+        context.authority.pubkey(),
+        context.market.market,
+        noncanonical_market_fees,
+        context.market.vault_authority,
+        context.market.base_vault,
+        context.market.quote_vault,
+    );
+
+    let result = send_instruction(&mut context.svm, &context.authority, instruction);
+
+    assert!(result.is_err(), "noncanonical market-fees PDA was accepted");
+    assert!(context.svm.get_account(&context.market.market).is_some());
+    assert!(context
+        .svm
+        .get_account(&context.market.market_fees)
+        .is_some());
+}
+
+#[test]
+fn market_fees_for_a_different_market_are_rejected() {
+    let mut context = setup_market();
+    mutate_market_fees(&mut context.svm, context.market.market_fees, |fees| {
+        fees.market = Pubkey::new_unique()
+    });
+    pause_market(&mut context);
+    let instruction = close_market_instruction(context.authority.pubkey(), &context.market);
+
+    let result = send_instruction(&mut context.svm, &context.authority, instruction);
+
+    assert!(result.is_err(), "mismatched fee market was accepted");
+    assert!(context.svm.get_account(&context.market.market).is_some());
+    assert!(context
+        .svm
+        .get_account(&context.market.market_fees)
+        .is_some());
+}
+
+#[test]
+fn market_fees_with_a_different_quote_mint_are_rejected() {
+    let mut context = setup_market();
+    mutate_market_fees(&mut context.svm, context.market.market_fees, |fees| {
+        fees.quote_mint = Pubkey::new_unique()
+    });
+    pause_market(&mut context);
+    let instruction = close_market_instruction(context.authority.pubkey(), &context.market);
+
+    let result = send_instruction(&mut context.svm, &context.authority, instruction);
+
+    assert!(result.is_err(), "mismatched fee quote mint was accepted");
+    assert!(context.svm.get_account(&context.market.market).is_some());
+    assert!(context
+        .svm
+        .get_account(&context.market.market_fees)
+        .is_some());
+}
+
+#[test]
 fn noncanonical_base_vault_is_rejected() {
     let mut context = setup_market();
     pause_market(&mut context);
@@ -570,6 +721,7 @@ fn noncanonical_base_vault_is_rejected() {
     let instruction = close_market_instruction_with_accounts(
         context.authority.pubkey(),
         context.market.market,
+        context.market.market_fees,
         context.market.vault_authority,
         noncanonical_base_vault,
         context.market.quote_vault,
@@ -602,6 +754,7 @@ fn noncanonical_quote_vault_is_rejected() {
     let instruction = close_market_instruction_with_accounts(
         context.authority.pubkey(),
         context.market.market,
+        context.market.market_fees,
         context.market.vault_authority,
         context.market.base_vault,
         noncanonical_quote_vault,

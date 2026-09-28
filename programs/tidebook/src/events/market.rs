@@ -4,11 +4,12 @@ use anchor_lang::prelude::*;
 
 use crate::state::MarketStatus;
 
-/// Records creation of a market and its canonical custody vaults.
+/// Records creation of a market, fee accumulator, and canonical custody vaults.
 #[event]
 #[derive(Debug, PartialEq, Eq)]
 pub struct MarketInitializedEvent {
     pub market: Pubkey,
+    pub market_fees: Pubkey,
     pub authority: Pubkey,
     pub base_mint: Pubkey,
     pub quote_mint: Pubkey,
@@ -27,11 +28,12 @@ pub struct MarketStatusChangedEvent {
     pub status: MarketStatus,
 }
 
-/// Records successful closure of a paused, empty market and both vaults.
+/// Records successful closure of a paused, empty market, fee state, and vaults.
 #[event]
 #[derive(Debug, PartialEq, Eq)]
 pub struct MarketClosedEvent {
     pub market: Pubkey,
+    pub market_fees: Pubkey,
     pub authority: Pubkey,
     pub base_mint: Pubkey,
     pub quote_mint: Pubkey,

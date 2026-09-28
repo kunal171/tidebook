@@ -136,6 +136,7 @@ fn send_initialize_market_with_config(
         &[tidebook::constants::ADMIN_SEED, payer.pubkey().as_ref()],
         &program_id,
     );
+    let (market_fees, _) = tidebook::derive_market_fees_pda(&program_id, &market);
     let (vault_authority, base_vault, quote_vault) =
         derive_market_vault_addresses(&program_id, &market, &base_mint, &quote_mint);
 
@@ -150,6 +151,7 @@ fn send_initialize_market_with_config(
             authority: payer.pubkey(),
             admin_record,
             market,
+            market_fees,
             base_mint,
             quote_mint,
             vault_authority,
@@ -652,6 +654,12 @@ fn load_market(svm: &LiteSVM, address: Pubkey) -> tidebook::state::Market {
     let account = svm.get_account(&address).unwrap();
     let mut data: &[u8] = &account.data;
     tidebook::state::Market::try_deserialize(&mut data).unwrap()
+}
+
+fn load_market_fees(svm: &LiteSVM, address: Pubkey) -> tidebook::state::MarketFees {
+    let account = svm.get_account(&address).unwrap();
+    let mut data: &[u8] = &account.data;
+    tidebook::state::MarketFees::try_deserialize(&mut data).unwrap()
 }
 
 fn load_order(svm: &LiteSVM, address: Pubkey) -> tidebook::state::Order {
@@ -1474,8 +1482,18 @@ fn valid_mints_initialize_market() {
 
     let (_, base_vault, quote_vault) =
         derive_market_vault_addresses(&tidebook::id(), &market, &base_mint, &quote_mint);
+    let (market_fees, market_fees_bump) =
+        tidebook::derive_market_fees_pda(&tidebook::id(), &market);
+    let fee_state = load_market_fees(&svm, market_fees);
+
+    assert_eq!(fee_state.market, market);
+    assert_eq!(fee_state.quote_mint, quote_mint);
+    assert_eq!(fee_state.accrued_quote_fees, 0);
+    assert_eq!(fee_state.bump, market_fees_bump);
+
     let event = support::events::single_event::<tidebook::events::MarketInitializedEvent>(&result);
     assert_eq!(event.market, market);
+    assert_eq!(event.market_fees, market_fees);
     assert_eq!(event.authority, payer.pubkey());
     assert_eq!(event.base_mint, base_mint);
     assert_eq!(event.quote_mint, quote_mint);
@@ -1818,6 +1836,7 @@ fn noncanonical_vault_address_is_rejected() {
         &[tidebook::constants::ADMIN_SEED, payer.pubkey().as_ref()],
         &program_id,
     );
+    let (market_fees, _) = tidebook::derive_market_fees_pda(&program_id, &market);
     let (vault_authority, _base_vault, quote_vault) =
         derive_market_vault_addresses(&program_id, &market, &base_mint, &quote_mint);
     let noncanonical_base_vault = Pubkey::new_unique();
@@ -1832,6 +1851,7 @@ fn noncanonical_vault_address_is_rejected() {
             authority: payer.pubkey(),
             admin_record,
             market,
+            market_fees,
             base_mint,
             quote_mint,
             vault_authority,

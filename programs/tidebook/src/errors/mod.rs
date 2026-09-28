@@ -6,6 +6,7 @@
 
 pub mod admin;
 pub mod balance;
+pub mod fee;
 pub mod market;
 pub mod matching;
 pub mod order;

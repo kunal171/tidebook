@@ -72,7 +72,11 @@ fn set_program_upgrade_authority(svm: &mut LiteSVM, authority: Pubkey) -> Pubkey
 
 fn store_protocol_config(svm: &mut LiteSVM, super_admin: Pubkey) -> Pubkey {
     let (address, bump) = protocol_config_address();
-    let state = ProtocolConfig { super_admin, bump };
+    let state = ProtocolConfig {
+        super_admin,
+        taker_fee_bps: 0,
+        bump,
+    };
     let mut data = Vec::new();
     state.try_serialize(&mut data).unwrap();
 
@@ -306,6 +310,7 @@ fn protocol_initialization_creates_config_and_deployer_admin() {
     let mut config_data: &[u8] = &config_account.data;
     let config = ProtocolConfig::try_deserialize(&mut config_data).unwrap();
     assert_eq!(config.super_admin, deployer.pubkey());
+    assert_eq!(config.taker_fee_bps, 0);
     assert_eq!(config.bump, config_bump);
 
     let (_, admin_bump) = admin_record_address(&deployer.pubkey());

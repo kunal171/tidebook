@@ -3,7 +3,7 @@
 use anchor_lang::prelude::Pubkey;
 
 use crate::{
-    constants::{PRICE_LEVEL_SEED, TRADER_BALANCE_SEED},
+    constants::{MARKET_FEES_SEED, PRICE_LEVEL_SEED, TRADER_BALANCE_SEED},
     state::OrderSide,
 };
 
@@ -44,6 +44,14 @@ pub fn derive_trader_balance_pda(
         &[TRADER_BALANCE_SEED, market.as_ref(), owner.as_ref()],
         program_id,
     )
+}
+
+/// Derives the canonical protocol-fee accumulator for one market.
+///
+/// Seeds:
+/// ["market_fees", market]
+pub fn derive_market_fees_pda(program_id: &Pubkey, market: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[MARKET_FEES_SEED, market.as_ref()], program_id)
 }
 
 #[cfg(test)]
@@ -127,6 +135,30 @@ mod tests {
 
         let first = derive_trader_balance_pda(&program_id, &first_market, &owner);
         let second = derive_trader_balance_pda(&program_id, &second_market, &owner);
+
+        assert_ne!(first.0, second.0);
+    }
+
+    #[test]
+    fn market_fees_pda_uses_the_canonical_namespace() {
+        let program_id = Pubkey::new_unique();
+        let market = Pubkey::new_unique();
+
+        let derived = derive_market_fees_pda(&program_id, &market);
+        let expected =
+            Pubkey::find_program_address(&[MARKET_FEES_SEED, market.as_ref()], &program_id);
+
+        assert_eq!(derived, expected);
+    }
+
+    #[test]
+    fn different_markets_have_different_fee_accounts() {
+        let program_id = Pubkey::new_unique();
+        let first_market = Pubkey::new_unique();
+        let second_market = Pubkey::new_unique();
+
+        let first = derive_market_fees_pda(&program_id, &first_market);
+        let second = derive_market_fees_pda(&program_id, &second_market);
 
         assert_ne!(first.0, second.0);
     }

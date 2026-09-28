@@ -7,10 +7,10 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
 
 use crate::{
-    constants::{ADMIN_SEED, MARKET_SEED, VAULT_AUTHORITY_SEED, VAULT_SEED},
+    constants::{ADMIN_SEED, MARKET_FEES_SEED, MARKET_SEED, VAULT_AUTHORITY_SEED, VAULT_SEED},
     errors::{admin, market},
     events::MarketInitializedEvent,
-    state::{AdminRecord, AdminStatus, Market, MarketStatus},
+    state::{AdminRecord, AdminStatus, Market, MarketFees, MarketStatus},
 };
 
 #[derive(Accounts)]
@@ -39,6 +39,18 @@ pub struct InitializeMarket<'info> {
         bump
     )]
     pub market: Account<'info, Market>,
+
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + MarketFees::INIT_SPACE,
+        seeds = [
+            MARKET_FEES_SEED,
+            market.key().as_ref(),
+        ],
+        bump
+    )]
+    pub market_fees: Account<'info, MarketFees>,
 
     /// SPL mint for the asset being traded.
     pub base_mint: Account<'info, Mint>,
@@ -123,8 +135,16 @@ pub fn handle_initialize_market(
     market.open_order_count = 0;
     market.bump = ctx.bumps.market;
 
+    let market_fees = &mut ctx.accounts.market_fees;
+
+    market_fees.market = ctx.accounts.market.key();
+    market_fees.quote_mint = ctx.accounts.quote_mint.key();
+    market_fees.accrued_quote_fees = 0;
+    market_fees.bump = ctx.bumps.market_fees;
+
     emit!(MarketInitializedEvent {
         market: ctx.accounts.market.key(),
+        market_fees: ctx.accounts.market_fees.key(),
         authority: ctx.accounts.authority.key(),
         base_mint: ctx.accounts.base_mint.key(),
         quote_mint: ctx.accounts.quote_mint.key(),

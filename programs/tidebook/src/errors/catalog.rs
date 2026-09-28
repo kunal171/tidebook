@@ -243,4 +243,19 @@ pub enum TidebookError {
 
     #[msg("Matching must consume the FIFO head order")]
     MakerNotFifoHead = 77,
+
+    #[msg("Taker fee rate exceeds the protocol maximum")]
+    FeeRateTooHigh = 78,
+
+    #[msg("Fee calculation overflow")]
+    FeeCalculationOverflow = 79,
+
+    #[msg("Market fee account belongs to a different market")]
+    MarketFeesMarketMismatch = 80,
+
+    #[msg("Market fee account uses a different quote mint")]
+    MarketFeesQuoteMintMismatch = 81,
+
+    #[msg("Accrued protocol fees must be withdrawn before closing the market")]
+    MarketFeesNotEmpty = 82,
 }

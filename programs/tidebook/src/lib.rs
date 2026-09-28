@@ -6,6 +6,7 @@
 pub mod constants;
 pub mod errors;
 pub mod events;
+pub mod fees;
 pub mod instructions;
 pub mod matching;
 pub mod pda;
@@ -15,6 +16,7 @@ use anchor_lang::prelude::*;
 
 pub use constants::*;
 pub use events::*;
+pub use fees::*;
 pub use instructions::*;
 pub use matching::*;
 pub use pda::*;
