@@ -9,12 +9,19 @@
 use anchor_lang::prelude::*;
 
 use crate::{
-    constants::{MARKET_SEED, ORDER_SEED, PRICE_LEVEL_SEED, TRADER_BALANCE_SEED},
-    errors::{balance, market, matching, order},
+    constants::{
+        MARKET_FEES_SEED, MARKET_SEED, ORDER_SEED, PRICE_LEVEL_SEED, PROTOCOL_CONFIG_SEED,
+        TRADER_BALANCE_SEED,
+    },
+    errors::{balance, fee, market, matching, order},
     events::FillEvent,
+    fees::calculate_taker_fee,
     matching::calculate_settlement,
     pda::derive_price_level_pda,
-    state::{Market, MarketStatus, Order, OrderSide, OrderStatus, PriceLevel, TraderBalance},
+    state::{
+        Market, MarketFees, MarketStatus, Order, OrderSide, OrderStatus, PriceLevel,
+        ProtocolConfig, TraderBalance,
+    },
 };
 
 /// Accounts required to settle against one current best FIFO maker.
@@ -40,6 +47,28 @@ pub struct MatchLimitOrder<'info> {
             @ market::MarketNotActive
     )]
     pub market: Box<Account<'info, Market>>,
+
+    /// Singleton configuration supplying the current global taker-fee rate.
+    #[account(
+        seeds = [PROTOCOL_CONFIG_SEED],
+        bump = protocol_config.bump
+    )]
+    pub protocol_config: Box<Account<'info, ProtocolConfig>>,
+
+    /// Canonical quote-denominated fee accumulator for this market.
+    #[account(
+        mut,
+        seeds = [
+            MARKET_FEES_SEED,
+            market.key().as_ref(),
+        ],
+        bump = market_fees.bump,
+        constraint = market_fees.market == market.key()
+            @ fee::MarketFeesMarketMismatch,
+        constraint = market_fees.quote_mint == market.quote_mint
+            @ fee::MarketFeesQuoteMintMismatch
+    )]
+    pub market_fees: Box<Account<'info, MarketFees>>,
 
     #[account(
         mut,
@@ -160,6 +189,18 @@ pub fn handle_match_limit_order(
         ctx.accounts.maker_order.locked_collateral,
         market.base_decimals,
     )?;
+
+    let taker_fee_quote = calculate_taker_fee(
+        plan.fill.quote_quantity,
+        ctx.accounts.protocol_config.taker_fee_bps,
+    )?;
+
+    let next_accrued_quote_fees = ctx
+        .accounts
+        .market_fees
+        .accrued_quote_fees
+        .checked_add(taker_fee_quote)
+        .ok_or(fee::FeeAccrualOverflow)?;
 
     let taker_remaining_quantity = quantity
         .checked_sub(plan.fill.base_quantity)
@@ -359,14 +400,21 @@ pub fn handle_match_limit_order(
 
     match taker_side {
         OrderSide::Bid => {
-            // The taker pays quote from free balance and receives base. The
-            // resting ask releases the same base quantity from locked balance
-            // and receives the maker-price quote proceeds as free balance.
+            // The bid taker pays the maker-price quote amount plus the taker
+            // fee. The resting ask receives the gross quote proceeds, while
+            // the fee becomes a protocol claim on the same quote vault.
+
+            let taker_quote_debit = plan
+                .fill
+                .quote_quantity
+                .checked_add(taker_fee_quote)
+                .ok_or(fee::FeeCalculationOverflow)?;
+
             let next_taker_quote_free = ctx
                 .accounts
                 .taker_balance
                 .quote_free
-                .checked_sub(plan.fill.quote_quantity)
+                .checked_sub(taker_quote_debit)
                 .ok_or(balance::InsufficientFreeBalance)?;
 
             let next_taker_base_free = ctx
@@ -397,9 +445,16 @@ pub fn handle_match_limit_order(
         }
 
         OrderSide::Ask => {
-            // The taker pays base and receives quote. The resting bid releases
-            // quote collateral and receives base. A final bid fill may also
-            // refund quote dust accumulated through fixed-point rounding.
+            // The ask taker receives gross quote proceeds minus the taker fee.
+            // The resting bid still spends the complete maker-price quote amount;
+            // the withheld difference becomes the protocol fee.
+
+            let taker_quote_proceeds = plan
+                .fill
+                .quote_quantity
+                .checked_sub(taker_fee_quote)
+                .ok_or(fee::FeeCalculationOverflow)?;
+
             let next_taker_base_free = ctx
                 .accounts
                 .taker_balance
@@ -411,7 +466,7 @@ pub fn handle_match_limit_order(
                 .accounts
                 .taker_balance
                 .quote_free
-                .checked_add(plan.fill.quote_quantity)
+                .checked_add(taker_quote_proceeds)
                 .ok_or(balance::FreeBalanceOverflow)?;
 
             let next_maker_quote_locked = ctx
@@ -442,6 +497,11 @@ pub fn handle_match_limit_order(
             ctx.accounts.maker_balance.quote_free = next_maker_quote_free;
         }
     }
+
+    // The quote tokens already remain inside the market vault. Updating this
+    // accumulator changes their accounting ownership from traders to protocol
+    // revenue without requiring an SPL Token transfer.
+    ctx.accounts.market_fees.accrued_quote_fees = next_accrued_quote_fees;
 
     // Ledger settlement above and index maintenance below occur in the same
     // Solana instruction, so observers can never see a filled order that still
@@ -517,6 +577,7 @@ pub fn handle_match_limit_order(
         execution_price: plan.fill.execution_price,
         base_quantity: plan.fill.base_quantity,
         quote_quantity: plan.fill.quote_quantity,
+        taker_fee_quote,
         maker_remaining_quantity: next_order_remaining,
         taker_remaining_quantity,
     });

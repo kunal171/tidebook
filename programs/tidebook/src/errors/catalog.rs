@@ -258,4 +258,16 @@ pub enum TidebookError {
 
     #[msg("Accrued protocol fees must be withdrawn before closing the market")]
     MarketFeesNotEmpty = 82,
+
+    #[msg("Market fee accumulator overflow")]
+    FeeAccrualOverflow = 83,
+
+    #[msg("Protocol fee withdrawal amount must be greater than zero")]
+    InvalidFeeWithdrawalAmount = 84,
+
+    #[msg("Protocol fee withdrawal exceeds accrued fees")]
+    InsufficientAccruedFees = 85,
+
+    #[msg("Protocol fee destination must use the market quote mint")]
+    InvalidFeeDestinationMint = 86,
 }

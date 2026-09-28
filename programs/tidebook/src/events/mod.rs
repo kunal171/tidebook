@@ -6,12 +6,14 @@
 
 mod admin;
 mod balance;
+mod fee;
 mod fill;
 mod market;
 mod order;
 
 pub use admin::*;
 pub use balance::*;
+pub use fee::*;
 pub use fill::*;
 pub use market::*;
 pub use order::*;

@@ -16,6 +16,7 @@ pub mod remove_admin;
 pub mod set_taker_fee;
 pub mod unpause;
 pub mod withdraw;
+pub mod withdraw_protocol_fees;
 
 pub use add_admin::*;
 pub use append_limit_order::*;
@@ -33,3 +34,4 @@ pub use remove_admin::*;
 pub use set_taker_fee::*;
 pub use unpause::*;
 pub use withdraw::*;
+pub use withdraw_protocol_fees::*;

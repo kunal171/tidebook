@@ -129,6 +129,11 @@ pub mod tidebook {
         crate::instructions::withdraw::handle_withdraw(ctx, amount)
     }
 
+    /// Transfers accrued quote-denominated protocol revenue to a treasury.
+    pub fn withdraw_protocol_fees(ctx: Context<WithdrawProtocolFees>, amount: u64) -> Result<()> {
+        crate::instructions::withdraw_protocol_fees::handle_withdraw_protocol_fees(ctx, amount)
+    }
+
     /// Settles against one best FIFO maker and removes it when fully filled.
     pub fn match_limit_order(
         ctx: Context<MatchLimitOrder>,

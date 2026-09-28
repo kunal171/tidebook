@@ -56,6 +56,27 @@ const market = derivePda([
   BASE_MINT.toBuffer(),
   QUOTE_MINT.toBuffer(),
 ]);
+const marketFees = derivePda([
+  Buffer.from("market_fees"),
+  market.toBuffer(),
+]);
+const vaultAuthority = derivePda([
+  Buffer.from("vault-authority"),
+  market.toBuffer(),
+]);
+const baseVault = derivePda([
+  Buffer.from("vault"),
+  market.toBuffer(),
+  BASE_MINT.toBuffer(),
+]);
+const quoteVault = derivePda([
+  Buffer.from("vault"),
+  market.toBuffer(),
+  QUOTE_MINT.toBuffer(),
+]);
+const tokenProgram = new PublicKey(
+  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+);
 const programData = PublicKey.findProgramAddressSync(
   [programId.toBuffer()],
   BPF_LOADER_UPGRADEABLE_PROGRAM_ID,
@@ -84,8 +105,13 @@ if (!(await connection.getAccountInfo(market, "confirmed"))) {
       authority: payer.publicKey,
       adminRecord: deployerAdmin,
       market,
+      marketFees,
       baseMint: BASE_MINT,
       quoteMint: QUOTE_MINT,
+      vaultAuthority,
+      baseVault,
+      quoteVault,
+      tokenProgram,
       systemProgram: SystemProgram.programId,
     })
     .rpc();
@@ -98,16 +124,29 @@ const order = derivePda([
   market.toBuffer(),
   orderId.toArrayLike(Buffer, "le", 8),
 ]);
-const vaultAuthority = derivePda([
-  Buffer.from("vault-authority"),
-  market.toBuffer(),
-]);
 const collateralMint = marketState.quoteMint;
 const marketVault = derivePda([
   Buffer.from("vault"),
   market.toBuffer(),
   collateralMint.toBuffer(),
 ]);
+const traderBalance = derivePda([
+  Buffer.from("trader_balance"),
+  market.toBuffer(),
+  payer.publicKey.toBuffer(),
+]);
+let initializeTraderBalanceSignature = null;
+if (!(await connection.getAccountInfo(traderBalance, "confirmed"))) {
+  initializeTraderBalanceSignature = await program.methods
+    .initializeTraderBalance()
+    .accounts({
+      owner: payer.publicKey,
+      market,
+      traderBalance,
+      systemProgram: SystemProgram.programId,
+    })
+    .rpc();
+}
 const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
   payer.publicKey,
   { mint: collateralMint },
@@ -126,6 +165,29 @@ if (!traderCollateral) {
   );
 }
 
+// Bids reserve quote atoms from the trader's internal ledger. Fund only the
+// missing amount so this bootstrap remains safe to rerun after cancellation.
+const baseScale = new BN(10).pow(new BN(marketState.baseDecimals));
+const requiredQuote = ORDER_PRICE.mul(ORDER_QUANTITY).div(baseScale);
+const traderLedger = await program.account.traderBalance.fetch(traderBalance);
+const missingQuote = BN.max(requiredQuote.sub(traderLedger.quoteFree), new BN(0));
+let depositSignature = null;
+if (!missingQuote.isZero()) {
+  depositSignature = await program.methods
+    .deposit(missingQuote)
+    .accounts({
+      owner: payer.publicKey,
+      market,
+      traderBalance,
+      depositMint: collateralMint,
+      traderTokenAccount: traderCollateral,
+      vaultAuthority,
+      marketVault,
+      tokenProgram,
+    })
+    .rpc();
+}
+
 const priceLevelFor = (price) =>
   derivePda([
     Buffer.from("price_level"),
@@ -138,11 +200,7 @@ const orderAccountsFor = (price) => ({
   market,
   order,
   priceLevel: priceLevelFor(price),
-  collateralMint,
-  traderCollateral,
-  vaultAuthority,
-  marketVault,
-  tokenProgram: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+  traderBalance,
   systemProgram: SystemProgram.programId,
   betterLevel: programId,
   worseLevel: programId,
@@ -179,15 +237,17 @@ const placeOrderSignature = await program.methods
   .rpc();
 const cancelOrderSignature = await program.methods
   .cancelLimitOrder(orderId)
-  .accounts({
+  .accountsPartial({
     owner: payer.publicKey,
     market,
     order,
-    collateralMint,
-    ownerCollateral: traderCollateral,
-    vaultAuthority,
-    marketVault,
-    tokenProgram: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+    priceLevel: priceLevelFor(ORDER_PRICE),
+    previousOrder: programId,
+    nextOrder: programId,
+    betterLevel: programId,
+    worseLevel: programId,
+    levelRentRecipient: payer.publicKey,
+    traderBalance,
   })
   .rpc();
 
@@ -203,7 +263,11 @@ console.log(
       deployerAdmin: deployerAdmin.toBase58(),
       initializeProtocolSignature,
       market: market.toBase58(),
+      marketFees: marketFees.toBase58(),
       initializeMarketSignature,
+      traderBalance: traderBalance.toBase58(),
+      initializeTraderBalanceSignature,
+      depositSignature,
       priceTickSize: PRICE_TICK_SIZE.toString(),
       quantityLotSize: QUANTITY_LOT_SIZE.toString(),
       order: order.toBase58(),
