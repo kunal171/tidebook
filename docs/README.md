@@ -14,6 +14,9 @@ remaining research milestones that are still planned.
 - [Crankless matching and settlement](crankless-settlement-design.md): Phoenix
   and OpenBook comparison, Tidebook's bounded PDA-based settlement model,
   trader balances, matching account contract, and implementation sequence.
+- [Future enhancements](future-enhancements.md): staged oracle, reference
+  market-maker, monitoring, standalone AMM, hybrid routing, and benchmarking
+  roadmap with safety gates and effort estimates.
 - [Devnet deployment](deployment.md): stable program identity, upgrade details,
   verification, and the current IDL-upload limitation.
 - [Devnet address registry](devnet-addresses.md): program, governance, mint,
