@@ -37,13 +37,18 @@ The checked-in client IDL mirrors the generated Anchor IDL. After any account
 layout or instruction change, rebuild and redeploy the program before using the
 updated client against devnet.
 
-Override the default public devnet RPC endpoint locally with:
+Configure the public program identity and optionally override the default
+devnet RPC endpoint:
 
 ```bash
+NEXT_PUBLIC_TIDEBOOK_PROGRAM_ID=AG4ztZvcZjzFKjoXLzH8M6U3if9CwVFTXH2FHjqg7SdL
 NEXT_PUBLIC_SOLANA_RPC_URL=https://your-devnet-endpoint.example
 ```
 
-Store that value in `app/.env.local`; the file is ignored by Git.
+Copy `.env.example` to `app/.env.local` or add the variables to the existing
+ignored `app/.env`. Configure the same public program-ID variable in Vercel.
+Next.js inlines `NEXT_PUBLIC_*` values during its build, so changing the program
+identity requires restarting the local server or rebuilding the deployment.
 
 ## Multi-maker devnet smoke test
 

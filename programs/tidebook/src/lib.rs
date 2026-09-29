@@ -22,7 +22,7 @@ pub use matching::*;
 pub use pda::*;
 pub use state::*;
 
-declare_id!("BPdNF5CnV8z1EkHo7tcueR6wXmzZV2j6j4wsUTirPgWL");
+declare_id!("AG4ztZvcZjzFKjoXLzH8M6U3if9CwVFTXH2FHjqg7SdL");
 
 #[program]
 pub mod tidebook {

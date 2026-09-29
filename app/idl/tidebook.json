@@ -1,5 +1,5 @@
 {
-  "address": "BPdNF5CnV8z1EkHo7tcueR6wXmzZV2j6j4wsUTirPgWL",
+  "address": "AG4ztZvcZjzFKjoXLzH8M6U3if9CwVFTXH2FHjqg7SdL",
   "metadata": {
     "name": "tidebook",
     "version": "0.1.0",
@@ -1187,7 +1187,7 @@
           "docs": [
             "Executable whose loader metadata anchors the authorization check."
           ],
-          "address": "BPdNF5CnV8z1EkHo7tcueR6wXmzZV2j6j4wsUTirPgWL"
+          "address": "AG4ztZvcZjzFKjoXLzH8M6U3if9CwVFTXH2FHjqg7SdL"
         },
         {
           "name": "program_data",
