@@ -21,6 +21,10 @@ npm run build
 - Connect a browser wallet through Solana Wallet Adapter.
 - Connect to Solana devnet.
 - Discover active and paused markets without connecting a wallet.
+- Display the connected wallet's aggregate base and quote SPL balances beside
+  its market-specific internal free and locked balances.
+- Enter deposits, withdrawals, prices, and quantities in human token units;
+  the client performs exact decimal-to-atomic conversion before signing.
 - Create markets as an active protocol administrator.
 - Submit bids and asks that either cross up to three best-price FIFO makers in
   one atomic transaction or rest as collateralized limit orders, including
@@ -32,6 +36,9 @@ npm run build
   cancellation, including while a market is paused.
 - Pause, unpause, and safely close markets as their authority.
 - Manage protocol administrators as the super-admin.
+- Let the super-admin opt fresh zero-supply test mints into a market-specific
+  faucet, then let any connected wallet claim both valueless assets to its
+  associated token accounts.
 
 The checked-in client IDL mirrors the generated Anchor IDL. After any account
 layout or instruction change, rebuild and redeploy the program before using the
@@ -49,6 +56,22 @@ Copy `.env.example` to `app/.env.local` or add the variables to the existing
 ignored `app/.env`. Configure the same public program-ID variable in Vercel.
 Next.js inlines `NEXT_PUBLIC_*` values during its build, so changing the program
 identity requires restarting the local server or rebuilding the deployment.
+
+## Test faucet safety
+
+The public faucet is intentionally permissionless and has no cooldown or claim
+limit. It is for devnet research assets only. Initialization permanently moves
+both mint authorities from the super-admin to a program PDA and is rejected
+unless both supplies are zero. Never enable it for a valuable or production
+mint.
+
+For the first mock SOL/USD market, use base decimals `9`, quote decimals `6`,
+tick `10000` (`0.01` quote), and lot `10000000` (`0.01` base). Configure claims
+as `10` base and `10000` quote. The order form then accepts values such as
+`149.50` for price and `0.01` for quantity; users do not type atomic zeros.
+
+Full bootstrap steps and address placeholders live in `docs/deployment.md` and
+`docs/devnet-addresses.md`.
 
 ## Multi-maker devnet smoke test
 
@@ -113,9 +136,14 @@ transaction, state, and browser-dependent behavior behind `"use client"`.
 
 ## Dependency note
 
-Anchor `1.2.0` requires legacy `@solana/web3.js` v1. npm currently reports
-moderate transitive advisories through `jayson`, `stream-json`, and `uuid` in
-the latest v1 release. npm's proposed automatic remediation downgrades web3.js
-to an incompatible historical version, so it is not applied. This boundary
-should be rechecked when Anchor supports the newer Solana JavaScript client or
-web3.js v1 publishes a patched dependency graph.
+Anchor `1.2.0` requires legacy `@solana/web3.js` v1, while the faucet uses the
+latest compatible `@solana/spl-token` package for associated token accounts.
+`npm audit --omit=dev` currently reports nine transitive advisories through
+`bigint-buffer`, `jayson`, `stream-json`, `toml`, and `uuid`.
+
+npm's proposed forced remediations replace the direct packages with incompatible
+historical or invalid versions (`@solana/spl-token@0.1.8`,
+`@solana/web3.js@0.0.3`, or `@anchor-lang/core@0.0.0`), so they are not applied.
+This boundary should be rechecked when the Solana/Anchor client stack publishes
+compatible patched releases. Do not run `npm audit fix --force` without first
+validating all generated transactions and wallet flows.

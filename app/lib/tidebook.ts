@@ -1,9 +1,4 @@
-import {
-  AnchorProvider,
-  BN,
-  Program,
-  type Idl,
-} from "@anchor-lang/core";
+import { AnchorProvider, BN, Program, type Idl } from "@anchor-lang/core";
 import {
   Connection,
   PublicKey,
@@ -21,6 +16,8 @@ export const PRICE_LEVEL_SEED = "price_level";
 export const TRADER_BALANCE_SEED = "trader_balance";
 export const VAULT_AUTHORITY_SEED = "vault-authority";
 export const VAULT_SEED = "vault";
+export const TEST_FAUCET_SEED = "test_faucet";
+export const TEST_FAUCET_AUTHORITY_SEED = "test_faucet_authority";
 
 // Markets currently use the original SPL Token program, not Token-2022.
 export const TOKEN_PROGRAM_ID = new PublicKey(
@@ -57,6 +54,16 @@ export interface MarketFeesAccount {
   market: PublicKey;
   quoteMint: PublicKey;
   accruedQuoteFees: BN;
+  bump: number;
+}
+
+export interface TestFaucetAccount {
+  market: PublicKey;
+  baseMint: PublicKey;
+  quoteMint: PublicKey;
+  baseClaimAmount: BN;
+  quoteClaimAmount: BN;
+  authorityBump: number;
   bump: number;
 }
 
@@ -162,6 +169,7 @@ interface TidebookAccounts {
   adminRecord: AccountClient<AdminRecordAccount>;
   market: AccountClient<MarketAccount>;
   marketFees: AccountClient<MarketFeesAccount>;
+  testFaucet: AccountClient<TestFaucetAccount>;
   priceLevel: AccountClient<PriceLevelAccount>;
   order: AccountClient<OrderAccount>;
   traderBalance: AccountClient<TraderBalanceAccount>;
@@ -179,16 +187,15 @@ export function deriveVaultAuthorityPda(market: PublicKey) {
 export function deriveVaultPda(market: PublicKey, mint: PublicKey) {
   // Including the mint gives each market exactly one canonical vault per asset.
   return PublicKey.findProgramAddressSync(
-    [
-      Buffer.from(VAULT_SEED),
-      market.toBuffer(),
-      mint.toBuffer(),
-    ],
+    [Buffer.from(VAULT_SEED), market.toBuffer(), mint.toBuffer()],
     PROGRAM_ID,
   )[0];
 }
 
-export function getTidebookProgram(connection: Connection, wallet: BrowserWallet) {
+export function getTidebookProgram(
+  connection: Connection,
+  wallet: BrowserWallet,
+) {
   const provider = new AnchorProvider(connection, wallet, {
     commitment: "confirmed",
     preflightCommitment: "confirmed",
@@ -233,6 +240,20 @@ export function deriveMarketFeesPda(market: PublicKey) {
   )[0];
 }
 
+export function deriveTestFaucetPda(market: PublicKey) {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(TEST_FAUCET_SEED), market.toBuffer()],
+    PROGRAM_ID,
+  )[0];
+}
+
+export function deriveTestFaucetAuthorityPda(testFaucet: PublicKey) {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(TEST_FAUCET_AUTHORITY_SEED), testFaucet.toBuffer()],
+    PROGRAM_ID,
+  )[0];
+}
+
 export function derivePriceLevelPda(
   market: PublicKey,
   side: OrderSide,
@@ -251,11 +272,7 @@ export function derivePriceLevelPda(
 
 export function deriveTraderBalancePda(market: PublicKey, owner: PublicKey) {
   return PublicKey.findProgramAddressSync(
-    [
-      Buffer.from(TRADER_BALANCE_SEED),
-      market.toBuffer(),
-      owner.toBuffer(),
-    ],
+    [Buffer.from(TRADER_BALANCE_SEED), market.toBuffer(), owner.toBuffer()],
     PROGRAM_ID,
   )[0];
 }
@@ -328,7 +345,9 @@ export async function findPriceLevelNeighbors(
     }
 
     if (price.eq(level.price)) {
-      throw new Error("Price level appeared during traversal; refresh and retry");
+      throw new Error(
+        "Price level appeared during traversal; refresh and retry",
+      );
     }
 
     const belongsBeforeCurrent =
@@ -358,6 +377,58 @@ export function deriveOrderPda(market: PublicKey, orderId: BN) {
   )[0];
 }
 
+/** Converts a human decimal string to an exact u64 atomic amount. */
+export function parseTokenAmount(
+  value: string,
+  decimals: number,
+  label: string,
+) {
+  const normalized = value.trim();
+  if (!/^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(normalized)) {
+    throw new Error(`${label} must be a positive decimal number`);
+  }
+
+  const [whole, fraction = ""] = normalized.split(".");
+  if (fraction.length > decimals) {
+    throw new Error(`${label} supports at most ${decimals} decimal places`);
+  }
+
+  const atomic = new BN(
+    `${whole}${fraction.padEnd(decimals, "0")}`.replace(/^0+(?=\d)/, ""),
+    10,
+  );
+  if (atomic.isZero()) {
+    throw new Error(`${label} must be greater than zero`);
+  }
+  if (atomic.bitLength() > 64) {
+    throw new Error(`${label} exceeds the u64 limit`);
+  }
+
+  return atomic;
+}
+
+/** Sums every legacy SPL token account owned by a wallet for one mint. */
+export async function getOwnedTokenBalance(
+  connection: Connection,
+  owner: PublicKey,
+  mint: PublicKey,
+) {
+  const response = await connection.getParsedTokenAccountsByOwner(
+    owner,
+    { mint },
+    "confirmed",
+  );
+
+  return response.value.reduce((total, { account }) => {
+    if (!("parsed" in account.data)) return total;
+    const amount = account.data.parsed?.info?.tokenAmount?.amount;
+    return typeof amount === "string" ? total.add(new BN(amount, 10)) : total;
+  }, new BN(0));
+}
+
+/**
+ * Selects one owned token account that can fund the requested atomic amount.
+ */
 export async function findOwnedTokenAccount(
   connection: Connection,
   owner: PublicKey,
@@ -393,23 +464,23 @@ export function deriveProgramDataAddress() {
   )[0];
 }
 
-export function decodeAdminStatus(status: AdminRecordAccount["status"]): AdminStatus {
+export function decodeAdminStatus(
+  status: AdminRecordAccount["status"],
+): AdminStatus {
   return "disabled" in status ? "disabled" : "active";
 }
 
-export function decodeMarketStatus(status: MarketAccount["status"]): MarketStatus {
+export function decodeMarketStatus(
+  status: MarketAccount["status"],
+): MarketStatus {
   return "paused" in status ? "paused" : "active";
 }
 
-export function decodeOrderSide(
-  side: OrderAccount["side"],
-): OrderSide {
+export function decodeOrderSide(side: OrderAccount["side"]): OrderSide {
   return "bid" in side ? "bid" : "ask";
 }
 
-export function decodeOrderStatus(
-  status: OrderAccount["status"],
-): OrderStatus {
+export function decodeOrderStatus(status: OrderAccount["status"]): OrderStatus {
   if ("open" in status) return "open";
   if ("filled" in status) return "filled";
   return "canceled";

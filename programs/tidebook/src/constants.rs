@@ -55,3 +55,11 @@ pub const TRADER_BALANCE_SEED: &[u8] = b"trader_balance";
 /// ["market_fees", market]
 #[constant]
 pub const MARKET_FEES_SEED: &[u8] = b"market_fees";
+
+/// Namespace for one market's explicitly configured test-token faucet.
+#[constant]
+pub const TEST_FAUCET_SEED: &[u8] = b"test_faucet";
+
+/// Stateless PDA that owns the mint authority of faucet-enabled test mints.
+#[constant]
+pub const TEST_FAUCET_AUTHORITY_SEED: &[u8] = b"test_faucet_authority";

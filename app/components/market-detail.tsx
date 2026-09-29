@@ -13,22 +13,31 @@ import { AnchorProvider, BN } from "@anchor-lang/core";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 import {
+  createAssociatedTokenAccountInstruction,
+  getAssociatedTokenAddressSync,
+} from "@solana/spl-token";
+import {
   accountExplorerUrl,
   decodeMarketStatus,
   deriveMarketFeesPda,
+  deriveTestFaucetAuthorityPda,
+  deriveTestFaucetPda,
   deriveProtocolConfigPda,
   deriveTraderBalancePda,
   deriveVaultAuthorityPda,
   formatAtomicAmount,
+  getOwnedTokenBalance,
   findOwnedTokenAccount,
   getTidebookAccounts,
   getTidebookProgram,
   getTidebookReadProgram,
+  parseTokenAmount,
   transactionExplorerUrl,
   deriveVaultPda,
   TOKEN_PROGRAM_ID,
   type MarketAccount,
   type MarketFeesAccount,
+  type TestFaucetAccount,
   type OrderSide,
   type TraderBalanceAccount,
 } from "../lib/tidebook";
@@ -88,6 +97,16 @@ export function MarketDetail({ address }: { address: string }) {
   const { role } = useProtocolRole();
   const [market, setMarket] = useState<MarketAccount | null>(null);
   const [marketFees, setMarketFees] = useState<MarketFeesAccount | null>(null);
+  const [testFaucet, setTestFaucet] = useState<TestFaucetAccount | null>(null);
+  const [walletBaseBalance, setWalletBaseBalance] = useState(() => new BN(0));
+  const [walletQuoteBalance, setWalletQuoteBalance] = useState(() => new BN(0));
+  const [faucetPending, setFaucetPending] = useState<
+    "initialize" | "claim" | null
+  >(null);
+  const [faucetError, setFaucetError] = useState<string | null>(null);
+  const [faucetSignature, setFaucetSignature] = useState<string | null>(null);
+  const [baseClaimAmount, setBaseClaimAmount] = useState("10");
+  const [quoteClaimAmount, setQuoteClaimAmount] = useState("10000");
   const [loading, setLoading] = useState(true);
   const [side, setSide] = useState<OrderSide>("bid");
   const [price, setPrice] = useState("");
@@ -164,12 +183,14 @@ export function MarketDetail({ address }: { address: string }) {
 
     try {
       const accounts = getTidebookAccounts(readProgram);
-      const [account, fees] = await Promise.all([
+      const [account, fees, faucet] = await Promise.all([
         accounts.market.fetchNullable(marketAddress),
         accounts.marketFees.fetchNullable(deriveMarketFeesPda(marketAddress)),
+        accounts.testFaucet.fetchNullable(deriveTestFaucetPda(marketAddress)),
       ]);
       setMarket(account);
       setMarketFees(fees);
+      setTestFaucet(faucet);
 
       if (!account) {
         setError("Market account was not found on devnet");
@@ -185,29 +206,37 @@ export function MarketDetail({ address }: { address: string }) {
     void loadMarket();
   }, [loadMarket]);
 
-  const loadTraderBalance = useCallback(async () => {
-    if (!traderBalanceAddress) {
+  const loadBalances = useCallback(async () => {
+    if (!traderBalanceAddress || !wallet || !market) {
       setTraderBalance(null);
+      setWalletBaseBalance(new BN(0));
+      setWalletQuoteBalance(new BN(0));
       return;
     }
 
     setBalanceLoading(true);
     setBalanceError(null);
     try {
-      const account = await getTidebookAccounts(
-        readProgram,
-      ).traderBalance.fetchNullable(traderBalanceAddress);
+      const [account, baseBalance, quoteBalance] = await Promise.all([
+        getTidebookAccounts(readProgram).traderBalance.fetchNullable(
+          traderBalanceAddress,
+        ),
+        getOwnedTokenBalance(connection, wallet.publicKey, market.baseMint),
+        getOwnedTokenBalance(connection, wallet.publicKey, market.quoteMint),
+      ]);
       setTraderBalance(account);
+      setWalletBaseBalance(baseBalance);
+      setWalletQuoteBalance(quoteBalance);
     } catch (cause) {
       setBalanceError(getErrorMessage(cause));
     } finally {
       setBalanceLoading(false);
     }
-  }, [readProgram, traderBalanceAddress]);
+  }, [connection, market, readProgram, traderBalanceAddress, wallet]);
 
   useEffect(() => {
-    void loadTraderBalance();
-  }, [loadTraderBalance]);
+    void loadBalances();
+  }, [loadBalances]);
 
   const initializeBalance = async () => {
     if (!signedProgram || !wallet || !marketAddress || !traderBalanceAddress) {
@@ -228,7 +257,7 @@ export function MarketDetail({ address }: { address: string }) {
         })
         .rpc();
       setBalanceSignature(signature);
-      await loadTraderBalance();
+      await loadBalances();
     } catch (cause) {
       setBalanceError(getErrorMessage(cause));
     } finally {
@@ -252,7 +281,11 @@ export function MarketDetail({ address }: { address: string }) {
     setBalanceError(null);
     setBalanceSignature(null);
     try {
-      const amount = parsePositiveU64(balanceAmount, "Amount");
+      const amount = parseTokenAmount(
+        balanceAmount,
+        balanceAsset === "base" ? market.baseDecimals : market.quoteDecimals,
+        "Amount",
+      );
       const mint = balanceAsset === "base" ? market.baseMint : market.quoteMint;
       const tokenAccount = await findOwnedTokenAccount(
         connection,
@@ -294,11 +327,135 @@ export function MarketDetail({ address }: { address: string }) {
 
       setBalanceAmount("");
       setBalanceSignature(signature);
-      await loadTraderBalance();
+      await loadBalances();
     } catch (cause) {
       setBalanceError(getErrorMessage(cause));
     } finally {
       setBalancePending(null);
+    }
+  };
+
+  const initializeTestFaucet = async () => {
+    if (
+      !signedProgram ||
+      !wallet ||
+      !marketAddress ||
+      !market ||
+      role !== "super-admin"
+    ) {
+      return;
+    }
+
+    setFaucetPending("initialize");
+    setFaucetError(null);
+    setFaucetSignature(null);
+    try {
+      const baseAmount = parseTokenAmount(
+        baseClaimAmount,
+        market.baseDecimals,
+        "Base claim amount",
+      );
+      const quoteAmount = parseTokenAmount(
+        quoteClaimAmount,
+        market.quoteDecimals,
+        "Quote claim amount",
+      );
+      const testFaucetAddress = deriveTestFaucetPda(marketAddress);
+      const signature = await signedProgram.methods
+        .initializeTestFaucet(baseAmount, quoteAmount)
+        .accounts({
+          superAdmin: wallet.publicKey,
+          protocolConfig: deriveProtocolConfigPda(),
+          market: marketAddress,
+          testFaucet: testFaucetAddress,
+          faucetAuthority: deriveTestFaucetAuthorityPda(testFaucetAddress),
+          baseMint: market.baseMint,
+          quoteMint: market.quoteMint,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+
+      setFaucetSignature(signature);
+      await loadMarket();
+    } catch (cause) {
+      setFaucetError(getErrorMessage(cause));
+    } finally {
+      setFaucetPending(null);
+    }
+  };
+
+  const claimTestTokens = async () => {
+    if (!signedProgram || !wallet || !marketAddress || !market || !testFaucet) {
+      return;
+    }
+
+    setFaucetPending("claim");
+    setFaucetError(null);
+    setFaucetSignature(null);
+    try {
+      const claimantBaseAccount = getAssociatedTokenAddressSync(
+        market.baseMint,
+        wallet.publicKey,
+      );
+      const claimantQuoteAccount = getAssociatedTokenAddressSync(
+        market.quoteMint,
+        wallet.publicKey,
+      );
+      const [baseAccountInfo, quoteAccountInfo] =
+        await connection.getMultipleAccountsInfo(
+          [claimantBaseAccount, claimantQuoteAccount],
+          "confirmed",
+        );
+
+      const transaction = new Transaction();
+      if (!baseAccountInfo) {
+        transaction.add(
+          createAssociatedTokenAccountInstruction(
+            wallet.publicKey,
+            claimantBaseAccount,
+            wallet.publicKey,
+            market.baseMint,
+          ),
+        );
+      }
+      if (!quoteAccountInfo) {
+        transaction.add(
+          createAssociatedTokenAccountInstruction(
+            wallet.publicKey,
+            claimantQuoteAccount,
+            wallet.publicKey,
+            market.quoteMint,
+          ),
+        );
+      }
+
+      const testFaucetAddress = deriveTestFaucetPda(marketAddress);
+      transaction.add(
+        await signedProgram.methods
+          .claimTestTokens()
+          .accounts({
+            claimant: wallet.publicKey,
+            market: marketAddress,
+            testFaucet: testFaucetAddress,
+            faucetAuthority: deriveTestFaucetAuthorityPda(testFaucetAddress),
+            baseMint: market.baseMint,
+            quoteMint: market.quoteMint,
+            claimantBaseAccount,
+            claimantQuoteAccount,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .instruction(),
+      );
+
+      const provider = signedProgram.provider as AnchorProvider;
+      const signature = await provider.sendAndConfirm(transaction);
+      setFaucetSignature(signature);
+      await loadBalances();
+    } catch (cause) {
+      setFaucetError(getErrorMessage(cause));
+    } finally {
+      setFaucetPending(null);
     }
   };
 
@@ -327,17 +484,21 @@ export function MarketDetail({ address }: { address: string }) {
         throw new Error("Initialize and fund your market balance first");
       }
 
-      const rawPrice = parsePositiveU64(price, "Price");
+      const rawPrice = parseTokenAmount(price, market.quoteDecimals, "Price");
       if (!rawPrice.mod(market.priceTickSize).isZero()) {
         throw new Error(
-          `Price must be a multiple of ${market.priceTickSize.toString()}`,
+          `Price must align to the ${formatAtomicAmount(market.priceTickSize, market.quoteDecimals)} tick`,
         );
       }
 
-      const rawQuantity = parsePositiveU64(quantity, "Quantity");
+      const rawQuantity = parseTokenAmount(
+        quantity,
+        market.baseDecimals,
+        "Quantity",
+      );
       if (!rawQuantity.mod(market.quantityLotSize).isZero()) {
         throw new Error(
-          `Quantity must be a multiple of ${market.quantityLotSize.toString()}`,
+          `Quantity must align to the ${formatAtomicAmount(market.quantityLotSize, market.baseDecimals)} lot`,
         );
       }
 
@@ -348,9 +509,9 @@ export function MarketDetail({ address }: { address: string }) {
       const opposingBest = side === "bid" ? market.bestAsk : market.bestBid;
       const crossesBest = Boolean(
         opposingBest &&
-          (side === "bid"
-            ? rawPrice.gte(opposingBest)
-            : rawPrice.lte(opposingBest)),
+        (side === "bid"
+          ? rawPrice.gte(opposingBest)
+          : rawPrice.lte(opposingBest)),
       );
 
       if (crossesBest && opposingBest) {
@@ -409,15 +570,12 @@ export function MarketDetail({ address }: { address: string }) {
         // incorrect when a taker crosses multiple price levels.
         const matchedCollateral =
           side === "bid"
-            ? plan.steps.reduce(
-                (total, step) => {
-                  const grossQuote = step.makerPrice
-                    .mul(step.fillQuantity)
-                    .div(baseScale);
-                  return total.add(grossQuote).add(takerFee(grossQuote));
-                },
-                new BN(0),
-              )
+            ? plan.steps.reduce((total, step) => {
+                const grossQuote = step.makerPrice
+                  .mul(step.fillQuantity)
+                  .div(baseScale);
+                return total.add(grossQuote).add(takerFee(grossQuote));
+              }, new BN(0))
             : filledQuantity;
         const requiredBalance = shouldPostRemainder
           ? matchedCollateral.add(remainderCollateral)
@@ -431,11 +589,7 @@ export function MarketDetail({ address }: { address: string }) {
         const transaction = new Transaction();
         for (const step of plan.steps) {
           const instruction = await signedProgram.methods
-            .matchLimitOrder(
-              orderSide,
-              rawPrice,
-              step.takerQuantityBeforeFill,
-            )
+            .matchLimitOrder(orderSide, rawPrice, step.takerQuantityBeforeFill)
             .accountsPartial({
               taker: wallet.publicKey,
               market: marketAddress,
@@ -494,7 +648,9 @@ export function MarketDetail({ address }: { address: string }) {
         } else {
           // A match-cap or zero-notional remainder stays free and visible so
           // the trader can explicitly submit the next bounded attempt.
-          setQuantity(plan.remainingQuantity.toString());
+          setQuantity(
+            formatAtomicAmount(plan.remainingQuantity, market.baseDecimals),
+          );
         }
       } else {
         const collateralAmount =
@@ -532,7 +688,7 @@ export function MarketDetail({ address }: { address: string }) {
         setPrice("");
         setQuantity("");
       }
-      await Promise.all([loadMarket(), loadTraderBalance()]);
+      await Promise.all([loadMarket(), loadBalances()]);
     } catch (cause) {
       setError(getErrorMessage(cause));
     } finally {
@@ -624,10 +780,11 @@ export function MarketDetail({ address }: { address: string }) {
 
         signature = await signedProgram.methods
           .closeMarket()
-          .accounts({
+          .accountsPartial({
             authority: wallet.publicKey,
             market: marketAddress,
             marketFees: deriveMarketFeesPda(marketAddress),
+            testFaucet: deriveTestFaucetPda(marketAddress),
             vaultAuthority: deriveVaultAuthorityPda(marketAddress),
             baseVault: deriveVaultPda(marketAddress, market.baseMint),
             quoteVault: deriveVaultPda(marketAddress, market.quoteMint),
@@ -655,46 +812,58 @@ export function MarketDetail({ address }: { address: string }) {
   const isMarketAuthority = Boolean(
     wallet && market && wallet.publicKey.equals(market.authority),
   );
-  const pricePreview = useMemo(() => {
-    if (!market || !/^[0-9]+$/.test(price.trim())) return null;
-    return formatAtomicAmount(new BN(price.trim(), 10), market.quoteDecimals);
-  }, [market, price]);
-  const quantityPreview = useMemo(() => {
-    if (!market || !/^[0-9]+$/.test(quantity.trim())) return null;
-    return formatAtomicAmount(
-      new BN(quantity.trim(), 10),
-      market.baseDecimals,
-    );
-  }, [market, quantity]);
-  const collateralPreview = useMemo(() => {
-    if (
-      !market ||
-      !/^[0-9]+$/.test(price.trim()) ||
-      !/^[0-9]+$/.test(quantity.trim())
-    ) {
+  const rawPricePreview = useMemo(() => {
+    if (!market || !price.trim()) return null;
+    try {
+      return parseTokenAmount(price, market.quoteDecimals, "Price");
+    } catch {
       return null;
     }
-
-    const rawPrice = new BN(price.trim(), 10);
-    const rawQuantity = new BN(quantity.trim(), 10);
+  }, [market, price]);
+  const rawQuantityPreview = useMemo(() => {
+    if (!market || !quantity.trim()) return null;
+    try {
+      return parseTokenAmount(quantity, market.baseDecimals, "Quantity");
+    } catch {
+      return null;
+    }
+  }, [market, quantity]);
+  const collateralPreview = useMemo(() => {
+    if (!market || !rawPricePreview || !rawQuantityPreview) return null;
 
     if (side === "ask") {
-      return `${formatAtomicAmount(rawQuantity, market.baseDecimals)} base tokens`;
+      return `${formatAtomicAmount(rawQuantityPreview, market.baseDecimals)} base tokens`;
     }
 
     const baseScale = new BN(10).pow(new BN(market.baseDecimals));
-    const quoteAmount = rawPrice.mul(rawQuantity).div(baseScale);
+    const quoteAmount = rawPricePreview.mul(rawQuantityPreview).div(baseScale);
     return `${formatAtomicAmount(quoteAmount, market.quoteDecimals)} quote tokens`;
-  }, [market, price, quantity, side]);
+  }, [market, rawPricePreview, rawQuantityPreview, side]);
   const crossesBest = useMemo(() => {
-    if (!market || !/^[0-9]+$/.test(price.trim())) return false;
-    const rawPrice = new BN(price.trim(), 10);
+    if (!market || !rawPricePreview) return false;
     const opposingBest = side === "bid" ? market.bestAsk : market.bestBid;
     if (!opposingBest) return false;
     return side === "bid"
-      ? rawPrice.gte(opposingBest)
-      : rawPrice.lte(opposingBest);
-  }, [market, price, side]);
+      ? rawPricePreview.gte(opposingBest)
+      : rawPricePreview.lte(opposingBest);
+  }, [market, rawPricePreview, side]);
+  const rawBalanceAmount = useMemo(() => {
+    if (!market || !balanceAmount.trim()) return null;
+    try {
+      return parseTokenAmount(
+        balanceAmount,
+        balanceAsset === "base" ? market.baseDecimals : market.quoteDecimals,
+        "Amount",
+      );
+    } catch {
+      return null;
+    }
+  }, [balanceAmount, balanceAsset, market]);
+  const selectedWalletBalance =
+    balanceAsset === "base" ? walletBaseBalance : walletQuoteBalance;
+  const depositExceedsWallet = Boolean(
+    rawBalanceAmount && rawBalanceAmount.gt(selectedWalletBalance),
+  );
 
   return (
     <div className="app-shell">
@@ -751,11 +920,25 @@ export function MarketDetail({ address }: { address: string }) {
                   </div>
                   <div>
                     <dt>Best bid</dt>
-                    <dd>{market.bestBid?.toString() ?? "No open bids"}</dd>
+                    <dd>
+                      {market.bestBid
+                        ? formatAtomicAmount(
+                            market.bestBid,
+                            market.quoteDecimals,
+                          )
+                        : "No open bids"}
+                    </dd>
                   </div>
                   <div>
                     <dt>Best ask</dt>
-                    <dd>{market.bestAsk?.toString() ?? "No open asks"}</dd>
+                    <dd>
+                      {market.bestAsk
+                        ? formatAtomicAmount(
+                            market.bestAsk,
+                            market.quoteDecimals,
+                          )
+                        : "No open asks"}
+                    </dd>
                   </div>
                   <div>
                     <dt>Base decimals</dt>
@@ -768,21 +951,21 @@ export function MarketDetail({ address }: { address: string }) {
                   <div>
                     <dt>Price tick</dt>
                     <dd>
-                      {market.priceTickSize.toString()} raw (
                       {formatAtomicAmount(
                         market.priceTickSize,
                         market.quoteDecimals,
-                      )} quote)
+                      )}{" "}
+                      quote
                     </dd>
                   </div>
                   <div>
                     <dt>Quantity lot</dt>
                     <dd>
-                      {market.quantityLotSize.toString()} raw (
                       {formatAtomicAmount(
                         market.quantityLotSize,
                         market.baseDecimals,
-                      )} base)
+                      )}{" "}
+                      base
                     </dd>
                   </div>
                   {baseVault && (
@@ -888,8 +1071,8 @@ export function MarketDetail({ address }: { address: string }) {
 
                 {status === "paused" && (
                   <div className="market-order-notice">
-                    This market is paused. Existing orders may still be canceled,
-                    but new orders are disabled.
+                    This market is paused. Existing orders may still be
+                    canceled, but new orders are disabled.
                   </div>
                 )}
 
@@ -921,34 +1104,40 @@ export function MarketDetail({ address }: { address: string }) {
                     </label>
 
                     <label>
-                      Raw price
+                      Price per base token
                       <input
-                        inputMode="numeric"
+                        inputMode="decimal"
                         value={price}
                         onChange={(event) => setPrice(event.target.value)}
-                        placeholder="100"
+                        placeholder="150.00"
                         autoComplete="off"
                       />
                       <small>
-                        {pricePreview === null
-                          ? `Tick: ${market.priceTickSize.toString()} raw units`
-                          : `${pricePreview} quote tokens per base token`}
+                        Minimum price increment:{" "}
+                        {formatAtomicAmount(
+                          market.priceTickSize,
+                          market.quoteDecimals,
+                        )}{" "}
+                        quote
                       </small>
                     </label>
 
                     <label>
-                      Raw quantity
+                      Base quantity
                       <input
-                        inputMode="numeric"
+                        inputMode="decimal"
                         value={quantity}
                         onChange={(event) => setQuantity(event.target.value)}
-                        placeholder="5"
+                        placeholder="0.01"
                         autoComplete="off"
                       />
                       <small>
-                        {quantityPreview === null
-                          ? `Lot: ${market.quantityLotSize.toString()} raw units`
-                          : `${quantityPreview} base tokens`}
+                        Minimum quantity increment:{" "}
+                        {formatAtomicAmount(
+                          market.quantityLotSize,
+                          market.baseDecimals,
+                        )}{" "}
+                        base
                       </small>
                     </label>
 
@@ -957,8 +1146,12 @@ export function MarketDetail({ address }: { address: string }) {
                       type="submit"
                       disabled={
                         !traderBalance ||
-                        !price.trim() ||
-                        !quantity.trim() ||
+                        !rawPricePreview ||
+                        !rawQuantityPreview ||
+                        !rawPricePreview.mod(market.priceTickSize).isZero() ||
+                        !rawQuantityPreview
+                          .mod(market.quantityLotSize)
+                          .isZero() ||
                         pending
                       }
                     >
@@ -970,9 +1163,10 @@ export function MarketDetail({ address }: { address: string }) {
                     </button>
                     {crossesBest ? (
                       <small>
-                        This transaction processes up to {MAX_MATCHES_PER_TRANSACTION}{" "}
-                        FIFO makers atomically. A safe remainder rests at your
-                        limit price; a cap-blocked remainder stays free for retry.
+                        This transaction processes up to{" "}
+                        {MAX_MATCHES_PER_TRANSACTION} FIFO makers atomically. A
+                        safe remainder rests at your limit price; a cap-blocked
+                        remainder stays free for retry.
                       </small>
                     ) : collateralPreview ? (
                       <small>This order will lock {collateralPreview}.</small>
@@ -982,28 +1176,156 @@ export function MarketDetail({ address }: { address: string }) {
               </section>
             </div>
 
+            {wallet && testFaucet && (
+              <section className="admin-card market-balance-card">
+                <div className="card-label">Devnet test faucet</div>
+                <h2>Get test assets</h2>
+                <p>
+                  These tokens have no value. Each claim mints{" "}
+                  {formatAtomicAmount(
+                    testFaucet.baseClaimAmount,
+                    market.baseDecimals,
+                  )}{" "}
+                  base and{" "}
+                  {formatAtomicAmount(
+                    testFaucet.quoteClaimAmount,
+                    market.quoteDecimals,
+                  )}{" "}
+                  quote tokens to your wallet.
+                </p>
+                <button
+                  className="primary-button"
+                  type="button"
+                  disabled={faucetPending !== null}
+                  onClick={() => void claimTestTokens()}
+                >
+                  {faucetPending === "claim" ? "Minting…" : "Claim test tokens"}
+                </button>
+                {faucetError && (
+                  <div className="transaction-message transaction-error">
+                    {faucetError}
+                  </div>
+                )}
+                {faucetSignature && (
+                  <div className="transaction-message transaction-success">
+                    Test assets minted.{" "}
+                    <a
+                      href={transactionExplorerUrl(faucetSignature)}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      View transaction ↗
+                    </a>
+                  </div>
+                )}
+              </section>
+            )}
+
+            {role === "super-admin" && !testFaucet && (
+              <section className="admin-card market-balance-card">
+                <div className="card-label">Devnet test faucet</div>
+                <h2>Enable public test minting</h2>
+                <p>
+                  This permanently transfers both mint authorities to Tidebook.
+                  Enable it only for fresh, zero-supply tokens with no economic
+                  value.
+                </p>
+                <form
+                  className="market-create-form balance-form"
+                  onSubmit={(event) => event.preventDefault()}
+                >
+                  <label>
+                    Base tokens per claim
+                    <input
+                      inputMode="decimal"
+                      value={baseClaimAmount}
+                      onChange={(event) =>
+                        setBaseClaimAmount(event.target.value)
+                      }
+                      placeholder="10"
+                      autoComplete="off"
+                    />
+                  </label>
+                  <label>
+                    Quote tokens per claim
+                    <input
+                      inputMode="decimal"
+                      value={quoteClaimAmount}
+                      onChange={(event) =>
+                        setQuoteClaimAmount(event.target.value)
+                      }
+                      placeholder="10000"
+                      autoComplete="off"
+                    />
+                  </label>
+                  <button
+                    className="primary-button"
+                    type="button"
+                    disabled={
+                      faucetPending !== null ||
+                      !baseClaimAmount.trim() ||
+                      !quoteClaimAmount.trim()
+                    }
+                    onClick={() => void initializeTestFaucet()}
+                  >
+                    {faucetPending === "initialize"
+                      ? "Enabling…"
+                      : "Enable public faucet"}
+                  </button>
+                </form>
+                {faucetError && (
+                  <div className="transaction-message transaction-error">
+                    {faucetError}
+                  </div>
+                )}
+              </section>
+            )}
+
             {wallet && (
               <section className="admin-card market-balance-card">
                 <div className="admin-list-heading">
                   <div>
-                    <div className="card-label">Internal balance</div>
+                    <div className="card-label">
+                      Wallet and internal balances
+                    </div>
                     <h2>Fund this market</h2>
                   </div>
                   <button
                     className="text-button"
                     type="button"
                     disabled={balanceLoading || balancePending !== null}
-                    onClick={() => void loadTraderBalance()}
+                    onClick={() => void loadBalances()}
                   >
                     {balanceLoading ? "Refreshing…" : "Refresh"}
                   </button>
                 </div>
 
+                <dl className="market-metadata balance-metadata">
+                  <div>
+                    <dt>Base in wallet</dt>
+                    <dd>
+                      {formatAtomicAmount(
+                        walletBaseBalance,
+                        market.baseDecimals,
+                      )}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Quote in wallet</dt>
+                    <dd>
+                      {formatAtomicAmount(
+                        walletQuoteBalance,
+                        market.quoteDecimals,
+                      )}
+                    </dd>
+                  </div>
+                </dl>
+
                 {!balanceLoading && !traderBalance && (
                   <div className="balance-initialize">
                     <p>
-                      Create one balance ledger for this wallet and market.
-                      This does not move tokens.
+                      Create one balance ledger for this wallet and market. This
+                      does not move tokens.
                     </p>
                     <button
                       className="primary-button"
@@ -1023,19 +1345,39 @@ export function MarketDetail({ address }: { address: string }) {
                     <dl className="market-metadata balance-metadata">
                       <div>
                         <dt>Base free</dt>
-                        <dd>{traderBalance.baseFree.toString()}</dd>
+                        <dd>
+                          {formatAtomicAmount(
+                            traderBalance.baseFree,
+                            market.baseDecimals,
+                          )}
+                        </dd>
                       </div>
                       <div>
                         <dt>Base locked</dt>
-                        <dd>{traderBalance.baseLocked.toString()}</dd>
+                        <dd>
+                          {formatAtomicAmount(
+                            traderBalance.baseLocked,
+                            market.baseDecimals,
+                          )}
+                        </dd>
                       </div>
                       <div>
                         <dt>Quote free</dt>
-                        <dd>{traderBalance.quoteFree.toString()}</dd>
+                        <dd>
+                          {formatAtomicAmount(
+                            traderBalance.quoteFree,
+                            market.quoteDecimals,
+                          )}
+                        </dd>
                       </div>
                       <div>
                         <dt>Quote locked</dt>
-                        <dd>{traderBalance.quoteLocked.toString()}</dd>
+                        <dd>
+                          {formatAtomicAmount(
+                            traderBalance.quoteLocked,
+                            market.quoteDecimals,
+                          )}
+                        </dd>
                       </div>
                     </dl>
 
@@ -1058,14 +1400,16 @@ export function MarketDetail({ address }: { address: string }) {
                         </select>
                       </label>
                       <label>
-                        Raw amount
+                        Amount
                         <input
-                          inputMode="numeric"
+                          inputMode="decimal"
                           value={balanceAmount}
                           onChange={(event) =>
                             setBalanceAmount(event.target.value)
                           }
-                          placeholder="1000"
+                          placeholder={
+                            balanceAsset === "base" ? "1.0" : "100.0"
+                          }
                           autoComplete="off"
                         />
                       </label>
@@ -1073,7 +1417,11 @@ export function MarketDetail({ address }: { address: string }) {
                         <button
                           className="primary-button"
                           type="button"
-                          disabled={!balanceAmount.trim() || balancePending !== null}
+                          disabled={
+                            !rawBalanceAmount ||
+                            depositExceedsWallet ||
+                            balancePending !== null
+                          }
                           onClick={() => void transferBalance("deposit")}
                         >
                           {balancePending === "deposit"
@@ -1083,7 +1431,9 @@ export function MarketDetail({ address }: { address: string }) {
                         <button
                           className="admin-action-button"
                           type="button"
-                          disabled={!balanceAmount.trim() || balancePending !== null}
+                          disabled={
+                            !rawBalanceAmount || balancePending !== null
+                          }
                           onClick={() => void transferBalance("withdraw")}
                         >
                           {balancePending === "withdraw"
@@ -1091,6 +1441,12 @@ export function MarketDetail({ address }: { address: string }) {
                             : "Withdraw free balance"}
                         </button>
                       </div>
+                      {depositExceedsWallet && (
+                        <small className="form-error">
+                          Deposit exceeds the selected asset balance in your
+                          wallet.
+                        </small>
+                      )}
                       <small>
                         Orders move free balance to locked balance. Cancellation
                         releases it back to free; only withdrawal moves tokens
@@ -1107,7 +1463,7 @@ export function MarketDetail({ address }: { address: string }) {
                 )}
                 {balanceSignature && (
                   <div className="transaction-message transaction-success">
-                    Balance updated. {" "}
+                    Balance updated.{" "}
                     <a
                       href={transactionExplorerUrl(balanceSignature)}
                       target="_blank"
@@ -1134,7 +1490,9 @@ export function MarketDetail({ address }: { address: string }) {
                     Destination quote-token account
                     <input
                       value={feeDestination}
-                      onChange={(event) => setFeeDestination(event.target.value)}
+                      onChange={(event) =>
+                        setFeeDestination(event.target.value)
+                      }
                       placeholder="Treasury token account"
                       autoComplete="off"
                     />
@@ -1203,12 +1561,12 @@ export function MarketDetail({ address }: { address: string }) {
 
         {result?.kind === "matched" && (
           <div className="transaction-message transaction-success">
-            Filled {result.filledQuantity.toString()} raw base across {" "}
+            Filled {result.filledQuantity.toString()} raw base across{" "}
             {result.makerCount} maker{result.makerCount === 1 ? "" : "s"}.
             {result.postedOrder ? (
               <>
                 {" "}
-                Posted {result.remainingQuantity.toString()} as resting order {" "}
+                Posted {result.remainingQuantity.toString()} as resting order{" "}
                 {shortAddress(result.postedOrder.toBase58())}.
               </>
             ) : (

@@ -51,7 +51,7 @@ pub mod tidebook {
         crate::instructions::unpause::handle_unpause_market(ctx)
     }
     /// Closes a paused market account and returns its rent to its authority.
-    pub fn close_market(ctx: Context<CloseMarket>) -> Result<()> {
+    pub fn close_market<'info>(ctx: Context<'info, CloseMarket<'info>>) -> Result<()> {
         crate::instructions::close::handle_close_market(ctx)
     }
 
@@ -83,6 +83,24 @@ pub mod tidebook {
     /// Updates the global quote-denominated taker fee in basis points.
     pub fn set_taker_fee(ctx: Context<SetTakerFee>, taker_fee_bps: u16) -> Result<()> {
         crate::instructions::set_taker_fee::handle_set_taker_fee(ctx, taker_fee_bps)
+    }
+
+    /// Registers valueless test mints and transfers their authorities to a PDA.
+    pub fn initialize_test_faucet(
+        ctx: Context<InitializeTestFaucet>,
+        base_claim_amount: u64,
+        quote_claim_amount: u64,
+    ) -> Result<()> {
+        crate::instructions::test_faucet::handle_initialize_test_faucet(
+            ctx,
+            base_claim_amount,
+            quote_claim_amount,
+        )
+    }
+
+    /// Mints fixed test-token amounts to any connected wallet.
+    pub fn claim_test_tokens(ctx: Context<ClaimTestTokens>) -> Result<()> {
+        crate::instructions::test_faucet::handle_claim_test_tokens(ctx)
     }
 
     /// Lets an order owner cancel an open order, including while paused.

@@ -7,10 +7,10 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{self, CloseAccount, Token, TokenAccount};
 
 use crate::{
-    constants::{MARKET_FEES_SEED, VAULT_AUTHORITY_SEED, VAULT_SEED},
+    constants::{MARKET_FEES_SEED, TEST_FAUCET_SEED, VAULT_AUTHORITY_SEED, VAULT_SEED},
     errors::{fee, market},
     events::MarketClosedEvent,
-    state::{Market, MarketFees, MarketStatus},
+    state::{Market, MarketFees, MarketStatus, TestFaucet},
 };
 
 #[derive(Accounts)]
@@ -44,6 +44,16 @@ pub struct CloseMarket<'info> {
             @ fee::MarketFeesQuoteMintMismatch
     )]
     pub market_fees: Account<'info, MarketFees>,
+
+    /// CHECK: This is always the canonical faucet PDA. It may be an empty
+    /// placeholder when the market never enabled a faucet; the handler safely
+    /// deserializes and closes it only when account data exists.
+    #[account(
+        mut,
+        seeds = [TEST_FAUCET_SEED, market.key().as_ref()],
+        bump
+    )]
+    pub test_faucet: UncheckedAccount<'info>,
 
     /// CHECK: Seed-constrained authority for both market vaults.
     #[account(
@@ -88,7 +98,7 @@ pub struct CloseMarket<'info> {
     pub token_program: Program<'info, Token>,
 }
 
-pub fn handle_close_market(ctx: Context<CloseMarket>) -> Result<()> {
+pub fn handle_close_market<'info>(ctx: Context<'info, CloseMarket<'info>>) -> Result<()> {
     // The counter protects indexed orders; checking token balances separately
     // also catches unsolicited transfers and accounting bugs before shutdown.
     require!(
@@ -109,6 +119,22 @@ pub fn handle_close_market(ctx: Context<CloseMarket>) -> Result<()> {
         market::MarketVaultNotEmpty
     );
     msg!("Closing market {}", ctx.accounts.market.key());
+
+    // Requiring the canonical PDA even when it is uninitialized prevents a raw
+    // client from omitting an existing faucet and orphaning its configuration.
+    if !ctx.accounts.test_faucet.data_is_empty() {
+        let test_faucet = Account::<TestFaucet>::try_from(&ctx.accounts.test_faucet)?;
+        require!(
+            test_faucet.market == ctx.accounts.market.key(),
+            crate::errors::faucet::FaucetMarketMismatch
+        );
+        require!(
+            test_faucet.base_mint == ctx.accounts.market.base_mint
+                && test_faucet.quote_mint == ctx.accounts.market.quote_mint,
+            crate::errors::faucet::FaucetMintMismatch
+        );
+        test_faucet.close(ctx.accounts.authority.to_account_info())?;
+    }
 
     let market_key = ctx.accounts.market.key();
     let vault_authority_bump = [ctx.bumps.vault_authority];

@@ -116,6 +116,31 @@ pub struct MarketFees {
     pub bump: u8,
 }
 
+/// Permissionless dispenser configuration for one explicitly selected test market.
+///
+/// The account is intentionally opt-in and governance-controlled because an
+/// on-chain program cannot determine which Solana cluster it is executing on.
+/// Only valueless development mints should ever transfer authority to its PDA.
+#[account]
+#[derive(InitSpace)]
+pub struct TestFaucet {
+    /// Market whose two assets may be minted by this faucet.
+    pub market: Pubkey,
+
+    pub base_mint: Pubkey,
+    pub quote_mint: Pubkey,
+
+    /// Fixed atomic amounts issued by every permissionless claim.
+    pub base_claim_amount: u64,
+    pub quote_claim_amount: u64,
+
+    /// Bump for the stateless mint-authority PDA.
+    pub authority_bump: u8,
+
+    /// Bump for this configuration account.
+    pub bump: u8,
+}
+
 /// Independent role record used to authorize market creation.
 #[account]
 #[derive(InitSpace)]
@@ -239,6 +264,13 @@ mod tests {
         // Market + quote mint + accrued u64 fees + PDA bump. Excludes the
         // 8-byte Anchor account discriminator.
         assert_eq!(MarketFees::INIT_SPACE, 73);
+    }
+
+    #[test]
+    fn test_faucet_account_size_is_stable() {
+        // Three public keys, two u64 claim amounts, and two PDA bumps. Excludes
+        // Anchor's 8-byte account discriminator.
+        assert_eq!(TestFaucet::INIT_SPACE, 114);
     }
 
     #[test]
