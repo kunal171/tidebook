@@ -8,16 +8,14 @@ implemented behavior. Each phase should be developed on a separate feature
 branch and merged only after its account model, failure paths, frontend, and
 documentation are complete.
 
-The target is a hybrid market with four distinct responsibilities:
+The target is a hybrid market with independently testable data, pricing,
+liquidity, and execution responsibilities:
 
 ```text
-External price feeds
-        |
-        v
-Reference-price service ---> Offchain market maker ---> Tidebook CLOB
-        |                                                   |
-        v                                                   v
-Monitoring and circuit breakers <--- Smart order router ---> Tidebook AMM
+External price feeds ---> Reference-price service ---> Offchain market maker
+                                                              |
+                                                              v
+Next.js + monitoring <--- Indexer API <--- Tidebook CLOB <--- Smart router ---> Tidebook AMM
 ```
 
 An oracle reports an external reference price. It does not create liquidity or
@@ -38,6 +36,8 @@ thin.
 7. Hybrid execution must remain atomic: a failed later leg rolls back earlier
    CLOB fills and AMM swaps.
 8. Architecture changes are chosen from measurements, not assumptions.
+9. The indexer accelerates discovery and analytics but never authorizes a
+   transaction or replaces canonical onchain state.
 
 ## Phase 0: clean devnet baseline
 
@@ -56,7 +56,96 @@ Deliverables:
 
 Done when the existing fee-aware CLOB completes its full lifecycle on devnet.
 
-## Phase 1: oracle compatibility and account design
+## Phase 1: indexer foundation
+
+Proposed branch: `feature/indexer-foundation`.
+
+Tidebook already emits typed events for governance, markets, balances, orders,
+fills, and fees. The indexer should turn those finalized events into searchable
+history and read-optimized projections before the oracle, market maker, and AMM
+add more data volume.
+
+Suggested service boundary:
+
+```text
+Solana HTTP + WebSocket RPC
+            |
+            v
+Rust indexer
+  |-- finalized backfill
+  |-- live log subscription
+  |-- Anchor event decoder
+  |-- projection processor
+  `-- account reconciler
+            |
+            v
+PostgreSQL ---> Axum API ---> Next.js, monitoring, and market-maker clients
+```
+
+Use standard Solana RPC first. Backfill program transactions with
+`getSignaturesForAddress` and `getTransaction`; subscribe to live program logs
+with `logsSubscribe`. Every live reconnect must backfill from the last durable
+finalized checkpoint so a WebSocket gap cannot silently lose history.
+Yellowstone/Geyser streaming is a later scaling option, not an initial
+dependency.
+
+Store append-only source records before building projections:
+
+```text
+chain_transactions  primary key (signature)
+chain_events        unique (signature, event_index)
+indexer_checkpoints finalized slot and signature cursor
+```
+
+Keep the raw event payload beside the decoded representation so schema changes
+can be replayed. Derived tables may include markets, orders, price levels,
+trader balances, fills, market fees, and administrator records. Later analytics
+can add candles, volume, spread, depth, wallet activity, and oracle deviation.
+
+Safety and recovery rules:
+
+- ingest only successful transactions; failed transactions may contain logs
+  even though their state changes rolled back;
+- make every processor idempotent so replaying a signature changes nothing;
+- preserve event order within each transaction;
+- initially index only `finalized` data to avoid provisional fork rollback;
+- periodically compare projections with `getProgramAccounts` snapshots;
+- report reconciliation differences before attempting any automatic repair;
+- use indexed state only for discovery, display, and planning;
+- refetch security-sensitive accounts and book links from RPC before building
+  or submitting a transaction.
+
+Initial API surface:
+
+```text
+GET /health
+GET /sync-status
+GET /markets
+GET /markets/:market
+GET /markets/:market/orderbook
+GET /markets/:market/trades
+GET /wallets/:owner/orders
+GET /wallets/:owner/activity
+```
+
+Required tests:
+
+- decode every Tidebook event type;
+- ignore events from failed transactions;
+- preserve multiple-event transaction order;
+- replay transactions and backfill ranges idempotently;
+- resume after a simulated subscription disconnect;
+- roll back a database transaction when projection processing fails;
+- update partial and complete fills correctly;
+- reconcile deliberately corrupted order, balance, and fee projections;
+- detect accounts closed onchain but still active in PostgreSQL.
+
+Done when a new database can be deterministically rebuilt from finalized
+history, live ingestion can recover gaps after restart, and the API serves
+markets, order books, trades, and wallet orders without becoming part of
+onchain correctness.
+
+## Phase 2: oracle compatibility and account design
 
 Proposed branch: `feature/oracle-foundation`.
 
@@ -108,7 +197,7 @@ Required tests:
 Done when a pure oracle adapter and its failure paths are fully tested without
 changing order execution.
 
-## Phase 2: reference-price UI and market health
+## Phase 3: reference-price UI and market health
 
 Expose reference data on each market page:
 
@@ -130,7 +219,7 @@ can also halt valid price discovery when an oracle is stale.
 Done when users can understand both external reference conditions and actual
 Tidebook liquidity without changing matching semantics.
 
-## Phase 3: reference market-maker service
+## Phase 4: reference market-maker service
 
 Proposed branch: `feature/reference-market-maker`.
 
@@ -167,7 +256,7 @@ single-order service exposes a measured transaction bottleneck.
 Done when the bot maintains two-sided devnet liquidity, safely cancels stale
 quotes, and recovers without duplicating orders after restart.
 
-## Phase 4: monitoring and circuit breakers
+## Phase 5: monitoring and circuit breakers
 
 Add an event consumer or indexer for fills, fees, oracle observations, spreads,
 inventory, transaction failures, and retries. Dashboards should distinguish
@@ -183,7 +272,7 @@ Initial circuit breakers belong in the market-maker service:
 Onchain circuit breakers may be added later for protocol-wide protection, but
 they must preserve cancellation and withdrawal exits while trading is halted.
 
-## Phase 5: standalone AMM design
+## Phase 6: standalone AMM design
 
 Proposed design branch: `design/hybrid-amm`.
 
@@ -226,7 +315,7 @@ The design must specify:
 Done when the formulas, invariants, attacks, account sizes, and test matrix are
 documented and exercised by pure Rust property tests.
 
-## Phase 6: standalone AMM implementation
+## Phase 7: standalone AMM implementation
 
 Suggested feature sequence:
 
@@ -255,7 +344,7 @@ behavior, arithmetic limits, token CPI failure, and global asset conservation.
 Done when the AMM operates safely as an independent devnet venue before any
 hybrid route is introduced.
 
-## Phase 7: hybrid CLOB and AMM routing
+## Phase 8: hybrid CLOB and AMM routing
 
 Implement an offchain smart-order router before coupling AMM logic directly to
 `match_limit_order`. The router compares:
@@ -286,7 +375,7 @@ Required guarantees:
 Only benchmarks should decide whether a later combined onchain routing
 instruction is worth its larger account contract and audit surface.
 
-## Phase 8: benchmarking and hardening
+## Phase 9: benchmarking and hardening
 
 Measure each component independently and in hybrid transactions:
 
@@ -309,6 +398,7 @@ incident response, and an independent security audit.
 
 | Milestone | Focused effort |
 | --- | ---: |
+| Indexer foundation, projections, reconciliation, and API | 30-50 hours |
 | Oracle compatibility and design | 8-16 hours |
 | Oracle accounts, validation, tests, and UI | 16-24 hours |
 | Reference market-maker service | 24-40 hours |
@@ -318,22 +408,24 @@ incident response, and an independent security audit.
 | Hybrid router | 16-32 hours |
 | Benchmarking and hardening | 12-24 hours |
 
-The complete research prototype is approximately 100-180 focused hours. This
+The complete research prototype is approximately 130-230 focused hours. This
 estimate does not include production operations, an independent audit, or
 mainnet liquidity acquisition.
 
 ## Recommended next milestone
 
-Begin `feature/oracle-foundation` with only:
+Begin `feature/indexer-foundation` with only:
 
-1. the dependency compatibility spike;
-2. a finalized oracle account and trust model;
-3. checked price-normalization functions;
-4. LiteSVM oracle fixtures and failure-path tests;
-5. no changes to matching or settlement.
+1. an event completeness audit;
+2. the PostgreSQL source and projection schema;
+3. finalized historical backfill;
+4. deterministic Anchor event decoding;
+5. idempotent replay and failure-path tests;
+6. no frontend migration or Yellowstone dependency yet.
 
-This creates the smallest safe foundation shared by the reference-price UI,
-market-maker service, circuit breakers, and later AMM.
+This creates the shared historical and discovery layer needed by the
+reference-price UI, market-maker service, monitoring, and later AMM while
+leaving all transaction authorization and validation onchain.
 
 ## References
 
@@ -342,3 +434,7 @@ market-maker service, circuit breakers, and later AMM.
 - [Solana program model](https://solana.com/docs/core/programs)
 - [Solana program execution](https://solana.com/docs/core/programs/program-execution)
 - [Solana markets and atomic composability](https://solana.com/docs/defi)
+- [Solana program log subscriptions](https://solana.com/docs/rpc/websocket/logssubscribe)
+- [Solana transaction-signature pagination](https://solana.com/docs/rpc/http/getsignaturesforaddress)
+- [Solana program-account queries](https://solana.com/docs/rpc/http/getprogramaccounts)
+- [Yellowstone gRPC](https://github.com/rpcpool/yellowstone-grpc)
