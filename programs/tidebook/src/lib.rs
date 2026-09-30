@@ -85,6 +85,29 @@ pub mod tidebook {
         crate::instructions::set_taker_fee::handle_set_taker_fee(ctx, taker_fee_bps)
     }
 
+    /// Registers valueless test mints and transfers their authorities to a PDA.
+    pub fn initialize_test_faucet(
+        ctx: Context<InitializeTestFaucet>,
+        base_claim_amount: u64,
+        quote_claim_amount: u64,
+    ) -> Result<()> {
+        crate::instructions::test_faucet::handle_initialize_test_faucet(
+            ctx,
+            base_claim_amount,
+            quote_claim_amount,
+        )
+    }
+
+    /// Mints fixed test-token amounts to any connected wallet.
+    pub fn claim_test_tokens(ctx: Context<ClaimTestTokens>) -> Result<()> {
+        crate::instructions::test_faucet::handle_claim_test_tokens(ctx)
+    }
+
+    /// Permanently disables a market's test faucet before safe market closure.
+    pub fn close_test_faucet(ctx: Context<CloseTestFaucet>) -> Result<()> {
+        crate::instructions::test_faucet::handle_close_test_faucet(ctx)
+    }
+
     /// Lets an order owner cancel an open order, including while paused.
     pub fn cancel_limit_order(ctx: Context<CancelLimitOrder>, order_id: u64) -> Result<()> {
         crate::instructions::cancel_limit_order::handle_cancel_limit_order(ctx, order_id)

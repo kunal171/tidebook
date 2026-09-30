@@ -7,8 +7,8 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{self, CloseAccount, Token, TokenAccount};
 
 use crate::{
-    constants::{MARKET_FEES_SEED, VAULT_AUTHORITY_SEED, VAULT_SEED},
-    errors::{fee, market},
+    constants::{MARKET_FEES_SEED, TEST_FAUCET_SEED, VAULT_AUTHORITY_SEED, VAULT_SEED},
+    errors::{faucet, fee, market},
     events::MarketClosedEvent,
     state::{Market, MarketFees, MarketStatus},
 };
@@ -44,6 +44,16 @@ pub struct CloseMarket<'info> {
             @ fee::MarketFeesQuoteMintMismatch
     )]
     pub market_fees: Account<'info, MarketFees>,
+
+    /// CHECK: This is always the canonical faucet PDA. It may be an empty
+    /// placeholder when the market never enabled a faucet; the handler safely
+    /// deserializes and closes it only when account data exists.
+    #[account(
+        mut,
+        seeds = [TEST_FAUCET_SEED, market.key().as_ref()],
+        bump
+    )]
+    pub test_faucet: UncheckedAccount<'info>,
 
     /// CHECK: Seed-constrained authority for both market vaults.
     #[account(
@@ -107,6 +117,12 @@ pub fn handle_close_market(ctx: Context<CloseMarket>) -> Result<()> {
     require!(
         ctx.accounts.base_vault.amount == 0 && ctx.accounts.quote_vault.amount == 0,
         market::MarketVaultNotEmpty
+    );
+    // A faucet is closed explicitly in a preceding instruction. Requiring its
+    // canonical PDA here prevents clients from omitting an existing config.
+    require!(
+        ctx.accounts.test_faucet.data_is_empty(),
+        faucet::FaucetMustBeClosed
     );
     msg!("Closing market {}", ctx.accounts.market.key());
 

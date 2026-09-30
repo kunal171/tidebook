@@ -23,7 +23,7 @@ use {
     solana_message::{Message, VersionedMessage},
     solana_signer::Signer,
     solana_transaction::versioned::VersionedTransaction,
-    tidebook::state::{AdminRecord, AdminStatus, Market, OrderSide},
+    tidebook::state::{AdminRecord, AdminStatus, Market, OrderSide, TestFaucet},
 };
 
 const PROGRAM_BYTES: &[u8] = include_bytes!(concat!(
@@ -98,12 +98,17 @@ fn send_instruction(
     payer: &Keypair,
     instruction: Instruction,
 ) -> litesvm::types::TransactionResult {
+    send_instructions(svm, payer, &[instruction])
+}
+
+fn send_instructions(
+    svm: &mut LiteSVM,
+    payer: &Keypair,
+    instructions: &[Instruction],
+) -> litesvm::types::TransactionResult {
     svm.expire_blockhash();
-    let message = Message::new_with_blockhash(
-        &[instruction],
-        Some(&payer.pubkey()),
-        &svm.latest_blockhash(),
-    );
+    let message =
+        Message::new_with_blockhash(instructions, Some(&payer.pubkey()), &svm.latest_blockhash());
     let transaction =
         VersionedTransaction::try_new(VersionedMessage::Legacy(message), &[payer]).unwrap();
 
@@ -436,6 +441,11 @@ fn close_market_instruction_with_accounts(
             authority,
             market,
             market_fees,
+            test_faucet: Pubkey::find_program_address(
+                &[tidebook::constants::TEST_FAUCET_SEED, market.as_ref()],
+                &tidebook::id(),
+            )
+            .0,
             vault_authority,
             base_vault,
             quote_vault,
@@ -454,6 +464,85 @@ fn close_market_instruction(authority: Pubkey, market: &MarketFixture) -> Instru
         market.base_vault,
         market.quote_vault,
     )
+}
+
+fn close_market_instruction_with_faucet(
+    authority: Pubkey,
+    market: &MarketFixture,
+    test_faucet: Pubkey,
+) -> Instruction {
+    Instruction::new_with_bytes(
+        tidebook::id(),
+        &tidebook::instruction::CloseMarket {}.data(),
+        tidebook::accounts::CloseMarket {
+            authority,
+            market: market.market,
+            market_fees: market.market_fees,
+            test_faucet,
+            vault_authority: market.vault_authority,
+            base_vault: market.base_vault,
+            quote_vault: market.quote_vault,
+            token_program: anchor_spl::token::ID,
+        }
+        .to_account_metas(None),
+    )
+}
+
+fn close_test_faucet_instruction(
+    authority: Pubkey,
+    market: &MarketFixture,
+    test_faucet: Pubkey,
+) -> Instruction {
+    Instruction::new_with_bytes(
+        tidebook::id(),
+        &tidebook::instruction::CloseTestFaucet {}.data(),
+        tidebook::accounts::CloseTestFaucet {
+            authority,
+            market: market.market,
+            test_faucet,
+        }
+        .to_account_metas(None),
+    )
+}
+
+fn store_test_faucet(svm: &mut LiteSVM, market: &MarketFixture) -> Pubkey {
+    let (test_faucet, bump) = Pubkey::find_program_address(
+        &[
+            tidebook::constants::TEST_FAUCET_SEED,
+            market.market.as_ref(),
+        ],
+        &tidebook::id(),
+    );
+    let (_, authority_bump) = Pubkey::find_program_address(
+        &[
+            tidebook::constants::TEST_FAUCET_AUTHORITY_SEED,
+            test_faucet.as_ref(),
+        ],
+        &tidebook::id(),
+    );
+    let state = TestFaucet {
+        market: market.market,
+        base_mint: market.base_mint,
+        quote_mint: market.quote_mint,
+        base_claim_amount: 10_000_000_000,
+        quote_claim_amount: 10_000_000_000,
+        authority_bump,
+        bump,
+    };
+    let mut data = Vec::new();
+    state.try_serialize(&mut data).unwrap();
+    svm.set_account(
+        test_faucet,
+        Account {
+            lamports: svm.minimum_balance_for_rent_exemption(data.len()),
+            data,
+            owner: tidebook::id(),
+            executable: false,
+            rent_epoch: 0,
+        },
+    )
+    .unwrap();
+    test_faucet
 }
 
 fn place_order(context: &mut TestContext, side: OrderSide) -> OpenOrderFixture {
@@ -576,6 +665,61 @@ fn paused_empty_market_closes_market_and_both_vaults() {
     assert!(context
         .svm
         .get_account(&context.market.quote_vault)
+        .is_none());
+}
+
+#[test]
+fn paused_market_with_live_faucet_cannot_close_directly() {
+    let mut context = setup_market();
+    let test_faucet = store_test_faucet(&mut context.svm, &context.market);
+    pause_market(&mut context);
+    let instruction = close_market_instruction_with_faucet(
+        context.authority.pubkey(),
+        &context.market,
+        test_faucet,
+    );
+    let result = send_instruction(&mut context.svm, &context.authority, instruction);
+
+    assert!(result.is_err(), "market orphaned a live faucet");
+    assert!(context.svm.get_account(&context.market.market).is_some());
+    assert!(context.svm.get_account(&test_faucet).is_some());
+}
+
+#[test]
+fn faucet_and_paused_market_close_atomically() {
+    let mut context = setup_market();
+    let test_faucet = store_test_faucet(&mut context.svm, &context.market);
+    pause_market(&mut context);
+
+    let close_faucet =
+        close_test_faucet_instruction(context.authority.pubkey(), &context.market, test_faucet);
+    let close_market = close_market_instruction_with_faucet(
+        context.authority.pubkey(),
+        &context.market,
+        test_faucet,
+    );
+    let result = send_instructions(
+        &mut context.svm,
+        &context.authority,
+        &[close_faucet, close_market],
+    );
+
+    assert!(
+        result.is_ok(),
+        "market and faucet closure failed: {result:?}"
+    );
+    let event = support::events::single_event::<tidebook::events::TestFaucetClosedEvent>(&result);
+    assert_eq!(event.market, context.market.market);
+    assert_eq!(event.test_faucet, test_faucet);
+    assert_eq!(event.authority, context.authority.pubkey());
+    assert_eq!(event.base_mint, context.market.base_mint);
+    assert_eq!(event.quote_mint, context.market.quote_mint);
+
+    assert!(context.svm.get_account(&context.market.market).is_none());
+    assert!(context.svm.get_account(&test_faucet).is_none());
+    assert!(context
+        .svm
+        .get_account(&context.market.market_fees)
         .is_none());
 }
 

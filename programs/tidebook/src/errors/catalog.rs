@@ -270,4 +270,25 @@ pub enum TidebookError {
 
     #[msg("Protocol fee destination must use the market quote mint")]
     InvalidFeeDestinationMint = 86,
+
+    #[msg("Faucet claim amounts must be greater than zero")]
+    InvalidFaucetClaimAmount = 87,
+
+    #[msg("Only valueless mints with zero supply may initialize a test faucet")]
+    FaucetMintSupplyNotZero = 88,
+
+    #[msg("The super administrator must control both test mint authorities")]
+    InvalidFaucetMintAuthority = 89,
+
+    #[msg("Faucet configuration does not belong to the supplied market")]
+    FaucetMarketMismatch = 90,
+
+    #[msg("Faucet mint does not match the configured market asset")]
+    FaucetMintMismatch = 91,
+
+    #[msg("Faucet destination token account is not owned by the claimant")]
+    InvalidFaucetDestinationOwner = 92,
+
+    #[msg("The market test faucet must be closed before closing the market")]
+    FaucetMustBeClosed = 93,
 }

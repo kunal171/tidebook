@@ -433,6 +433,116 @@
       ]
     },
     {
+      "name": "claim_test_tokens",
+      "docs": [
+        "Mints fixed test-token amounts to any connected wallet."
+      ],
+      "discriminator": [
+        214,
+        44,
+        182,
+        173,
+        157,
+        35,
+        25,
+        172
+      ],
+      "accounts": [
+        {
+          "name": "claimant",
+          "signer": true
+        },
+        {
+          "name": "market"
+        },
+        {
+          "name": "test_faucet",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  101,
+                  115,
+                  116,
+                  95,
+                  102,
+                  97,
+                  117,
+                  99,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "faucet_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  101,
+                  115,
+                  116,
+                  95,
+                  102,
+                  97,
+                  117,
+                  99,
+                  101,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "test_faucet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "base_mint",
+          "writable": true
+        },
+        {
+          "name": "quote_mint",
+          "writable": true
+        },
+        {
+          "name": "claimant_base_account",
+          "writable": true
+        },
+        {
+          "name": "claimant_quote_account",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "close_market",
       "docs": [
         "Closes a paused market account and returns its rent to its authority."
@@ -485,6 +595,38 @@
                   101,
                   101,
                   115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "test_faucet",
+          "docs": [
+            "placeholder when the market never enabled a faucet; the handler safely",
+            "deserializes and closes it only when account data exists."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  101,
+                  115,
+                  116,
+                  95,
+                  102,
+                  97,
+                  117,
+                  99,
+                  101,
+                  116
                 ]
               },
               {
@@ -582,6 +724,64 @@
         {
           "name": "token_program",
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "close_test_faucet",
+      "docs": [
+        "Permanently disables a market's test faucet before safe market closure."
+      ],
+      "discriminator": [
+        12,
+        72,
+        111,
+        222,
+        122,
+        157,
+        25,
+        43
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "market"
+        },
+        {
+          "name": "test_faucet",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  101,
+                  115,
+                  116,
+                  95,
+                  102,
+                  97,
+                  117,
+                  99,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
         }
       ],
       "args": []
@@ -1201,6 +1401,150 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "initialize_test_faucet",
+      "docs": [
+        "Registers valueless test mints and transfers their authorities to a PDA."
+      ],
+      "discriminator": [
+        220,
+        250,
+        24,
+        22,
+        152,
+        152,
+        140,
+        136
+      ],
+      "accounts": [
+        {
+          "name": "super_admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "market"
+        },
+        {
+          "name": "test_faucet",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  101,
+                  115,
+                  116,
+                  95,
+                  102,
+                  97,
+                  117,
+                  99,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "faucet_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  101,
+                  115,
+                  116,
+                  95,
+                  102,
+                  97,
+                  117,
+                  99,
+                  101,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "test_faucet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "base_mint",
+          "writable": true
+        },
+        {
+          "name": "quote_mint",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "base_claim_amount",
+          "type": "u64"
+        },
+        {
+          "name": "quote_claim_amount",
+          "type": "u64"
+        }
+      ]
     },
     {
       "name": "initialize_trader_balance",
@@ -2350,6 +2694,19 @@
       ]
     },
     {
+      "name": "TestFaucet",
+      "discriminator": [
+        212,
+        72,
+        137,
+        149,
+        223,
+        126,
+        248,
+        97
+      ]
+    },
+    {
       "name": "TraderBalance",
       "discriminator": [
         114,
@@ -2531,6 +2888,45 @@
         244,
         75,
         248
+      ]
+    },
+    {
+      "name": "TestFaucetClaimedEvent",
+      "discriminator": [
+        149,
+        47,
+        203,
+        239,
+        92,
+        155,
+        247,
+        96
+      ]
+    },
+    {
+      "name": "TestFaucetClosedEvent",
+      "discriminator": [
+        169,
+        116,
+        71,
+        236,
+        191,
+        44,
+        241,
+        40
+      ]
+    },
+    {
+      "name": "TestFaucetInitializedEvent",
+      "discriminator": [
+        247,
+        38,
+        39,
+        17,
+        66,
+        174,
+        194,
+        81
       ]
     },
     {
@@ -2995,6 +3391,41 @@
       "code": 6086,
       "name": "InvalidFeeDestinationMint",
       "msg": "Protocol fee destination must use the market quote mint"
+    },
+    {
+      "code": 6087,
+      "name": "InvalidFaucetClaimAmount",
+      "msg": "Faucet claim amounts must be greater than zero"
+    },
+    {
+      "code": 6088,
+      "name": "FaucetMintSupplyNotZero",
+      "msg": "Only valueless mints with zero supply may initialize a test faucet"
+    },
+    {
+      "code": 6089,
+      "name": "InvalidFaucetMintAuthority",
+      "msg": "The super administrator must control both test mint authorities"
+    },
+    {
+      "code": 6090,
+      "name": "FaucetMarketMismatch",
+      "msg": "Faucet configuration does not belong to the supplied market"
+    },
+    {
+      "code": 6091,
+      "name": "FaucetMintMismatch",
+      "msg": "Faucet mint does not match the configured market asset"
+    },
+    {
+      "code": 6092,
+      "name": "InvalidFaucetDestinationOwner",
+      "msg": "Faucet destination token account is not owned by the claimant"
+    },
+    {
+      "code": 6093,
+      "name": "FaucetMustBeClosed",
+      "msg": "The market test faucet must be closed before closing the market"
     }
   ],
   "types": [
@@ -3972,6 +4403,153 @@
       }
     },
     {
+      "name": "TestFaucet",
+      "docs": [
+        "Permissionless dispenser configuration for one explicitly selected test market.",
+        "",
+        "The account is intentionally opt-in and governance-controlled because an",
+        "on-chain program cannot determine which Solana cluster it is executing on.",
+        "Only valueless development mints should ever transfer authority to its PDA."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "docs": [
+              "Market whose two assets may be minted by this faucet."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "base_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "quote_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "base_claim_amount",
+            "docs": [
+              "Fixed atomic amounts issued by every permissionless claim."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "quote_claim_amount",
+            "type": "u64"
+          },
+          {
+            "name": "authority_bump",
+            "docs": [
+              "Bump for the stateless mint-authority PDA."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "Bump for this configuration account."
+            ],
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TestFaucetClaimedEvent",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "test_faucet",
+            "type": "pubkey"
+          },
+          {
+            "name": "claimant",
+            "type": "pubkey"
+          },
+          {
+            "name": "base_amount",
+            "type": "u64"
+          },
+          {
+            "name": "quote_amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TestFaucetClosedEvent",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "test_faucet",
+            "type": "pubkey"
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "base_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "quote_mint",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TestFaucetInitializedEvent",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "test_faucet",
+            "type": "pubkey"
+          },
+          {
+            "name": "faucet_authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "base_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "quote_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "base_claim_amount",
+            "type": "u64"
+          },
+          {
+            "name": "quote_claim_amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
       "name": "TraderBalance",
       "docs": [
         "Canonical internal balance ledger for one trader in one market.",
@@ -4176,6 +4754,22 @@
       ],
       "type": "bytes",
       "value": "[112, 114, 111, 116, 111, 99, 111, 108, 95, 99, 111, 110, 102, 105, 103]"
+    },
+    {
+      "name": "TEST_FAUCET_AUTHORITY_SEED",
+      "docs": [
+        "Stateless PDA that owns the mint authority of faucet-enabled test mints."
+      ],
+      "type": "bytes",
+      "value": "[116, 101, 115, 116, 95, 102, 97, 117, 99, 101, 116, 95, 97, 117, 116, 104, 111, 114, 105, 116, 121]"
+    },
+    {
+      "name": "TEST_FAUCET_SEED",
+      "docs": [
+        "Namespace for one market's explicitly configured test-token faucet."
+      ],
+      "type": "bytes",
+      "value": "[116, 101, 115, 116, 95, 102, 97, 117, 99, 101, 116]"
     },
     {
       "name": "TRADER_BALANCE_SEED",
