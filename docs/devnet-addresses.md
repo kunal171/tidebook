@@ -17,26 +17,24 @@ production configuration.
 The governance accounts above were verified on devnet. Record the fresh
 initialization transaction here when it is recovered from deployment history.
 
-## Planned public faucet market
+## Server-backed public test faucet
 
-Create these only after deploying the faucet-enabled program. Both mints must
-have zero supply and remain controlled by the super-admin until the faucet is
-initialized.
+The shared valueless `tBTC/tUSDT` pair uses a dedicated server-held devnet
+authority. The private key is intentionally absent from this registry and Git.
 
-| Item                  | Planned value                    | Address/transaction |
-| --------------------- | -------------------------------- | ------------------- |
-| Pair                  | `mSOL/mUSD`                      | pending             |
-| Mock SOL mint         | 9 decimals                       | pending             |
-| Mock USD mint         | 6 decimals                       | pending             |
-| Market                | tick `10000`; lot `10000000`     | pending             |
-| Faucet config PDA     | claim `10 mSOL` and `10000 mUSD` | pending             |
-| Faucet authority PDA  | authority for both mints         | pending             |
-| Faucet initialization | super-admin transaction          | pending             |
-| First bid             | `149.50 mUSD` for `0.01 mSOL`    | pending             |
-| First ask             | `150.50 mUSD` for `0.01 mSOL`    | pending             |
+| Item                     | Address/value                                  | Transaction                                                                                |
+| ------------------------ | ---------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Base mint                | `FggaZG7eJ5tpr2vmpNMbMCHkWkcw9n2Nhmf54g3wQwGk` | —                                                                                          |
+| Quote mint               | `8KRa3QwidV2yZspR3wr4p3eNzq2KtejMbU1tZUgNLdtt` | —                                                                                          |
+| Server faucet authority  | `8S2nAYrpqBoPFvXj7HSGHvuGnpNBEk1RHUbXQXmMB84B` | —                                                                                          |
+| Authority funding        | `0.2 devnet SOL`                               | `31e6Rds6Yaa3BavkgjPZ7QRnWQzSV6zYU9NHywVfR6J8cTDxbSe5qjMm1XT3RQEW82fCjUS3pWkjiiSoQhKA55RM` |
+| Base authority transfer  | deployer -> faucet                             | `51ggdwocC9iA1bYhwm5xYAoXQqfEqhvMWpXHpacPQG2WwucpNek8r99ag6TWxenFpjhjoHyKCbjVFHDAX8GEXcC2` |
+| Quote authority transfer | deployer -> faucet                             | `4YW95WxRimuswpUfvnh5TP8iqyPTADH3pmEhWNCnGVUYzazKi9Nq4qcPB6J3KUgEMpENRwGXcibNzFzptr3d7Bwo` |
+| End-to-end smoke claim   | `10 tBTC` and `1,000 tUSDT`                    | `45wd1t6mziwiZdqnJgi9V5JsSo11FiioAeXfvNqzf9Rt7ztcoVTyo1wcCLFTNj6tw6tH1pNdW1fpaVKST6XHyx3P` |
 
-The addresses below belong to earlier research deployments and are retained as
-history; do not treat them as the fresh public faucet pair.
+The web route permits one claim per wallet and five per hashed IP address per
+hour. Vercel must use durable Upstash counters. These controls reduce casual
+abuse but do not provide Sybil resistance.
 
 ## Test token mints
 
@@ -46,13 +44,14 @@ by the current Tidebook program.
 
 | Test asset          | Role             | Mint address                                   | Decimals | Current supply |
 | ------------------- | ---------------- | ---------------------------------------------- | -------- | -------------- |
-| Mock BTC (`tBTC`)   | Base mint        | `FggaZG7eJ5tpr2vmpNMbMCHkWkcw9n2Nhmf54g3wQwGk` | 8        | 0              |
-| Mock USDT (`tUSDT`) | Quote mint       | `8KRa3QwidV2yZspR3wr4p3eNzq2KtejMbU1tZUgNLdtt` | 6        | 0              |
+| Mock BTC (`tBTC`)   | Base mint        | `FggaZG7eJ5tpr2vmpNMbMCHkWkcw9n2Nhmf54g3wQwGk` | 8        | 10             |
+| Mock USDT (`tUSDT`) | Quote mint       | `8KRa3QwidV2yZspR3wr4p3eNzq2KtejMbU1tZUgNLdtt` | 6        | 1,000          |
 | Multi-maker base    | Smoke-test base  | `DS4R9TLJmdnQXS1VqWbzXBE88LT4QzB52CjDCXKW5hr7` | 8        | 2              |
 | Multi-maker quote   | Smoke-test quote | `6XGySXZ2Soe8DyNJ6Zs3efAKpigrz1RJWWYLkq1eMvuJ` | 6        | 1,000          |
 
-Mint authority for both test assets:
-`BX6RJHGbi7msj7t1ECCX6T1ZvvetHDK6UkjzAhPfWngq`.
+Mint authority for the public `tBTC/tUSDT` pair is the dedicated server account
+`8S2nAYrpqBoPFvXj7HSGHvuGnpNBEk1RHUbXQXmMB84B`. Its secret is stored only in
+the local protected environment and encrypted Vercel settings.
 
 ### Creation transactions
 

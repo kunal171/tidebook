@@ -36,9 +36,9 @@ npm run build
   cancellation, including while a market is paused.
 - Pause, unpause, and safely close markets as their authority.
 - Manage protocol administrators as the super-admin.
-- Let the super-admin opt fresh zero-supply test mints into a market-specific
-  faucet, then let any connected wallet claim both valueless assets to its
-  associated token accounts.
+- Provide a server-backed, rate-limited faucet that mints fixed amounts of both
+  valueless assets directly into any connected wallet's associated token
+  accounts.
 
 The checked-in client IDL mirrors the generated Anchor IDL. After any account
 layout or instruction change, rebuild and redeploy the program before using the
@@ -59,19 +59,25 @@ identity requires restarting the local server or rebuilding the deployment.
 
 ## Test faucet safety
 
-The public faucet is intentionally permissionless and has no cooldown or claim
-limit. It is for devnet research assets only. Initialization permanently moves
-both mint authorities from the super-admin to a program PDA and is rejected
-unless both supplies are zero. Never enable it for a valuable or production
-mint.
+The active web faucet is server-backed. Its authority key is loaded only by the
+Next.js server route; it is never sent to the browser or stored in Git. A claim
+creates missing associated token accounts and mints fixed amounts directly to
+the requesting wallet, so the server does not maintain a transferable token
+inventory.
 
-Closing a faucet-enabled market atomically closes the faucet configuration
-first; afterward its authority PDA cannot mint again.
+Claims are limited by both wallet and hashed IP address. Vercel fails closed
+unless `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` provide shared
+durable counters. The process-local limiter is an explicit local-development
+fallback and must never be enabled on Vercel. These limits are abuse friction,
+not Sybil resistance: a determined caller can rotate wallets and networks.
 
-For the first mock SOL/USD market, use base decimals `9`, quote decimals `6`,
-tick `10000` (`0.01` quote), and lot `10000000` (`0.01` base). Configure claims
-as `10` base and `10000` quote. The order form then accepts values such as
-`149.50` for price and `0.01` for quantity; users do not type atomic zeros.
+The current devnet pair claims `10 tBTC` and `1,000 tUSDT` once per wallet per
+hour, with at most five claims per IP in the same window. These assets have no
+value and must never be bridged, sold, or treated as production tokens.
+
+The program-controlled PDA faucet remains an alternative research design, but
+a mint must use exactly one authority model at a time. Do not initialize the
+on-chain faucet after transferring authority to the server account.
 
 Full bootstrap steps and address placeholders live in `docs/deployment.md` and
 `docs/devnet-addresses.md`.

@@ -401,6 +401,36 @@ Validate owned base and quote destination accounts
    `-- faucet PDA signs both mint-to CPIs atomically
 ```
 
+### Server-backed web faucet
+
+The active shared devnet pair uses a separate operational path:
+
+```text
+Connected wallet
+   |
+   | POST /api/faucet { wallet }
+   v
+Next.js server
+   |-- validates the wallet public key
+   |-- atomically checks wallet + hashed-IP counters
+   |-- verifies both configured mint authorities
+   |-- creates missing associated token accounts
+   `-- signs one transaction that mints both fixed claims
+   v
+Claimant wallet receives valueless devnet assets
+```
+
+The private key exists only in server environment configuration. Vercel must
+use shared Upstash counters and fails closed when they are absent. Local
+development may explicitly opt into an in-memory counter. The server route and
+the on-chain PDA faucet are alternative authority models: the same mint cannot
+be controlled by both simultaneously.
+
+This design makes rate limiting and faucet changes easy to deploy, but it is
+custodial. The server operator can mint outside the public route, server
+availability becomes required, and wallet/IP limits are not Sybil-proof. It is
+therefore restricted to valueless devnet tokens.
+
 ### New-level insertion flow
 
 ```text
@@ -702,10 +732,12 @@ These are known limitations, not defects in the current research milestone:
   fee avoidance but can overcharge economically tiny fills.
 - Canceled order accounts are retained as history and their rent is not yet
   reclaimed.
-- The test faucet intentionally has no cooldown, wallet quota, or maximum
-  supply. It is suitable only for freely mintable devnet assets. A production
-  distribution mechanism needs explicit supply and abuse controls and must not
-  reuse this authority model for valuable mints.
+- The on-chain faucet intentionally has no cooldown, wallet quota, or maximum
+  supply. It is suitable only for freely mintable devnet assets.
+- The server-backed web faucet adds wallet/IP limits but introduces a custodial
+  hot key and centralized availability. Its limits deter casual abuse rather
+  than providing Sybil resistance. Neither faucet model is suitable for
+  valuable assets.
 - Orders created by the earlier direct-vault-transfer design do not have a
   corresponding locked `TraderBalance` claim. This research milestone requires
   a clean devnet redeploy/state reset; upgrading a program with live legacy

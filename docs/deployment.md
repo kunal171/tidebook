@@ -31,41 +31,36 @@ securely; replacing it would create a different program ID.
 
 ## Public test-faucet bootstrap
 
-The faucet feature must be deployed before the UI can initialize or claim from
-it. Use fresh legacy SPL Token mints whose supply is zero and whose mint
-authority is the super-admin. Never attach the faucet to real assets: the
-program cannot detect its cluster and claims are intentionally unlimited.
+The web faucet uses a dedicated server-side devnet keypair as the mint authority
+for one configured pair. The route mints fixed amounts directly to the
+requester's associated token accounts and pays their creation rent when needed.
+Never use this design for valuable or mainnet assets.
 
-Recommended first research market:
-
-| Setting            | Human value   | On-chain value                      |
-| ------------------ | ------------- | ----------------------------------- |
-| Pair               | `mSOL/mUSD`   | fresh base and quote mint addresses |
-| Base decimals      | 9             | mint configuration                  |
-| Quote decimals     | 6             | mint configuration                  |
-| Price tick         | `0.01 mUSD`   | `10_000` quote atoms                |
-| Quantity lot       | `0.01 mSOL`   | `10_000_000` base atoms             |
-| Faucet base claim  | `10 mSOL`     | `10_000_000_000` base atoms         |
-| Faucet quote claim | `10,000 mUSD` | `10_000_000_000` quote atoms        |
-| Example first bid  | `149.50 mUSD` | entered as `149.50` in the UI       |
-| Example first ask  | `150.50 mUSD` | entered as `150.50` in the UI       |
+Required server-only variables are listed in `app/.env.example`. Store
+`FAUCET_AUTHORITY_SECRET_KEY` only in encrypted Vercel environment settings.
+Vercel also requires `UPSTASH_REDIS_REST_URL` and
+`UPSTASH_REDIS_REST_TOKEN`; without them the endpoint reports itself disabled
+and rejects claims. `FAUCET_ALLOW_IN_MEMORY_RATE_LIMIT=true` is permitted only
+for local testing.
 
 Bootstrap order:
 
-1. Deploy the rebuilt program and web app with the same program ID.
-2. Create fresh `mSOL` and `mUSD` legacy SPL mints with 9 and 6 decimals.
-3. Do not mint any supply before faucet initialization.
-4. Create the market with tick `10000` and lot `10000000`.
-5. Enable the faucet as super-admin with claims `10` and `10000`; this
-   transfers both mint authorities to the faucet PDA.
-6. Any connected wallet can claim, initialize its internal balance, and
-   deposit the amount it wants to trade.
-7. Enter prices and quantities in human units such as `150.50` and `0.01`.
+1. Generate a dedicated keypair and fund it with a small amount of devnet SOL.
+2. Configure the fixed mint addresses, atomic claim amounts, and claim window.
+3. Transfer both devnet mint authorities to the dedicated public key.
+4. Configure durable Upstash credentials in Vercel.
+5. Deploy the web application and open a market using that exact ordered mint
+   pair.
+6. Connect a wallet and use **Claim test tokens**. The server creates missing
+   associated token accounts and atomically mints both configured assets.
+7. Confirm that a repeated request is rejected with HTTP `429`.
 
-Record every resulting public address and transaction in
-`docs/devnet-addresses.md`. When closing a faucet-enabled market, the UI places
-`close_test_faucet` and `close_market` in one atomic transaction. This
-permanently stops further minting for that pair.
+The current shared pair, public authority, and authority-transfer transactions
+are recorded in `docs/devnet-addresses.md`. The secret authority bytes must
+never be copied into that registry.
+
+The on-chain `TestFaucet` PDA remains available as a separate research path.
+It must not be initialized for mints already controlled by the server faucet.
 
 ## IDL metadata limitation
 

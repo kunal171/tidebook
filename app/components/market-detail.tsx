@@ -48,6 +48,7 @@ import {
 import { AppHeader } from "./app-header";
 import { buildRestingOrderInstruction } from "../lib/resting-order";
 import { useProtocolRole } from "./protocol-role-provider";
+import { ServerTestFaucet } from "./server-test-faucet";
 
 function shortAddress(value: string) {
   return `${value.slice(0, 8)}…${value.slice(-8)}`;
@@ -98,6 +99,9 @@ export function MarketDetail({ address }: { address: string }) {
   const [market, setMarket] = useState<MarketAccount | null>(null);
   const [marketFees, setMarketFees] = useState<MarketFeesAccount | null>(null);
   const [testFaucet, setTestFaucet] = useState<TestFaucetAccount | null>(null);
+  const [serverFaucetPair, setServerFaucetPair] = useState<boolean | null>(
+    null,
+  );
   const [walletBaseBalance, setWalletBaseBalance] = useState(() => new BN(0));
   const [walletQuoteBalance, setWalletQuoteBalance] = useState(() => new BN(0));
   const [faucetPending, setFaucetPending] = useState<
@@ -1194,7 +1198,16 @@ export function MarketDetail({ address }: { address: string }) {
               </section>
             </div>
 
-            {wallet && testFaucet && (
+            <ServerTestFaucet
+              baseMint={market.baseMint}
+              quoteMint={market.quoteMint}
+              baseDecimals={market.baseDecimals}
+              quoteDecimals={market.quoteDecimals}
+              onClaimed={loadBalances}
+              onPairDetected={setServerFaucetPair}
+            />
+
+            {serverFaucetPair !== true && wallet && testFaucet && (
               <section className="admin-card market-balance-card">
                 <div className="card-label">Devnet test faucet</div>
                 <h2>Get test assets</h2>
@@ -1239,65 +1252,67 @@ export function MarketDetail({ address }: { address: string }) {
               </section>
             )}
 
-            {role === "super-admin" && !testFaucet && (
-              <section className="admin-card market-balance-card">
-                <div className="card-label">Devnet test faucet</div>
-                <h2>Enable public test minting</h2>
-                <p>
-                  This permanently transfers both mint authorities to Tidebook.
-                  Enable it only for fresh, zero-supply tokens with no economic
-                  value.
-                </p>
-                <form
-                  className="market-create-form balance-form"
-                  onSubmit={(event) => event.preventDefault()}
-                >
-                  <label>
-                    Base tokens per claim
-                    <input
-                      inputMode="decimal"
-                      value={baseClaimAmount}
-                      onChange={(event) =>
-                        setBaseClaimAmount(event.target.value)
-                      }
-                      placeholder="10"
-                      autoComplete="off"
-                    />
-                  </label>
-                  <label>
-                    Quote tokens per claim
-                    <input
-                      inputMode="decimal"
-                      value={quoteClaimAmount}
-                      onChange={(event) =>
-                        setQuoteClaimAmount(event.target.value)
-                      }
-                      placeholder="10000"
-                      autoComplete="off"
-                    />
-                  </label>
-                  <button
-                    className="primary-button"
-                    type="button"
-                    disabled={
-                      faucetPending !== null ||
-                      !baseClaimAmount.trim() ||
-                      !quoteClaimAmount.trim()
-                    }
-                    onClick={() => void initializeTestFaucet()}
+            {serverFaucetPair === false &&
+              role === "super-admin" &&
+              !testFaucet && (
+                <section className="admin-card market-balance-card">
+                  <div className="card-label">Devnet test faucet</div>
+                  <h2>Enable public test minting</h2>
+                  <p>
+                    This permanently transfers both mint authorities to
+                    Tidebook. Enable it only for fresh, zero-supply tokens with
+                    no economic value.
+                  </p>
+                  <form
+                    className="market-create-form balance-form"
+                    onSubmit={(event) => event.preventDefault()}
                   >
-                    {faucetPending === "initialize"
-                      ? "Enabling…"
-                      : "Enable public faucet"}
-                  </button>
-                </form>
-                {faucetError && (
-                  <div className="transaction-message transaction-error">
-                    {faucetError}
-                  </div>
-                )}
-              </section>
-            )}
+                    <label>
+                      Base tokens per claim
+                      <input
+                        inputMode="decimal"
+                        value={baseClaimAmount}
+                        onChange={(event) =>
+                          setBaseClaimAmount(event.target.value)
+                        }
+                        placeholder="10"
+                        autoComplete="off"
+                      />
+                    </label>
+                    <label>
+                      Quote tokens per claim
+                      <input
+                        inputMode="decimal"
+                        value={quoteClaimAmount}
+                        onChange={(event) =>
+                          setQuoteClaimAmount(event.target.value)
+                        }
+                        placeholder="10000"
+                        autoComplete="off"
+                      />
+                    </label>
+                    <button
+                      className="primary-button"
+                      type="button"
+                      disabled={
+                        faucetPending !== null ||
+                        !baseClaimAmount.trim() ||
+                        !quoteClaimAmount.trim()
+                      }
+                      onClick={() => void initializeTestFaucet()}
+                    >
+                      {faucetPending === "initialize"
+                        ? "Enabling…"
+                        : "Enable public faucet"}
+                    </button>
+                  </form>
+                  {faucetError && (
+                    <div className="transaction-message transaction-error">
+                      {faucetError}
+                    </div>
+                  )}
+                </section>
+              )}
 
             {wallet && (
               <section className="admin-card market-balance-card">
