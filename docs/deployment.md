@@ -63,8 +63,9 @@ Bootstrap order:
 7. Enter prices and quantities in human units such as `150.50` and `0.01`.
 
 Record every resulting public address and transaction in
-`docs/devnet-addresses.md`. Closing this market also closes the faucet config
-and permanently stops further minting for that pair.
+`docs/devnet-addresses.md`. When closing a faucet-enabled market, the UI places
+`close_test_faucet` and `close_market` in one atomic transaction. This
+permanently stops further minting for that pair.
 
 ## IDL metadata limitation
 

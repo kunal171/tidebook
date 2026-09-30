@@ -747,7 +747,7 @@ export function MarketDetail({ address }: { address: string }) {
     if (
       action === "close" &&
       !window.confirm(
-        "Close this market and both empty vaults? This cannot be undone.",
+        "Close this market, its test faucet, and both empty vaults? This cannot be undone.",
       )
     ) {
       return;
@@ -778,19 +778,37 @@ export function MarketDetail({ address }: { address: string }) {
           throw new Error("Withdraw all accrued protocol fees before closing");
         }
 
-        signature = await signedProgram.methods
-          .closeMarket()
-          .accountsPartial({
-            authority: wallet.publicKey,
-            market: marketAddress,
-            marketFees: deriveMarketFeesPda(marketAddress),
-            testFaucet: deriveTestFaucetPda(marketAddress),
-            vaultAuthority: deriveVaultAuthorityPda(marketAddress),
-            baseVault: deriveVaultPda(marketAddress, market.baseMint),
-            quoteVault: deriveVaultPda(marketAddress, market.quoteMint),
-            tokenProgram: TOKEN_PROGRAM_ID,
-          })
-          .rpc();
+        const transaction = new Transaction();
+        const testFaucetAddress = deriveTestFaucetPda(marketAddress);
+        if (testFaucet) {
+          transaction.add(
+            await signedProgram.methods
+              .closeTestFaucet()
+              .accounts({
+                authority: wallet.publicKey,
+                market: marketAddress,
+                testFaucet: testFaucetAddress,
+              })
+              .instruction(),
+          );
+        }
+        transaction.add(
+          await signedProgram.methods
+            .closeMarket()
+            .accountsPartial({
+              authority: wallet.publicKey,
+              market: marketAddress,
+              marketFees: deriveMarketFeesPda(marketAddress),
+              testFaucet: testFaucetAddress,
+              vaultAuthority: deriveVaultAuthorityPda(marketAddress),
+              baseVault: deriveVaultPda(marketAddress, market.baseMint),
+              quoteVault: deriveVaultPda(marketAddress, market.quoteMint),
+              tokenProgram: TOKEN_PROGRAM_ID,
+            })
+            .instruction(),
+        );
+        const provider = signedProgram.provider as AnchorProvider;
+        signature = await provider.sendAndConfirm(transaction);
       }
 
       setLifecycleSignature(signature);

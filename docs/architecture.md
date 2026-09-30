@@ -268,10 +268,12 @@ governance opt-in plus the zero-supply and authority checks. The current
 research faucet has no cooldown, per-wallet allowance, or global cap; callers
 may claim repeatedly and the tokens must never carry economic value.
 
-When a paused empty market closes, its optional faucet config closes in the
-same transaction. The mint-authority PDA has no independent signing ability,
-so those test mints become permanently non-mintable after market closure. This
-avoids leaving an orphaned program account while keeping shutdown atomic.
+An enabled faucet must be closed before its market. The web client composes
+`close_test_faucet` immediately before `close_market` in one transaction. The
+first instruction returns the config rent; the second requires the canonical
+faucet PDA to be empty, preventing a direct client from omitting and orphaning
+it. The authority PDA cannot sign independently, so closing the config freezes
+both test-mint supplies permanently.
 
 ### Price-level PDA
 
@@ -302,9 +304,10 @@ FIFO-head and best-level removal, while a partial maker remains at the head.
 | `initialize_market`         | Active admin              | Admin record belongs to signer, is canonical and active; both accounts deserialize as SPL mints; base and quote differ; tick and lot sizes are nonzero; market, fee accumulator, vault authority, and vault PDAs are canonical | Atomically creates an active market, zeroed fee accumulator, and empty base/quote SPL Token vaults                                                                                        |
 | `pause_market`              | Market authority          | `has_one = authority`; market is active                                                                                                                                                                                        | `Active -> Paused`                                                                                                                                                                        |
 | `unpause_market`            | Market authority          | `has_one = authority`; market is paused                                                                                                                                                                                        | `Paused -> Active`                                                                                                                                                                        |
-| `close_market`              | Market authority          | Market is paused; `open_order_count` and accrued fees are zero; both canonical vaults are empty; optional faucet is canonical                                                                                                  | Closes both vaults, the fee accumulator, optional faucet config, and market atomically, returning their rent to the authority                                                             |
+| `close_market`              | Market authority          | Market is paused; `open_order_count` and accrued fees are zero; both canonical vaults are empty; canonical faucet PDA has no data                                                                                              | Closes both vaults, the fee accumulator, and market atomically, returning their rent to the authority                                                                                     |
 | `initialize_test_faucet`    | Super-admin               | Config signer matches; both market mints have zero supply and are controlled by the signer; faucet and authority PDAs are canonical; claim amounts are nonzero                                                                 | Transfers both mint authorities to the faucet PDA and stores fixed claim amounts                                                                                                          |
 | `claim_test_tokens`         | Any signer                | Faucet belongs to market; mints match; destination token accounts belong to signer and use the correct mints                                                                                                                   | Mints the configured base and quote test amounts to the claimant atomically                                                                                                               |
+| `close_test_faucet`         | Market authority          | `has_one = authority`; faucet, stored market, and mint bindings are canonical                                                                                                                                                  | Closes the faucet config, returns its rent, and permanently disables further minting                                                                                                      |
 | `initialize_trader_balance` | Trader                    | Market exists; canonical market/owner ledger does not exist                                                                                                                                                                    | Creates a zeroed `TraderBalance` PDA                                                                                                                                                      |
 | `deposit`                   | Balance owner             | Mint belongs to market; source belongs to owner; ledger and vault are canonical; amount and arithmetic are valid                                                                                                               | Transfers tokens into the vault and credits the matching free balance atomically, including while paused                                                                                  |
 | `withdraw`                  | Balance owner             | Mint belongs to market; destination belongs to owner; sufficient free balance and vault backing exist                                                                                                                          | Debits free balance and transfers tokens out of the vault atomically, including while paused                                                                                              |
@@ -332,6 +335,7 @@ validated mutations and CPIs complete:
 | Withdraw protocol fees                           | `ProtocolFeesWithdrawnEvent`                                                 |
 | Enable a market test faucet                      | `TestFaucetInitializedEvent`                                                 |
 | Claim public test assets                         | `TestFaucetClaimedEvent`                                                     |
+| Disable a market test faucet                     | `TestFaucetClosedEvent`                                                      |
 
 Equivalent economic transitions intentionally share a schema: both placement
 paths emit `OrderPlacedEvent`, and both lifecycle directions emit
@@ -684,7 +688,9 @@ The program currently enforces:
 61. Faucet claims accept any signer but mint only to that signer's correctly
     typed base and quote token accounts.
 62. Both faucet mint operations succeed or roll back together.
-63. Market closure closes a supplied canonical faucet config atomically.
+63. A live faucet blocks direct market closure; the market authority must close
+    the canonical config first.
+64. Faucet and market closure can be composed atomically in one transaction.
 
 ## 6. Known architectural gaps
 
@@ -724,7 +730,7 @@ The test harness:
 5. sends transactions through LiteSVM;
 6. deserializes resulting Anchor accounts and checks state.
 
-The 191-test suite currently covers:
+The 193-test suite currently covers:
 
 - upgrade-authority-only, one-time protocol initialization;
 - creation of the deployer's config and active admin record;
@@ -823,8 +829,8 @@ The 191-test suite currently covers:
   enforcement, and transfer of both mint authorities to the canonical PDA;
 - permissionless fixed base/quote claims and rejection of token destinations
   owned by another wallet;
-- atomic closure of an optional canonical faucet config with its paused empty
-  market.
+- rejection of direct market closure while a live faucet exists, plus atomic
+  faucet-and-market closure and event validation.
 
 ## 8. Error architecture
 

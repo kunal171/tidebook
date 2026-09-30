@@ -51,7 +51,7 @@ pub mod tidebook {
         crate::instructions::unpause::handle_unpause_market(ctx)
     }
     /// Closes a paused market account and returns its rent to its authority.
-    pub fn close_market<'info>(ctx: Context<'info, CloseMarket<'info>>) -> Result<()> {
+    pub fn close_market(ctx: Context<CloseMarket>) -> Result<()> {
         crate::instructions::close::handle_close_market(ctx)
     }
 
@@ -101,6 +101,11 @@ pub mod tidebook {
     /// Mints fixed test-token amounts to any connected wallet.
     pub fn claim_test_tokens(ctx: Context<ClaimTestTokens>) -> Result<()> {
         crate::instructions::test_faucet::handle_claim_test_tokens(ctx)
+    }
+
+    /// Permanently disables a market's test faucet before safe market closure.
+    pub fn close_test_faucet(ctx: Context<CloseTestFaucet>) -> Result<()> {
+        crate::instructions::test_faucet::handle_close_test_faucet(ctx)
     }
 
     /// Lets an order owner cancel an open order, including while paused.

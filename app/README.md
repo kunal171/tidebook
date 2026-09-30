@@ -65,6 +65,9 @@ both mint authorities from the super-admin to a program PDA and is rejected
 unless both supplies are zero. Never enable it for a valuable or production
 mint.
 
+Closing a faucet-enabled market atomically closes the faucet configuration
+first; afterward its authority PDA cannot mint again.
+
 For the first mock SOL/USD market, use base decimals `9`, quote decimals `6`,
 tick `10000` (`0.01` quote), and lot `10000000` (`0.01` base). Configure claims
 as `10` base and `10000` quote. The order form then accepts values such as

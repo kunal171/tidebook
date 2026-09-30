@@ -729,6 +729,64 @@
       "args": []
     },
     {
+      "name": "close_test_faucet",
+      "docs": [
+        "Permanently disables a market's test faucet before safe market closure."
+      ],
+      "discriminator": [
+        12,
+        72,
+        111,
+        222,
+        122,
+        157,
+        25,
+        43
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "market"
+        },
+        {
+          "name": "test_faucet",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  101,
+                  115,
+                  116,
+                  95,
+                  102,
+                  97,
+                  117,
+                  99,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "deposit",
       "docs": [
         "Deposits base or quote tokens and credits the caller's free balance."
@@ -2846,6 +2904,19 @@
       ]
     },
     {
+      "name": "TestFaucetClosedEvent",
+      "discriminator": [
+        169,
+        116,
+        71,
+        236,
+        191,
+        44,
+        241,
+        40
+      ]
+    },
+    {
       "name": "TestFaucetInitializedEvent",
       "discriminator": [
         247,
@@ -3350,6 +3421,11 @@
       "code": 6092,
       "name": "InvalidFaucetDestinationOwner",
       "msg": "Faucet destination token account is not owned by the claimant"
+    },
+    {
+      "code": 6093,
+      "name": "FaucetMustBeClosed",
+      "msg": "The market test faucet must be closed before closing the market"
     }
   ],
   "types": [
@@ -4405,6 +4481,34 @@
           {
             "name": "quote_amount",
             "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TestFaucetClosedEvent",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "test_faucet",
+            "type": "pubkey"
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "base_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "quote_mint",
+            "type": "pubkey"
           }
         ]
       }

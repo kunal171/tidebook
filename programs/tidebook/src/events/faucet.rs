@@ -21,3 +21,12 @@ pub struct TestFaucetClaimedEvent {
     pub base_amount: u64,
     pub quote_amount: u64,
 }
+
+#[event]
+pub struct TestFaucetClosedEvent {
+    pub market: Pubkey,
+    pub test_faucet: Pubkey,
+    pub authority: Pubkey,
+    pub base_mint: Pubkey,
+    pub quote_mint: Pubkey,
+}

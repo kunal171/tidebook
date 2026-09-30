@@ -288,4 +288,7 @@ pub enum TidebookError {
 
     #[msg("Faucet destination token account is not owned by the claimant")]
     InvalidFaucetDestinationOwner = 92,
+
+    #[msg("The market test faucet must be closed before closing the market")]
+    FaucetMustBeClosed = 93,
 }

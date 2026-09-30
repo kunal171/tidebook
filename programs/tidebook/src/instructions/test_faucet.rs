@@ -126,6 +126,45 @@ pub fn handle_initialize_test_faucet(
 }
 
 #[derive(Accounts)]
+pub struct CloseTestFaucet<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(has_one = authority)]
+    pub market: Account<'info, Market>,
+
+    #[account(
+        mut,
+        close = authority,
+        seeds = [TEST_FAUCET_SEED, market.key().as_ref()],
+        bump = test_faucet.bump,
+        constraint = test_faucet.market == market.key() @ faucet::FaucetMarketMismatch,
+        constraint = test_faucet.base_mint == market.base_mint
+            @ faucet::FaucetMintMismatch,
+        constraint = test_faucet.quote_mint == market.quote_mint
+            @ faucet::FaucetMintMismatch
+    )]
+    pub test_faucet: Account<'info, TestFaucet>,
+}
+
+/// Permanently disables public minting for this research market.
+///
+/// The stateless authority PDA cannot sign outside Tidebook, and every claim
+/// requires the configuration account. Closing the config therefore freezes
+/// both test-mint supplies without needing to transfer authority elsewhere.
+pub fn handle_close_test_faucet(ctx: Context<CloseTestFaucet>) -> Result<()> {
+    emit!(crate::events::TestFaucetClosedEvent {
+        market: ctx.accounts.market.key(),
+        test_faucet: ctx.accounts.test_faucet.key(),
+        authority: ctx.accounts.authority.key(),
+        base_mint: ctx.accounts.test_faucet.base_mint,
+        quote_mint: ctx.accounts.test_faucet.quote_mint,
+    });
+
+    Ok(())
+}
+
+#[derive(Accounts)]
 pub struct ClaimTestTokens<'info> {
     pub claimant: Signer<'info>,
 
