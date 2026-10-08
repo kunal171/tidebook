@@ -1,4 +1,10 @@
-import { AnchorProvider, BN, Program, type Idl } from "@anchor-lang/core";
+import {
+  AnchorProvider,
+  BN,
+  EventParser,
+  Program,
+  type Idl,
+} from "@anchor-lang/core";
 import {
   Connection,
   PublicKey,
@@ -120,6 +126,16 @@ export interface PriceLevelAccount {
 export interface PriceLevelNeighbors {
   betterLevel: PublicKey | null;
   worseLevel: PublicKey | null;
+}
+
+export interface PriceLevelView extends PriceLevelAccount {
+  address: PublicKey;
+}
+
+export interface LastTradeView {
+  price: BN;
+  signature: string;
+  blockTime: number | null;
 }
 
 export interface OrderAccount {
@@ -275,6 +291,101 @@ export function deriveTraderBalancePda(market: PublicKey, owner: PublicKey) {
     [Buffer.from(TRADER_BALANCE_SEED), market.toBuffer(), owner.toBuffer()],
     PROGRAM_ID,
   )[0];
+}
+
+/**
+ * Reads one side of the program-maintained price-level linked list.
+ *
+ * This is deliberately an RPC traversal rather than a scan of every program
+ * account: `bestBid`/`bestAsk` and `worsePrice` define the canonical ordering.
+ * The bound prevents a malformed list from causing an unbounded browser loop;
+ * a production indexer can serve deeper books without sequential RPC calls.
+ */
+export async function fetchPriceLevelSide(
+  program: Program,
+  market: PublicKey,
+  side: OrderSide,
+  bestPrice: BN | null,
+  limit = 50,
+): Promise<PriceLevelView[]> {
+  const levels: PriceLevelView[] = [];
+  const visited = new Set<string>();
+  const accounts = getTidebookAccounts(program);
+  let currentPrice = bestPrice;
+
+  while (currentPrice && levels.length < limit) {
+    const address = derivePriceLevelPda(market, side, currentPrice);
+    const key = address.toBase58();
+    if (visited.has(key)) {
+      throw new Error("Price-level index contains a cycle");
+    }
+    visited.add(key);
+
+    const level = await accounts.priceLevel.fetchNullable(address);
+    if (!level) {
+      throw new Error(`Missing ${side} price level ${key}`);
+    }
+    const decodedSide: OrderSide = "bid" in level.side ? "bid" : "ask";
+    if (
+      !level.market.equals(market) ||
+      decodedSide !== side ||
+      !level.price.eq(currentPrice)
+    ) {
+      throw new Error(`Invalid ${side} price-level link`);
+    }
+
+    levels.push({ ...level, address });
+    currentPrice = level.worsePrice;
+  }
+
+  return levels;
+}
+
+/**
+ * Recovers the latest executed price from successful FillEvent logs.
+ *
+ * Tidebook does not currently store `lastTradePrice` in the Market account.
+ * Scanning a small recent window is acceptable for this research UI, but an
+ * indexer should own trade history and candles once market activity grows.
+ */
+export async function fetchLatestTrade(
+  connection: Connection,
+  program: Program,
+  market: PublicKey,
+  signatureLimit = 25,
+): Promise<LastTradeView | null> {
+  const signatures = await connection.getSignaturesForAddress(market, {
+    limit: signatureLimit,
+  });
+  const successful = signatures.filter((entry) => entry.err === null);
+  if (successful.length === 0) return null;
+
+  const transactions = await connection.getTransactions(
+    successful.map((entry) => entry.signature),
+    { commitment: "confirmed", maxSupportedTransactionVersion: 0 },
+  );
+  const parser = new EventParser(program.programId, program.coder);
+
+  for (let index = 0; index < transactions.length; index += 1) {
+    const logs = transactions[index]?.meta?.logMessages;
+    if (!logs) continue;
+
+    let latestPrice: BN | null = null;
+    for (const event of parser.parseLogs(logs)) {
+      if (event.name !== "FillEvent") continue;
+      const data = event.data as { market: PublicKey; executionPrice: BN };
+      if (data.market.equals(market)) latestPrice = data.executionPrice;
+    }
+    if (latestPrice) {
+      return {
+        price: latestPrice,
+        signature: successful[index].signature,
+        blockTime: successful[index].blockTime ?? null,
+      };
+    }
+  }
+
+  return null;
 }
 
 /**
