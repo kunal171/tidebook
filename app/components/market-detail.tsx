@@ -28,6 +28,8 @@ import {
   formatAtomicAmount,
   getOwnedTokenBalance,
   findOwnedTokenAccount,
+  fetchLatestTrade,
+  fetchPriceLevelSide,
   getTidebookAccounts,
   getTidebookProgram,
   getTidebookReadProgram,
@@ -37,6 +39,8 @@ import {
   TOKEN_PROGRAM_ID,
   type MarketAccount,
   type MarketFeesAccount,
+  type LastTradeView,
+  type PriceLevelView,
   type TestFaucetAccount,
   type OrderSide,
   type TraderBalanceAccount,
@@ -98,6 +102,10 @@ export function MarketDetail({ address }: { address: string }) {
   const { role } = useProtocolRole();
   const [market, setMarket] = useState<MarketAccount | null>(null);
   const [marketFees, setMarketFees] = useState<MarketFeesAccount | null>(null);
+  const [bidLevels, setBidLevels] = useState<PriceLevelView[]>([]);
+  const [askLevels, setAskLevels] = useState<PriceLevelView[]>([]);
+  const [lastTrade, setLastTrade] = useState<LastTradeView | null>(null);
+  const [bookError, setBookError] = useState<string | null>(null);
   const [testFaucet, setTestFaucet] = useState<TestFaucetAccount | null>(null);
   const [serverFaucetPair, setServerFaucetPair] = useState<boolean | null>(
     null,
@@ -197,14 +205,52 @@ export function MarketDetail({ address }: { address: string }) {
       setTestFaucet(faucet);
 
       if (!account) {
+        setBidLevels([]);
+        setAskLevels([]);
+        setLastTrade(null);
         setError("Market account was not found on devnet");
+        return;
       }
+
+      // The book is canonical on-chain state. Trade history currently lives in
+      // FillEvent logs, so failure to fetch recent history must not hide the
+      // usable market or its order book.
+      setBookError(null);
+      try {
+        const [bids, asks] = await Promise.all([
+          fetchPriceLevelSide(
+            readProgram,
+            marketAddress,
+            "bid",
+            account.bestBid,
+          ),
+          fetchPriceLevelSide(
+            readProgram,
+            marketAddress,
+            "ask",
+            account.bestAsk,
+          ),
+        ]);
+        setBidLevels(bids);
+        setAskLevels(asks);
+      } catch (cause) {
+        setBidLevels([]);
+        setAskLevels([]);
+        setBookError(getErrorMessage(cause));
+      }
+
+      const recentTrade = await fetchLatestTrade(
+        connection,
+        readProgram,
+        marketAddress,
+      ).catch(() => null);
+      setLastTrade(recentTrade);
     } catch (cause) {
       setError(getErrorMessage(cause));
     } finally {
       setLoading(false);
     }
-  }, [marketAddress, readProgram]);
+  }, [connection, marketAddress, readProgram]);
 
   useEffect(() => {
     void loadMarket();
@@ -290,6 +336,15 @@ export function MarketDetail({ address }: { address: string }) {
         balanceAsset === "base" ? market.baseDecimals : market.quoteDecimals,
         "Amount",
       );
+      const freeBalance =
+        balanceAsset === "base"
+          ? traderBalance.baseFree
+          : traderBalance.quoteFree;
+      if (action === "withdraw" && amount.gt(freeBalance)) {
+        throw new Error(
+          "Withdrawal exceeds the selected asset's free internal balance",
+        );
+      }
       const mint = balanceAsset === "base" ? market.baseMint : market.quoteMint;
       const tokenAccount = await findOwnedTokenAccount(
         connection,
@@ -883,9 +938,22 @@ export function MarketDetail({ address }: { address: string }) {
   }, [balanceAmount, balanceAsset, market]);
   const selectedWalletBalance =
     balanceAsset === "base" ? walletBaseBalance : walletQuoteBalance;
+  const selectedFreeBalance = traderBalance
+    ? balanceAsset === "base"
+      ? traderBalance.baseFree
+      : traderBalance.quoteFree
+    : new BN(0);
   const depositExceedsWallet = Boolean(
     rawBalanceAmount && rawBalanceAmount.gt(selectedWalletBalance),
   );
+  const withdrawalExceedsFree = Boolean(
+    rawBalanceAmount && rawBalanceAmount.gt(selectedFreeBalance),
+  );
+  const submitLabel = pending
+    ? "Submitting…"
+    : side === "bid"
+      ? "Buy base token"
+      : "Sell base token";
 
   return (
     <div className="app-shell">
@@ -928,6 +996,28 @@ export function MarketDetail({ address }: { address: string }) {
                 </div>
 
                 <dl className="market-metadata">
+                  <div>
+                    <dt>Last traded price</dt>
+                    <dd>
+                      {lastTrade
+                        ? (
+                            <a
+                              href={transactionExplorerUrl(
+                                lastTrade.signature,
+                              )}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              {formatAtomicAmount(
+                                lastTrade.price,
+                                market.quoteDecimals,
+                              )}{" "}
+                              ↗
+                            </a>
+                          )
+                        : "No recent trade found"}
+                    </dd>
+                  </div>
                   <div>
                     <dt>Authority</dt>
                     <dd>{shortAddress(market.authority.toBase58())}</dd>
@@ -1120,8 +1210,8 @@ export function MarketDetail({ address }: { address: string }) {
                           setSide(event.target.value as OrderSide)
                         }
                       >
-                        <option value="bid">Bid — buy base</option>
-                        <option value="ask">Ask — sell base</option>
+                        <option value="bid">Buy base token</option>
+                        <option value="ask">Sell base token</option>
                       </select>
                     </label>
 
@@ -1177,15 +1267,13 @@ export function MarketDetail({ address }: { address: string }) {
                         pending
                       }
                     >
-                      {pending
-                        ? "Submitting…"
-                        : crossesBest
-                          ? `Match best ${side === "bid" ? "ask" : "bid"}`
-                          : `Place ${side}`}
+                      {submitLabel}
                     </button>
                     {crossesBest ? (
                       <small>
-                        This transaction processes up to{" "}
+                        Your limit price crosses an existing{" "}
+                        {side === "bid" ? "sell" : "buy"} order, so it will
+                        trade automatically. This transaction processes up to{" "}
                         {MAX_MATCHES_PER_TRANSACTION} FIFO makers atomically. A
                         safe remainder rests at your limit price; a cap-blocked
                         remainder stays free for retry.
@@ -1197,6 +1285,104 @@ export function MarketDetail({ address }: { address: string }) {
                 )}
               </section>
             </div>
+
+            <section className="admin-card order-book-card">
+              <div className="order-book-heading">
+                <div>
+                  <div className="card-label">Live on-chain depth</div>
+                  <h2>Order book</h2>
+                </div>
+                <button
+                  className="text-button"
+                  type="button"
+                  disabled={loading}
+                  onClick={() => void loadMarket()}
+                >
+                  Refresh
+                </button>
+              </div>
+
+              {bookError && (
+                <div className="transaction-message transaction-error">
+                  Could not load the order book: {bookError}
+                </div>
+              )}
+
+              <div className="order-book-grid">
+                <div className="order-book-side">
+                  <h3>Buy orders</h3>
+                  <div className="order-book-columns" aria-hidden="true">
+                    <span>Price</span>
+                    <span>Base quantity</span>
+                    <span>Orders</span>
+                  </div>
+                  {bidLevels.length === 0 ? (
+                    <p className="order-book-empty">No open buy orders</p>
+                  ) : (
+                    bidLevels.map((level) => (
+                      <div
+                        className="order-book-row order-book-bid"
+                        key={level.address.toBase58()}
+                      >
+                        <span>
+                          {formatAtomicAmount(
+                            level.price,
+                            market.quoteDecimals,
+                          )}
+                        </span>
+                        <span>
+                          {formatAtomicAmount(
+                            level.totalRemainingQuantity,
+                            market.baseDecimals,
+                          )}
+                        </span>
+                        <span>{level.orderCount.toString()}</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                <div className="order-book-side">
+                  <h3>Sell orders</h3>
+                  <div className="order-book-columns" aria-hidden="true">
+                    <span>Price</span>
+                    <span>Base quantity</span>
+                    <span>Orders</span>
+                  </div>
+                  {askLevels.length === 0 ? (
+                    <p className="order-book-empty">No open sell orders</p>
+                  ) : (
+                    askLevels.map((level) => (
+                      <div
+                        className="order-book-row order-book-ask"
+                        key={level.address.toBase58()}
+                      >
+                        <span>
+                          {formatAtomicAmount(
+                            level.price,
+                            market.quoteDecimals,
+                          )}
+                        </span>
+                        <span>
+                          {formatAtomicAmount(
+                            level.totalRemainingQuantity,
+                            market.baseDecimals,
+                          )}
+                        </span>
+                        <span>{level.orderCount.toString()}</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <p className="order-book-note">
+                Levels are ordered by the program&apos;s linked price index. Last
+                traded price is recovered from recent successful FillEvent
+                logs; a production indexer will provide complete trade history
+                and candles.
+              </p>
+            </section>
 
             <ServerTestFaucet
               baseMint={market.baseMint}
@@ -1465,7 +1651,9 @@ export function MarketDetail({ address }: { address: string }) {
                           className="admin-action-button"
                           type="button"
                           disabled={
-                            !rawBalanceAmount || balancePending !== null
+                            !rawBalanceAmount ||
+                            withdrawalExceedsFree ||
+                            balancePending !== null
                           }
                           onClick={() => void transferBalance("withdraw")}
                         >
@@ -1478,6 +1666,12 @@ export function MarketDetail({ address }: { address: string }) {
                         <small className="form-error">
                           Deposit exceeds the selected asset balance in your
                           wallet.
+                        </small>
+                      )}
+                      {withdrawalExceedsFree && (
+                        <small className="form-error">
+                          Withdrawal exceeds the selected asset&apos;s free
+                          internal balance.
                         </small>
                       )}
                       <small>
