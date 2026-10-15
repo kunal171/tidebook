@@ -4350,10 +4350,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tidebook-indexer"
-version = "0.1.0"
-
-[[package]]
 name = "tinyvec"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

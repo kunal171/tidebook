@@ -1,8 +1,8 @@
 [workspace]
 members = [
     "programs/*",
-    "services/indexer",
 ]
+exclude = ["services/indexer"]
 resolver = "2"
 
 [workspace.package]
