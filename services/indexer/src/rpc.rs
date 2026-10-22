@@ -5,7 +5,16 @@ use std::error::Error;
 use solana_commitment_config::CommitmentConfig;
 use solana_pubkey::Pubkey;
 use solana_rpc_client::rpc_client::{GetConfirmedSignaturesForAddress2Config, RpcClient};
+use solana_rpc_client_api::config::RpcTransactionConfig;
+use solana_signature::Signature;
+use solana_transaction_status_client_types::{
+    option_serializer::OptionSerializer, UiTransactionEncoding,
+};
 
+/// Lightweight entry returned by `getSignaturesForAddress`.
+///
+/// This record is suitable for pagination and checkpoint discovery. Complete
+/// execution data must still be loaded through `getTransaction`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignatureRecord {
     pub signature: String,
@@ -13,6 +22,11 @@ pub struct SignatureRecord {
     pub block_time: Option<i64>,
 }
 
+/// Immutable source data retained for a successfully finalized transaction.
+///
+/// Keeping logs in their original order is essential: multiple Anchor events
+/// may be emitted by one transaction and their position becomes the stable
+/// `event_index` used for idempotent database writes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransactionRecord {
     pub signature: String,
@@ -21,6 +35,10 @@ pub struct TransactionRecord {
     pub logs: Vec<String>,
 }
 
+/// Returns the newest successful finalized signatures involving `program_id`.
+///
+/// Failed transactions are discarded because their logs describe execution
+/// attempts whose account mutations were rolled back by the runtime.
 pub fn fetch_recent_successful_signatures(
     client: &RpcClient,
     program_id: &Pubkey,
@@ -53,16 +71,27 @@ pub fn fetch_recent_successful_signatures(
     Ok(successful)
 }
 
+/// Fetches a successful finalized transaction and preserves its raw logs.
+///
+/// `None` means the RPC response cannot be used as an authoritative source
+/// record because metadata is absent or reports a failed execution. Transport,
+/// parsing, and RPC failures remain errors so callers can retry rather than
+/// silently advancing their durable checkpoint.
 pub fn fetch_transaction(
     client: &RpcClient,
     signature_record: &SignatureRecord,
-) -> Result<Option<TransactionRecord, Box<dyn Error + Send + Sync>>> {
+) -> Result<Option<TransactionRecord>, Box<dyn Error + Send + Sync>> {
     let signature: Signature = signature_record.signature.parse()?;
+
     let transaction = client.get_transaction_with_config(
         &signature,
         RpcTransactionConfig {
+            // JSON retains metadata and log messages without requiring binary
+            // transaction decoding during this indexing phase.
             encoding: Some(UiTransactionEncoding::Json),
             commitment: Some(CommitmentConfig::finalized()),
+            // Accept legacy and v0 transactions. Newer versions must be added
+            // deliberately instead of being decoded with v0 assumptions.
             max_supported_transaction_version: Some(0),
         },
     )?;
@@ -77,6 +106,8 @@ pub fn fetch_transaction(
         return Ok(None);
     }
 
+    // Solana distinguishes an explicit null (`None`) from an omitted (`Skip`)
+    // JSON field. Neither supplies logs, so both normalize to an empty vector.
     let logs = match meta.log_messages {
         OptionSerializer::Some(logs) => logs,
         OptionSerializer::None | OptionSerializer::Skip => Vec::new(),
