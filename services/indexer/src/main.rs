@@ -10,8 +10,10 @@ mod rpc;
 use std::{error::Error, str::FromStr};
 
 use config::Config;
-use rpc::fetch_recent_successful_signatures;
+use rpc::{fetch_recent_successful_signatures, fetch_transaction};
+use solana_commitment_config::CommitmentConfig;
 use solana_pubkey::Pubkey;
+use solana_rpc_client::rpc_client::RpcClient;
 
 const INITIAL_SIGNATURE_LIMIT: usize = 20;
 
@@ -23,19 +25,43 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     println!("RPC endpoint: {}", config.rpc_url);
     println!("Program: {program_id}");
 
+    // Reuse one blocking client for the signature page and every transaction
+    // fetch. Besides avoiding repeated client construction, this preserves the
+    // HTTP connection pool during a backfill batch.
+    let client =
+        RpcClient::new_with_commitment(config.rpc_url.clone(), CommitmentConfig::finalized());
+
     let signatures =
-        fetch_recent_successful_signatures(&config.rpc_url, &program_id, INITIAL_SIGNATURE_LIMIT)?;
+        fetch_recent_successful_signatures(&client, &program_id, INITIAL_SIGNATURE_LIMIT)?;
 
     println!(
         "Found {} successful finalized transactions:",
         signatures.len()
     );
 
-    for record in signatures {
+    for signature in signatures {
+        let Some(transaction) = fetch_transaction(&client, &signature)? else {
+            println!(
+                "Skipped transaction without successful metadata: {}",
+                signature.signature
+            );
+            continue;
+        };
+
         println!(
-            "slot={} signature={} block_time={:?}",
-            record.slot, record.signature, record.block_time,
+            "slot={} signature={} block_time={:?} logs={}",
+            transaction.slot,
+            transaction.signature,
+            transaction.block_time,
+            transaction.logs.len(),
         );
+
+        // Raw logs are intentionally printed before event decoding exists.
+        // Later milestones will persist these source records so projections
+        // can be rebuilt when Tidebook's event schema evolves.
+        for log in transaction.logs {
+            println!("  {log}");
+        }
     }
 
     Ok(())

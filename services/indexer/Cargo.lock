@@ -3589,6 +3589,9 @@ dependencies = [
  "solana-commitment-config",
  "solana-pubkey 4.4.0",
  "solana-rpc-client",
+ "solana-rpc-client-api",
+ "solana-signature",
+ "solana-transaction-status-client-types",
 ]
 
 [[package]]
