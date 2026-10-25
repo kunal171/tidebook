@@ -58,7 +58,7 @@ Done when the existing fee-aware CLOB completes its full lifecycle on devnet.
 
 ## Phase 1: indexer foundation
 
-Proposed branch: `feature/indexer-foundation`.
+Foundation branch: `feature/indexer-foundation`.
 
 Tidebook already emits typed events for governance, markets, balances, orders,
 fills, and fees. The indexer should turn those finalized events into searchable
@@ -114,6 +114,28 @@ Safety and recovery rules:
 - use indexed state only for discovery, display, and planning;
 - refetch security-sensitive accounts and book links from RPC before building
   or submitting a transaction.
+
+### Delivery slices
+
+The indexer is intentionally divided into small branches so RPC ingestion,
+decoding, persistence, and recovery can each be reviewed independently.
+
+1. `feature/indexer-foundation` establishes the independent Rust workspace,
+   fetches a recent finalized transaction batch, rejects rolled-back execution,
+   preserves raw logs, and extracts only Tidebook-owned `Program data:` entries
+   across nested CPI calls.
+2. `feature/indexer-event-decoding` Base64-decodes raw payloads, validates the
+   eight-byte Anchor discriminator, and maps every supported payload to a typed
+   Tidebook event.
+3. `feature/indexer-storage` introduces append-only PostgreSQL transaction and
+   event tables plus idempotent writes.
+4. `feature/indexer-backfill` adds signature pagination and durable finalized
+   checkpoints for complete historical replay.
+5. `feature/indexer-live-sync` adds WebSocket log ingestion and resumes from the
+   durable checkpoint after every disconnect so gaps are backfilled.
+
+The foundation's fixed batch of at most 20 signatures is diagnostic. It is not
+described as historical backfill until pagination and checkpoints exist.
 
 Initial API surface:
 
@@ -414,18 +436,11 @@ mainnet liquidity acquisition.
 
 ## Recommended next milestone
 
-Begin `feature/indexer-foundation` with only:
-
-1. an event completeness audit;
-2. the PostgreSQL source and projection schema;
-3. finalized historical backfill;
-4. deterministic Anchor event decoding;
-5. idempotent replay and failure-path tests;
-6. no frontend migration or Yellowstone dependency yet.
-
-This creates the shared historical and discovery layer needed by the
-reference-price UI, market-maker service, monitoring, and later AMM while
-leaving all transaction authorization and validation onchain.
+Start `feature/indexer-event-decoding`. Keep the decoder deterministic and
+independent of PostgreSQL: preserve the raw Base64 payload, require a complete
+eight-byte Anchor discriminator, decode all supported fields without trailing
+bytes, and return explicit errors for malformed or unknown events. Persistence,
+frontend migration, and Yellowstone remain out of scope for that branch.
 
 ## References
 

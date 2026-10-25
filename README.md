@@ -56,6 +56,7 @@ tidebook/
 ├── app/                         # Companion web application
 ├── docs/                        # Architecture and research documentation
 ├── programs/tidebook/          # Anchor program and LiteSVM tests
+├── services/indexer/            # Independent finalized-log ingestion service
 ├── Anchor.toml
 └── rust-toolchain.toml
 ```

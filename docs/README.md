@@ -21,6 +21,8 @@ remaining research milestones that are still planned.
   verification, and the current IDL-upload limitation.
 - [Devnet address registry](devnet-addresses.md): program, governance, mint,
   market, and transaction addresses used by the shared research deployment.
+- [Indexer service](../services/indexer/README.md): finalized RPC ingestion,
+  nested-CPI event ownership, local operation, and deferred milestones.
 - [Draw.io architecture diagram](diagrams/tidebook-architecture.drawio):
   editable source for the current and planned architecture.
 

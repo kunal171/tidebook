@@ -1,0 +1,19 @@
+[package]
+name = "tidebook-indexer"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89.0"
+
+# The off-chain service intentionally owns a separate dependency graph. This
+# allows its RPC client to advance without forcing the Anchor/LiteSVM program
+# test stack onto the same set of modular Solana crate versions.
+[workspace]
+resolver = "2"
+
+[dependencies]
+solana-rpc-client = { version = "=4.3.0", default-features = false }
+solana-pubkey = "=4.4.0"
+solana-commitment-config = "=3.1.1"
+solana-rpc-client-api = "=4.3.0"
+solana-signature = "=3.6.0"
+solana-transaction-status-client-types = "=4.3.0"
