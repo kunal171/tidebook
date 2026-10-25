@@ -17,21 +17,17 @@ pub struct RawEventLog {
     pub payload_base64: String,
 }
 
-
 /// Extracts data logs emitted directly by Tidebook.
 ///
 /// Solana transactions can invoke multiple nested programs. We therefore track
 /// the active invocation stack and accept `Program data:` only when Tidebook is
 /// at the top of that stack.
-pub fn extract_program_data(
-    logs: &[String],
-    program_id: &Pubkey,
-) -> Vec<RawEventLog> {
+pub fn extract_program_data(logs: &[String], program_id: &Pubkey) -> Vec<RawEventLog> {
     let target_program = program_id.to_string();
     let mut invocation_stack: Vec<&str> = Vec::new();
     let mut events = Vec::new();
 
-     for (log_index, log) in logs.iter().enumerate() {
+    for (log_index, log) in logs.iter().enumerate() {
         if let Some(invoked_program) = parse_invocation(log) {
             invocation_stack.push(invoked_program);
             continue;
@@ -66,7 +62,6 @@ pub fn extract_program_data(
     }
 
     events
-
 }
 
 fn parse_invocation(log: &str) -> Option<&str> {
@@ -86,4 +81,155 @@ fn parse_completion(log: &str) -> Option<&str> {
     remainder
         .split_once(FAILED_MARKER)
         .map(|(program_id, _)| program_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn logs(lines: &[String]) -> Vec<String> {
+        lines.to_vec()
+    }
+
+    #[test]
+    fn extracts_target_events_in_original_log_order() {
+        let target = Pubkey::new_from_array([1; 32]);
+        let lines = logs(&[
+            format!("Program {target} invoke [1]"),
+            "Program log: before".to_owned(),
+            "Program data: first".to_owned(),
+            "Program data: second".to_owned(),
+            format!("Program {target} success"),
+        ]);
+
+        let events = extract_program_data(&lines, &target);
+
+        assert_eq!(
+            events,
+            vec![
+                RawEventLog {
+                    log_index: 2,
+                    payload_base64: "first".to_owned(),
+                },
+                RawEventLog {
+                    log_index: 3,
+                    payload_base64: "second".to_owned(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn ignores_data_emitted_by_nested_cpi_program() {
+        let target = Pubkey::new_from_array([1; 32]);
+        let child = Pubkey::new_from_array([2; 32]);
+        let lines = logs(&[
+            format!("Program {target} invoke [1]"),
+            "Program data: before-cpi".to_owned(),
+            format!("Program {child} invoke [2]"),
+            "Program data: child-event".to_owned(),
+            format!("Program {child} success"),
+            "Program data: after-cpi".to_owned(),
+            format!("Program {target} success"),
+        ]);
+
+        let events = extract_program_data(&lines, &target);
+
+        assert_eq!(
+            events,
+            vec![
+                RawEventLog {
+                    log_index: 1,
+                    payload_base64: "before-cpi".to_owned(),
+                },
+                RawEventLog {
+                    log_index: 5,
+                    payload_base64: "after-cpi".to_owned(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn resumes_target_after_nested_program_failure() {
+        let target = Pubkey::new_from_array([1; 32]);
+        let child = Pubkey::new_from_array([2; 32]);
+        let lines = logs(&[
+            format!("Program {target} invoke [1]"),
+            format!("Program {child} invoke [2]"),
+            "Program data: child-event".to_owned(),
+            format!("Program {child} failed: custom program error: 0x1"),
+            "Program data: target-event".to_owned(),
+            format!("Program {target} success"),
+        ]);
+
+        let events = extract_program_data(&lines, &target);
+
+        assert_eq!(
+            events,
+            vec![RawEventLog {
+                log_index: 4,
+                payload_base64: "target-event".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn extracts_target_event_when_tidebook_is_invoked_through_cpi() {
+        let target = Pubkey::new_from_array([1; 32]);
+        let parent = Pubkey::new_from_array([2; 32]);
+        let lines = logs(&[
+            format!("Program {parent} invoke [1]"),
+            format!("Program {target} invoke [2]"),
+            "Program data: target-cpi-event".to_owned(),
+            format!("Program {target} success"),
+            format!("Program {parent} success"),
+        ]);
+
+        let events = extract_program_data(&lines, &target);
+
+        assert_eq!(
+            events,
+            vec![RawEventLog {
+                log_index: 2,
+                payload_base64: "target-cpi-event".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn ignores_data_outside_target_execution() {
+        let target = Pubkey::new_from_array([1; 32]);
+        let unrelated = Pubkey::new_from_array([2; 32]);
+        let lines = logs(&[
+            "Program data: no-active-program".to_owned(),
+            format!("Program {unrelated} invoke [1]"),
+            "Program data: unrelated-event".to_owned(),
+            format!("Program {unrelated} success"),
+        ]);
+
+        assert!(extract_program_data(&lines, &target).is_empty());
+    }
+
+    #[test]
+    fn mismatched_completion_does_not_pop_active_program() {
+        let target = Pubkey::new_from_array([1; 32]);
+        let unrelated = Pubkey::new_from_array([2; 32]);
+        let lines = logs(&[
+            format!("Program {target} invoke [1]"),
+            format!("Program {unrelated} success"),
+            "Program data: still-target-event".to_owned(),
+            format!("Program {target} success"),
+        ]);
+
+        let events = extract_program_data(&lines, &target);
+
+        assert_eq!(
+            events,
+            vec![RawEventLog {
+                log_index: 2,
+                payload_base64: "still-target-event".to_owned(),
+            }]
+        );
+    }
 }

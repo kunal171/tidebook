@@ -1,20 +1,21 @@
 //! Tidebook off-chain indexing service.
 //!
-//! The first milestone backfills finalized Tidebook transactions and decodes
-//! their events. Database storage and live subscriptions are intentionally
-//! deferred until historical ingestion is correct.
+//! The foundation milestone fetches a recent finalized transaction batch and
+//! extracts raw Tidebook-owned event payloads from its execution logs. Anchor
+//! event decoding, paginated backfill, storage, and live subscriptions are
+//! intentionally deferred to focused follow-up milestones.
 
 mod config;
-mod rpc;
 mod events;
+mod rpc;
 
-use events::extract_program_data;
-use std::{error::Error, str::FromStr};
 use config::Config;
+use events::extract_program_data;
 use rpc::{fetch_recent_successful_signatures, fetch_transaction};
 use solana_commitment_config::CommitmentConfig;
 use solana_pubkey::Pubkey;
 use solana_rpc_client::rpc_client::RpcClient;
+use std::{error::Error, str::FromStr};
 
 const INITIAL_SIGNATURE_LIMIT: usize = 20;
 
@@ -62,11 +63,9 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         for event in raw_events {
             println!(
                 "  event_log_index={} payload={}",
-                event.log_index,
-                event.payload_base64,
+                event.log_index, event.payload_base64,
             );
         }
-
     }
 
     Ok(())
