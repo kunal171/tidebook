@@ -100,17 +100,10 @@ pub fn fetch_transaction(
         return Ok(None);
     };
 
-    // Keep this defensive check even though the earlier signature query
-    // already filters failed transactions.
-    if meta.err.is_some() {
-        return Ok(None);
-    }
-
     // Solana distinguishes an explicit null (`None`) from an omitted (`Skip`)
     // JSON field. Neither supplies logs, so both normalize to an empty vector.
-    let logs = match meta.log_messages {
-        OptionSerializer::Some(logs) => logs,
-        OptionSerializer::None | OptionSerializer::Skip => Vec::new(),
+    let Some(logs) = normalize_logs(meta.err.is_some(), meta.log_messages) else {
+        return Ok(None);
     };
 
     Ok(Some(TransactionRecord {
@@ -119,4 +112,71 @@ pub fn fetch_transaction(
         block_time: transaction.block_time,
         logs,
     }))
+}
+
+/// Applies Tidebook's ingestion policy to transaction execution logs.
+///
+/// A failed execution cannot become an indexed source record because Solana
+/// rolled back its state changes. Missing log fields are valid for a successful
+/// transaction and normalize to an empty collection.
+fn normalize_logs(
+    execution_failed: bool,
+    log_messages: OptionSerializer<Vec<String>>,
+) -> Option<Vec<String>> {
+    if execution_failed {
+        return None;
+    }
+
+    Some(match log_messages {
+        OptionSerializer::Some(logs) => logs,
+        OptionSerializer::None | OptionSerializer::Skip => Vec::new(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn successful_transaction_preserves_log_order() {
+        let logs = vec![
+            "Program log: first".to_owned(),
+            "Program data: second".to_owned(),
+            "Program log: third".to_owned(),
+        ];
+
+        let normalized = normalize_logs(false, OptionSerializer::Some(logs.clone()));
+
+        assert_eq!(normalized, Some(logs));
+    }
+
+    #[test]
+    fn failed_transaction_is_rejected_even_when_logs_exist() {
+        let logs = vec!["Program data: rolled-back-event".to_owned()];
+
+        let normalized = normalize_logs(true, OptionSerializer::Some(logs));
+
+        assert_eq!(normalized, None);
+    }
+
+    #[test]
+    fn explicit_missing_logs_normalize_to_empty_collection() {
+        let normalized = normalize_logs(false, OptionSerializer::None);
+
+        assert_eq!(normalized, Some(Vec::new()));
+    }
+
+    #[test]
+    fn omitted_logs_normalize_to_empty_collection() {
+        let normalized = normalize_logs(false, OptionSerializer::Skip);
+
+        assert_eq!(normalized, Some(Vec::new()));
+    }
+
+    #[test]
+    fn successful_transaction_with_empty_logs_remains_valid() {
+        let normalized = normalize_logs(false, OptionSerializer::Some(Vec::new()));
+
+        assert_eq!(normalized, Some(Vec::new()));
+    }
 }

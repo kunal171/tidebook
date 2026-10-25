@@ -6,9 +6,10 @@
 
 mod config;
 mod rpc;
+mod events;
 
+use events::extract_program_data;
 use std::{error::Error, str::FromStr};
-
 use config::Config;
 use rpc::{fetch_recent_successful_signatures, fetch_transaction};
 use solana_commitment_config::CommitmentConfig;
@@ -47,21 +48,25 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             );
             continue;
         };
+        let raw_events = extract_program_data(&transaction.logs, &program_id);
 
         println!(
-            "slot={} signature={} block_time={:?} logs={}",
+            "slot={} signature={} block_time={:?} logs={} tidebook_events={}",
             transaction.slot,
             transaction.signature,
             transaction.block_time,
             transaction.logs.len(),
+            raw_events.len(),
         );
 
-        // Raw logs are intentionally printed before event decoding exists.
-        // Later milestones will persist these source records so projections
-        // can be rebuilt when Tidebook's event schema evolves.
-        for log in transaction.logs {
-            println!("  {log}");
+        for event in raw_events {
+            println!(
+                "  event_log_index={} payload={}",
+                event.log_index,
+                event.payload_base64,
+            );
         }
+
     }
 
     Ok(())
