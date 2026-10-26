@@ -106,6 +106,59 @@ pub fn decode_event(raw_event: &RawEventLog) -> Result<DecodedEventLog, EventDec
 #[cfg(test)]
 mod tests {
     use super::*;
+    use solana_pubkey::Pubkey;
+
+    fn market_initialized_fixture() -> (Vec<u8>, MarketInitializedEvent) {
+        let market = Pubkey::new_from_array([1; 32]);
+        let market_fees = Pubkey::new_from_array([2; 32]);
+        let authority = Pubkey::new_from_array([3; 32]);
+        let base_mint = Pubkey::new_from_array([4; 32]);
+        let quote_mint = Pubkey::new_from_array([5; 32]);
+        let base_vault = Pubkey::new_from_array([6; 32]);
+        let quote_vault = Pubkey::new_from_array([7; 32]);
+        let price_tick_size: u64 = 10_000;
+        let quantity_lot_size: u64 = 100_000;
+
+        let mut body = Vec::with_capacity(240);
+
+        for pubkey in [
+            &market,
+            &market_fees,
+            &authority,
+            &base_mint,
+            &quote_mint,
+            &base_vault,
+            &quote_vault,
+        ] {
+            body.extend_from_slice(pubkey.as_ref());
+        }
+
+        body.extend_from_slice(&price_tick_size.to_le_bytes());
+        body.extend_from_slice(&quantity_lot_size.to_le_bytes());
+
+        let expected = MarketInitializedEvent {
+            market,
+            market_fees,
+            authority,
+            base_mint,
+            quote_mint,
+            base_vault,
+            quote_vault,
+            price_tick_size,
+            quantity_lot_size,
+        };
+
+        (body, expected)
+    }
+
+    fn encoded_market_initialized_event(body: &[u8]) -> Vec<u8> {
+        let mut payload = Vec::with_capacity(EVENT_DISCRIMINATOR_BYTES + body.len());
+
+        payload.extend_from_slice(&MARKET_INITIALIZED_DISCRIMINATOR);
+        payload.extend_from_slice(body);
+
+        payload
+    }
 
     fn raw_event(decoded: &[u8], log_index: usize) -> RawEventLog {
         RawEventLog {
@@ -161,5 +214,63 @@ mod tests {
             decode_envelope(&raw),
             Err(EventDecodeError::MissingDiscriminator { decoded_len: 7 })
         );
+    }
+
+    #[test]
+    fn decodes_market_initialized_event() {
+        let (body, expected) = market_initialized_fixture();
+        let payload = encoded_market_initialized_event(&body);
+        let raw = raw_event(&payload, 23);
+
+        let decoded = decode_event(&raw).expect("valid MarketInitializedEvent should decode");
+
+        assert_eq!(decoded.log_index, 23);
+        assert_eq!(decoded.payload_base64, raw.payload_base64);
+        assert_eq!(decoded.event, TidebookEvent::MarketInitialized(expected));
+    }
+
+    #[test]
+    fn rejects_unknown_event_discriminator() {
+        let discriminator = [255; EVENT_DISCRIMINATOR_BYTES];
+        let raw = raw_event(&discriminator, 8);
+
+        assert_eq!(
+            decode_event(&raw),
+            Err(EventDecodeError::UnknownDiscriminator(discriminator))
+        );
+    }
+
+    #[test]
+    fn rejects_truncated_market_initialized_body() {
+        let (mut body, _) = market_initialized_fixture();
+        body.pop();
+
+        let payload = encoded_market_initialized_event(&body);
+        let raw = raw_event(&payload, 9);
+
+        assert!(matches!(
+            decode_event(&raw),
+            Err(EventDecodeError::InvalidEventBody {
+                event_name: "MarketInitializedEvent",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_trailing_market_initialized_bytes() {
+        let (mut body, _) = market_initialized_fixture();
+        body.push(0);
+
+        let payload = encoded_market_initialized_event(&body);
+        let raw = raw_event(&payload, 10);
+
+        assert!(matches!(
+            decode_event(&raw),
+            Err(EventDecodeError::InvalidEventBody {
+                event_name: "MarketInitializedEvent",
+                ..
+            })
+        ));
     }
 }
