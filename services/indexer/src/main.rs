@@ -6,6 +6,7 @@
 //! intentionally deferred to focused follow-up milestones.
 
 mod config;
+mod decoder;
 mod events;
 mod rpc;
 
