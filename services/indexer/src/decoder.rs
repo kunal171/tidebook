@@ -1,4 +1,7 @@
 //! Deterministic decoding of Anchor event payloads emitted by Tidebook.
+mod types;
+
+pub use types::MarketInitializedEvent;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use thiserror::Error;
@@ -6,6 +9,7 @@ use thiserror::Error;
 use crate::events::RawEventLog;
 
 pub const EVENT_DISCRIMINATOR_BYTES: usize = 8;
+const MARKET_INITIALIZED_DISCRIMINATOR: [u8; 8] = [70, 173, 96, 202, 100, 143, 45, 25];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecodedEventEnvelope {
@@ -13,6 +17,18 @@ pub struct DecodedEventEnvelope {
     pub payload_base64: String,
     pub discriminator: [u8; EVENT_DISCRIMINATOR_BYTES],
     pub body: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecodedEventLog {
+    pub log_index: usize,
+    pub payload_base64: String,
+    pub event: TidebookEvent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TidebookEvent {
+    MarketInitialized(MarketInitializedEvent),
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -25,6 +41,15 @@ pub enum EventDecodeError {
          at least {EVENT_DISCRIMINATOR_BYTES} are required"
     )]
     MissingDiscriminator { decoded_len: usize },
+
+    #[error("unknown Tidebook event discriminator: {0:?}")]
+    UnknownDiscriminator([u8; EVENT_DISCRIMINATOR_BYTES]),
+
+    #[error("invalid {event_name} body: {message}")]
+    InvalidEventBody {
+        event_name: &'static str,
+        message: String,
+    },
 }
 
 pub fn decode_envelope(raw_event: &RawEventLog) -> Result<DecodedEventEnvelope, EventDecodeError> {
@@ -47,6 +72,34 @@ pub fn decode_envelope(raw_event: &RawEventLog) -> Result<DecodedEventEnvelope, 
         payload_base64: raw_event.payload_base64.clone(),
         discriminator,
         body: body.to_vec(),
+    })
+}
+
+pub fn decode_event(raw_event: &RawEventLog) -> Result<DecodedEventLog, EventDecodeError> {
+    let envelope = decode_envelope(raw_event)?;
+
+    let event = match envelope.discriminator {
+        MARKET_INITIALIZED_DISCRIMINATOR => {
+            let decoded =
+                borsh::from_slice::<MarketInitializedEvent>(&envelope.body).map_err(|error| {
+                    EventDecodeError::InvalidEventBody {
+                        event_name: "MarketInitializedEvent",
+                        message: error.to_string(),
+                    }
+                })?;
+
+            TidebookEvent::MarketInitialized(decoded)
+        }
+
+        discriminator => {
+            return Err(EventDecodeError::UnknownDiscriminator(discriminator));
+        }
+    };
+
+    Ok(DecodedEventLog {
+        log_index: envelope.log_index,
+        payload_base64: envelope.payload_base64,
+        event,
     })
 }
 
