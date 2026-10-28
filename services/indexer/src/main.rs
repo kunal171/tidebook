@@ -63,6 +63,9 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         );
 
         for raw_event in raw_events {
+            // Decoding is deliberately fail-closed. Once durable checkpoints
+            // exist, returning here prevents a checkpoint from moving beyond
+            // an unknown or malformed event and creating a partial projection.
             let decoded = decode_event(&raw_event)?;
 
             println!(

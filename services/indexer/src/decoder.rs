@@ -1,4 +1,5 @@
 //! Deterministic decoding of Anchor event payloads emitted by Tidebook.
+
 mod types;
 
 use crate::events::RawEventLog;
@@ -7,12 +8,21 @@ use borsh::BorshDeserialize;
 use thiserror::Error;
 pub use types::{MarketClosedEvent, MarketInitializedEvent, MarketStatusChangedEvent};
 
+/// Anchor prefixes every serialized event body with an eight-byte
+/// discriminator derived from `sha256("event:<RustTypeName>")`.
 pub const EVENT_DISCRIMINATOR_BYTES: usize = 8;
+
+// These constants are copied from the generated Anchor IDL. Keeping routing
+// explicit makes an on-chain event rename or schema addition fail closed as an
+// unknown discriminator instead of being misclassified as an existing event.
 const MARKET_INITIALIZED_DISCRIMINATOR: [u8; 8] = [70, 173, 96, 202, 100, 143, 45, 25];
 const MARKET_STATUS_CHANGED_DISCRIMINATOR: [u8; 8] = [189, 57, 199, 130, 179, 34, 39, 53];
-
 const MARKET_CLOSED_DISCRIMINATOR: [u8; 8] = [64, 193, 117, 138, 19, 11, 84, 44];
 
+/// Valid Base64 split into its Anchor discriminator and still-untyped body.
+///
+/// The raw Base64 and original log position remain attached so later storage
+/// can retain auditable source data alongside the typed projection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecodedEventEnvelope {
     pub log_index: usize,
@@ -21,6 +31,7 @@ pub struct DecodedEventEnvelope {
     pub body: Vec<u8>,
 }
 
+/// A successfully identified and Borsh-decoded Tidebook event.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecodedEventLog {
     pub log_index: usize,
@@ -28,11 +39,14 @@ pub struct DecodedEventLog {
     pub event: TidebookEvent,
 }
 
+/// Top-level event families mirror protocol domains rather than flattening all
+/// event names into one growing enum.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TidebookEvent {
     Market(MarketEvent),
 }
 
+/// Observable market lifecycle transitions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MarketEvent {
     Initialized(MarketInitializedEvent),
@@ -40,6 +54,8 @@ pub enum MarketEvent {
     Closed(MarketClosedEvent),
 }
 
+/// Failures are separated by decoding stage so operators can distinguish
+/// corrupt transport data, an unsupported schema, and an invalid known event.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum EventDecodeError {
     #[error("event payload is not valid Base64: {0}")]
@@ -61,6 +77,9 @@ pub enum EventDecodeError {
     },
 }
 
+/// Decodes Base64 and separates the discriminator without interpreting the
+/// event body. Exactly eight decoded bytes is valid and represents an empty
+/// body; the typed decoder decides whether that body is valid for its event.
 pub fn decode_envelope(raw_event: &RawEventLog) -> Result<DecodedEventEnvelope, EventDecodeError> {
     let decoded = STANDARD
         .decode(&raw_event.payload_base64)
@@ -84,6 +103,11 @@ pub fn decode_envelope(raw_event: &RawEventLog) -> Result<DecodedEventEnvelope, 
     })
 }
 
+/// Strictly decodes one known event body.
+///
+/// `borsh::from_slice` requires the entire slice to be consumed. This rejects
+/// both truncated payloads and payloads with trailing fields from a schema the
+/// current indexer does not yet understand.
 fn decode_body<T: BorshDeserialize>(
     body: &[u8],
     event_name: &'static str,
@@ -94,6 +118,9 @@ fn decode_body<T: BorshDeserialize>(
     })
 }
 
+/// Routes one extracted program-data log to its exact Tidebook event type.
+/// Unknown discriminators are errors so a future checkpoint cannot advance
+/// past an event that was never represented in the indexed state.
 pub fn decode_event(raw_event: &RawEventLog) -> Result<DecodedEventLog, EventDecodeError> {
     let envelope = decode_envelope(raw_event)?;
 
@@ -126,8 +153,12 @@ pub fn decode_event(raw_event: &RawEventLog) -> Result<DecodedEventLog, EventDec
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::decoder::types::MarketStatus;
     use solana_pubkey::Pubkey;
 
+    // Fixtures are assembled byte by byte instead of serializing the same
+    // off-chain structs we decode. This independently checks field order,
+    // integer endianness, enum tags, and expected body length.
     fn market_initialized_fixture() -> (Vec<u8>, MarketInitializedEvent) {
         let market = Pubkey::new_from_array([1; 32]);
         let market_fees = Pubkey::new_from_array([2; 32]);
@@ -171,10 +202,58 @@ mod tests {
         (body, expected)
     }
 
-    fn encoded_market_initialized_event(body: &[u8]) -> Vec<u8> {
+    fn market_closed_fixture() -> (Vec<u8>, MarketClosedEvent) {
+        let market = Pubkey::new_from_array([21; 32]);
+        let market_fees = Pubkey::new_from_array([22; 32]);
+        let authority = Pubkey::new_from_array([23; 32]);
+        let base_mint = Pubkey::new_from_array([24; 32]);
+        let quote_mint = Pubkey::new_from_array([25; 32]);
+        let base_vault = Pubkey::new_from_array([26; 32]);
+        let quote_vault = Pubkey::new_from_array([27; 32]);
+
+        let mut body = Vec::with_capacity(224);
+
+        for pubkey in [
+            &market,
+            &market_fees,
+            &authority,
+            &base_mint,
+            &quote_mint,
+            &base_vault,
+            &quote_vault,
+        ] {
+            body.extend_from_slice(pubkey.as_ref());
+        }
+
+        let expected = MarketClosedEvent {
+            market,
+            market_fees,
+            authority,
+            base_mint,
+            quote_mint,
+            base_vault,
+            quote_vault,
+        };
+
+        (body, expected)
+    }
+
+    fn market_status_changed_body(status_variant: u8) -> (Vec<u8>, Pubkey, Pubkey) {
+        let market = Pubkey::new_from_array([11; 32]);
+        let authority = Pubkey::new_from_array([12; 32]);
+
+        let mut body = Vec::with_capacity(65);
+        body.extend_from_slice(market.as_ref());
+        body.extend_from_slice(authority.as_ref());
+        body.push(status_variant);
+
+        (body, market, authority)
+    }
+
+    fn encoded_event(discriminator: [u8; EVENT_DISCRIMINATOR_BYTES], body: &[u8]) -> Vec<u8> {
         let mut payload = Vec::with_capacity(EVENT_DISCRIMINATOR_BYTES + body.len());
 
-        payload.extend_from_slice(&MARKET_INITIALIZED_DISCRIMINATOR);
+        payload.extend_from_slice(&discriminator);
         payload.extend_from_slice(body);
 
         payload
@@ -239,7 +318,7 @@ mod tests {
     #[test]
     fn decodes_market_initialized_event() {
         let (body, expected) = market_initialized_fixture();
-        let payload = encoded_market_initialized_event(&body);
+        let payload = encoded_event(MARKET_INITIALIZED_DISCRIMINATOR, &body);
         let raw = raw_event(&payload, 23);
 
         let decoded = decode_event(&raw).expect("valid MarketInitializedEvent should decode");
@@ -268,7 +347,7 @@ mod tests {
         let (mut body, _) = market_initialized_fixture();
         body.pop();
 
-        let payload = encoded_market_initialized_event(&body);
+        let payload = encoded_event(MARKET_INITIALIZED_DISCRIMINATOR, &body);
         let raw = raw_event(&payload, 9);
 
         assert!(matches!(
@@ -285,7 +364,7 @@ mod tests {
         let (mut body, _) = market_initialized_fixture();
         body.push(0);
 
-        let payload = encoded_market_initialized_event(&body);
+        let payload = encoded_event(MARKET_INITIALIZED_DISCRIMINATOR, &body);
         let raw = raw_event(&payload, 10);
 
         assert!(matches!(
@@ -295,5 +374,58 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn decodes_both_market_status_variants() {
+        for (variant, expected_status) in [(0, MarketStatus::Active), (1, MarketStatus::Paused)] {
+            let (body, market, authority) = market_status_changed_body(variant);
+
+            let payload = encoded_event(MARKET_STATUS_CHANGED_DISCRIMINATOR, &body);
+            let raw = raw_event(&payload, usize::from(variant));
+
+            let decoded = decode_event(&raw).expect("valid MarketStatusChangedEvent should decode");
+
+            assert_eq!(
+                decoded.event,
+                TidebookEvent::Market(MarketEvent::StatusChanged(MarketStatusChangedEvent {
+                    market,
+                    authority,
+                    status: expected_status,
+                },))
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_market_status_variant() {
+        let (body, _, _) = market_status_changed_body(2);
+
+        let payload = encoded_event(MARKET_STATUS_CHANGED_DISCRIMINATOR, &body);
+        let raw = raw_event(&payload, 30);
+
+        assert!(matches!(
+            decode_event(&raw),
+            Err(EventDecodeError::InvalidEventBody {
+                event_name: "MarketStatusChangedEvent",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn decodes_market_closed_event() {
+        let (body, expected) = market_closed_fixture();
+
+        let payload = encoded_event(MARKET_CLOSED_DISCRIMINATOR, &body);
+        let raw = raw_event(&payload, 31);
+
+        let decoded = decode_event(&raw).expect("valid MarketClosedEvent should decode");
+
+        assert_eq!(decoded.log_index, 31);
+        assert_eq!(
+            decoded.event,
+            TidebookEvent::Market(MarketEvent::Closed(expected))
+        );
     }
 }

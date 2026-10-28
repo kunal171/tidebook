@@ -6,6 +6,7 @@
 use borsh::BorshDeserialize;
 use solana_pubkey::Pubkey;
 
+/// Off-chain mirror of the market-creation event emitted by the program.
 #[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
 pub struct MarketInitializedEvent {
     pub market: Pubkey,
@@ -19,12 +20,17 @@ pub struct MarketInitializedEvent {
     pub quantity_lot_size: u64,
 }
 
+/// On-chain market lifecycle state.
+///
+/// Borsh stores fieldless enum variants by their zero-based position. Do not
+/// reorder these variants: `Active` is encoded as `0` and `Paused` as `1`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshDeserialize)]
 pub enum MarketStatus {
     Active,
     Paused,
 }
 
+/// Records an authorized pause or unpause transition.
 #[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
 pub struct MarketStatusChangedEvent {
     pub market: Pubkey,
@@ -32,6 +38,7 @@ pub struct MarketStatusChangedEvent {
     pub status: MarketStatus,
 }
 
+/// Records successful closure of the market, fee state, and custody vaults.
 #[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
 pub struct MarketClosedEvent {
     pub market: Pubkey,
