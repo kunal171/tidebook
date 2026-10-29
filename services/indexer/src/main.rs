@@ -6,10 +6,12 @@
 //! intentionally deferred to focused follow-up milestones.
 
 mod config;
+mod decoder;
 mod events;
 mod rpc;
 
 use config::Config;
+use decoder::{decode_event, MarketEvent, OrderEvent, TidebookEvent};
 use events::extract_program_data;
 use rpc::{fetch_recent_successful_signatures, fetch_transaction};
 use solana_commitment_config::CommitmentConfig;
@@ -60,11 +62,86 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             raw_events.len(),
         );
 
-        for event in raw_events {
+        for raw_event in raw_events {
+            // Decoding is deliberately fail-closed. Once durable checkpoints
+            // exist, returning here prevents a checkpoint from moving beyond
+            // an unknown or malformed event and creating a partial projection.
+            let decoded = decode_event(&raw_event)?;
+
             println!(
                 "  event_log_index={} payload={}",
-                event.log_index, event.payload_base64,
+                decoded.log_index, decoded.payload_base64,
             );
+
+            match &decoded.event {
+                TidebookEvent::Market(event) => match event {
+                    MarketEvent::Initialized(event) => {
+                        println!(
+                            "    MarketInitialized market={} authority={} \
+                            base_mint={} quote_mint={} \
+                            price_tick_size={} quantity_lot_size={}",
+                            event.market,
+                            event.authority,
+                            event.base_mint,
+                            event.quote_mint,
+                            event.price_tick_size,
+                            event.quantity_lot_size,
+                        );
+                    }
+
+                    MarketEvent::StatusChanged(event) => {
+                        println!(
+                            "    MarketStatusChanged market={} authority={} status={:?}",
+                            event.market, event.authority, event.status,
+                        );
+                    }
+
+                    MarketEvent::Closed(event) => {
+                        println!(
+                            "    MarketClosed market={} authority={} \
+                            base_mint={} quote_mint={}",
+                            event.market, event.authority, event.base_mint, event.quote_mint,
+                        );
+                    }
+                },
+                TidebookEvent::Order(event) => match event {
+                    OrderEvent::Placed(event) => {
+                        println!(
+                            "    OrderPlaced market={} order={} order_id={} \
+                            owner={} side={:?} price={} quantity={} \
+                            locked_collateral={} price_level={}",
+                            event.market,
+                            event.order,
+                            event.order_id,
+                            event.owner,
+                            event.side,
+                            event.price,
+                            event.quantity,
+                            event.locked_collateral,
+                            event.price_level,
+                        );
+                    }
+
+                    OrderEvent::Canceled(event) => {
+                        println!(
+                            "    OrderCanceled market={} order={} order_id={} \
+                            owner={} side={:?} price={} canceled_quantity={} \
+                            released_collateral={} price_level={} \
+                            price_level_closed={}",
+                            event.market,
+                            event.order,
+                            event.order_id,
+                            event.owner,
+                            event.side,
+                            event.price,
+                            event.canceled_quantity,
+                            event.released_collateral,
+                            event.price_level,
+                            event.price_level_closed,
+                        );
+                    }
+                },
+            }
         }
     }
 

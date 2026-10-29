@@ -3586,12 +3586,15 @@ dependencies = [
 name = "tidebook-indexer"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "borsh",
  "solana-commitment-config",
  "solana-pubkey 4.4.0",
  "solana-rpc-client",
  "solana-rpc-client-api",
  "solana-signature",
  "solana-transaction-status-client-types",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
