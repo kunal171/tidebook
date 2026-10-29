@@ -176,7 +176,7 @@ pub fn decode_event(raw_event: &RawEventLog) -> Result<DecodedEventLog, EventDec
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::decoder::types::MarketStatus;
+    use crate::decoder::types::{MarketStatus, OrderSide};
     use solana_pubkey::Pubkey;
 
     // Fixtures are assembled byte by byte instead of serializing the same
@@ -287,6 +287,85 @@ mod tests {
             log_index,
             payload_base64: STANDARD.encode(decoded),
         }
+    }
+
+    fn order_placed_fixture(side_variant: u8, side: OrderSide) -> (Vec<u8>, OrderPlacedEvent) {
+        let market = Pubkey::new_from_array([31; 32]);
+        let order = Pubkey::new_from_array([32; 32]);
+        let owner = Pubkey::new_from_array([33; 32]);
+        let price_level = Pubkey::new_from_array([34; 32]);
+
+        let order_id: u64 = 42;
+        let price: u64 = 250_000;
+        let quantity: u64 = 10_000;
+        let locked_collateral: u64 = 2_500_000;
+
+        // 4 Pubkeys + 4 u64 values + one enum byte.
+        let mut body = Vec::with_capacity(161);
+        body.extend_from_slice(market.as_ref());
+        body.extend_from_slice(order.as_ref());
+        body.extend_from_slice(&order_id.to_le_bytes());
+        body.extend_from_slice(owner.as_ref());
+        body.push(side_variant);
+        body.extend_from_slice(&price.to_le_bytes());
+        body.extend_from_slice(&quantity.to_le_bytes());
+        body.extend_from_slice(&locked_collateral.to_le_bytes());
+        body.extend_from_slice(price_level.as_ref());
+
+        let expected = OrderPlacedEvent {
+            market,
+            order,
+            order_id,
+            owner,
+            side,
+            price,
+            quantity,
+            locked_collateral,
+            price_level,
+        };
+
+        (body, expected)
+    }
+
+    fn order_canceled_fixture(price_level_closed: bool) -> (Vec<u8>, OrderCanceledEvent) {
+        let market = Pubkey::new_from_array([41; 32]);
+        let order = Pubkey::new_from_array([42; 32]);
+        let owner = Pubkey::new_from_array([43; 32]);
+        let price_level = Pubkey::new_from_array([44; 32]);
+
+        let order_id: u64 = 81;
+        let side = OrderSide::Ask;
+        let price: u64 = 300_000;
+        let canceled_quantity: u64 = 4_000;
+        let released_collateral: u64 = 4_000;
+
+        // Placed-event layout plus the final Borsh Boolean.
+        let mut body = Vec::with_capacity(162);
+        body.extend_from_slice(market.as_ref());
+        body.extend_from_slice(order.as_ref());
+        body.extend_from_slice(&order_id.to_le_bytes());
+        body.extend_from_slice(owner.as_ref());
+        body.push(1); // OrderSide::Ask
+        body.extend_from_slice(&price.to_le_bytes());
+        body.extend_from_slice(&canceled_quantity.to_le_bytes());
+        body.extend_from_slice(&released_collateral.to_le_bytes());
+        body.extend_from_slice(price_level.as_ref());
+        body.push(u8::from(price_level_closed));
+
+        let expected = OrderCanceledEvent {
+            market,
+            order,
+            order_id,
+            owner,
+            side,
+            price,
+            canceled_quantity,
+            released_collateral,
+            price_level,
+            price_level_closed,
+        };
+
+        (body, expected)
     }
 
     #[test]
@@ -450,5 +529,77 @@ mod tests {
             decoded.event,
             TidebookEvent::Market(MarketEvent::Closed(expected))
         );
+    }
+
+    #[test]
+    fn decodes_both_order_placed_sides() {
+        for (variant, side) in [(0, OrderSide::Bid), (1, OrderSide::Ask)] {
+            let (body, expected) = order_placed_fixture(variant, side);
+
+            let payload = encoded_event(ORDER_PLACED_DISCRIMINATOR, &body);
+            let raw = raw_event(&payload, 40 + usize::from(variant));
+
+            let decoded = decode_event(&raw).expect("valid OrderPlacedEvent should decode");
+
+            assert_eq!(
+                decoded.event,
+                TidebookEvent::Order(OrderEvent::Placed(expected))
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_order_side() {
+        let (mut body, _) = order_placed_fixture(0, OrderSide::Bid);
+
+        body[104] = 2;
+
+        let payload = encoded_event(ORDER_PLACED_DISCRIMINATOR, &body);
+        let raw = raw_event(&payload, 42);
+
+        assert!(matches!(
+            decode_event(&raw),
+            Err(EventDecodeError::InvalidEventBody {
+                event_name: "OrderPlacedEvent",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn decodes_both_order_canceled_closure_states() {
+        for price_level_closed in [false, true] {
+            let (body, expected) = order_canceled_fixture(price_level_closed);
+
+            let payload = encoded_event(ORDER_CANCELED_DISCRIMINATOR, &body);
+            let raw = raw_event(&payload, 50 + usize::from(price_level_closed));
+
+            let decoded = decode_event(&raw).expect("valid OrderCanceledEvent should decode");
+
+            assert_eq!(
+                decoded.event,
+                TidebookEvent::Order(OrderEvent::Canceled(expected))
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_price_level_closed_boolean() {
+        let (mut body, _) = order_canceled_fixture(false);
+
+        let final_byte = body.last_mut().expect("fixture contains the Boolean field");
+
+        *final_byte = 2;
+
+        let payload = encoded_event(ORDER_CANCELED_DISCRIMINATOR, &body);
+        let raw = raw_event(&payload, 52);
+
+        assert!(matches!(
+            decode_event(&raw),
+            Err(EventDecodeError::InvalidEventBody {
+                event_name: "OrderCanceledEvent",
+                ..
+            })
+        ));
     }
 }

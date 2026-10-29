@@ -124,14 +124,16 @@ decoding, persistence, and recovery can each be reviewed independently.
    fetches a recent finalized transaction batch, rejects rolled-back execution,
    preserves raw logs, and extracts only Tidebook-owned `Program data:` entries
    across nested CPI calls.
-2. `feature/indexer-event-decoding` Base64-decodes raw payloads, validates the
-   eight-byte Anchor discriminator, and maps every supported payload to a typed
-   Tidebook event.
-3. `feature/indexer-storage` introduces append-only PostgreSQL transaction and
+2. `feature/indexer-event-decoding` establishes strict Base64, discriminator,
+   and Borsh decoding; preserves raw source data; and implements the market and
+   order event families.
+3. `feature/indexer-event-catalog` adds the remaining admin, balance, faucet,
+   fee, and fill families so all 18 currently emitted event types are decoded.
+4. `feature/indexer-storage` introduces append-only PostgreSQL transaction and
    event tables plus idempotent writes.
-4. `feature/indexer-backfill` adds signature pagination and durable finalized
+5. `feature/indexer-backfill` adds signature pagination and durable finalized
    checkpoints for complete historical replay.
-5. `feature/indexer-live-sync` adds WebSocket log ingestion and resumes from the
+6. `feature/indexer-live-sync` adds WebSocket log ingestion and resumes from the
    durable checkpoint after every disconnect so gaps are backfilled.
 
 The foundation's fixed batch of at most 20 signatures is diagnostic. It is not
@@ -436,11 +438,12 @@ mainnet liquidity acquisition.
 
 ## Recommended next milestone
 
-Start `feature/indexer-event-decoding`. Keep the decoder deterministic and
-independent of PostgreSQL: preserve the raw Base64 payload, require a complete
-eight-byte Anchor discriminator, decode all supported fields without trailing
-bytes, and return explicit errors for malformed or unknown events. Persistence,
-frontend migration, and Yellowstone remain out of scope for that branch.
+Start `feature/indexer-event-catalog`. Reuse the strict decoder established for
+market and order events to add the remaining admin, balance, faucet, fee, and
+fill event families. Every type must mirror the on-chain field order, reject
+invalid enum tags and trailing bytes, and preserve the raw Base64 source.
+Persistence, frontend migration, and Yellowstone remain out of scope until all
+18 current event types decode deterministically.
 
 ## References
 
