@@ -11,7 +11,7 @@ mod events;
 mod rpc;
 
 use config::Config;
-use decoder::{decode_event, MarketEvent, TidebookEvent};
+use decoder::{decode_event, MarketEvent, OrderEvent, TidebookEvent};
 use events::extract_program_data;
 use rpc::{fetch_recent_successful_signatures, fetch_transaction};
 use solana_commitment_config::CommitmentConfig;
@@ -101,6 +101,43 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                             "    MarketClosed market={} authority={} \
                             base_mint={} quote_mint={}",
                             event.market, event.authority, event.base_mint, event.quote_mint,
+                        );
+                    }
+                },
+                TidebookEvent::Order(event) => match event {
+                    OrderEvent::Placed(event) => {
+                        println!(
+                            "    OrderPlaced market={} order={} order_id={} \
+                            owner={} side={:?} price={} quantity={} \
+                            locked_collateral={} price_level={}",
+                            event.market,
+                            event.order,
+                            event.order_id,
+                            event.owner,
+                            event.side,
+                            event.price,
+                            event.quantity,
+                            event.locked_collateral,
+                            event.price_level,
+                        );
+                    }
+
+                    OrderEvent::Canceled(event) => {
+                        println!(
+                            "    OrderCanceled market={} order={} order_id={} \
+                            owner={} side={:?} price={} canceled_quantity={} \
+                            released_collateral={} price_level={} \
+                            price_level_closed={}",
+                            event.market,
+                            event.order,
+                            event.order_id,
+                            event.owner,
+                            event.side,
+                            event.price,
+                            event.canceled_quantity,
+                            event.released_collateral,
+                            event.price_level,
+                            event.price_level_closed,
                         );
                     }
                 },

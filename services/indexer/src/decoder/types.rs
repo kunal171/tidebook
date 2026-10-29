@@ -49,3 +49,42 @@ pub struct MarketClosedEvent {
     pub base_vault: Pubkey,
     pub quote_vault: Pubkey,
 }
+
+/// Side of a resting order.
+///
+/// Borsh encodes `Bid` as `0` and `Ask` as `1`. Variant order must remain
+/// identical to the on-chain `OrderSide`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshDeserialize)]
+pub enum OrderSide {
+    Bid,
+    Ask,
+}
+
+/// Records an order entering a price-level FIFO queue.
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+pub struct OrderPlacedEvent {
+    pub market: Pubkey,
+    pub order: Pubkey,
+    pub order_id: u64,
+    pub owner: Pubkey,
+    pub side: OrderSide,
+    pub price: u64,
+    pub quantity: u64,
+    pub locked_collateral: u64,
+    pub price_level: Pubkey,
+}
+
+/// Records owner-authorized cancellation of an open order.
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+pub struct OrderCanceledEvent {
+    pub market: Pubkey,
+    pub order: Pubkey,
+    pub order_id: u64,
+    pub owner: Pubkey,
+    pub side: OrderSide,
+    pub price: u64,
+    pub canceled_quantity: u64,
+    pub released_collateral: u64,
+    pub price_level: Pubkey,
+    pub price_level_closed: bool,
+}

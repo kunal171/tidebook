@@ -6,7 +6,10 @@ use crate::events::RawEventLog;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use borsh::BorshDeserialize;
 use thiserror::Error;
-pub use types::{MarketClosedEvent, MarketInitializedEvent, MarketStatusChangedEvent};
+pub use types::{
+    MarketClosedEvent, MarketInitializedEvent, MarketStatusChangedEvent, OrderCanceledEvent,
+    OrderPlacedEvent,
+};
 
 /// Anchor prefixes every serialized event body with an eight-byte
 /// discriminator derived from `sha256("event:<RustTypeName>")`.
@@ -18,6 +21,9 @@ pub const EVENT_DISCRIMINATOR_BYTES: usize = 8;
 const MARKET_INITIALIZED_DISCRIMINATOR: [u8; 8] = [70, 173, 96, 202, 100, 143, 45, 25];
 const MARKET_STATUS_CHANGED_DISCRIMINATOR: [u8; 8] = [189, 57, 199, 130, 179, 34, 39, 53];
 const MARKET_CLOSED_DISCRIMINATOR: [u8; 8] = [64, 193, 117, 138, 19, 11, 84, 44];
+const ORDER_PLACED_DISCRIMINATOR: [u8; 8] = [245, 198, 202, 247, 110, 231, 254, 156];
+
+const ORDER_CANCELED_DISCRIMINATOR: [u8; 8] = [10, 31, 133, 147, 181, 32, 34, 30];
 
 /// Valid Base64 split into its Anchor discriminator and still-untyped body.
 ///
@@ -44,6 +50,7 @@ pub struct DecodedEventLog {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TidebookEvent {
     Market(MarketEvent),
+    Order(OrderEvent),
 }
 
 /// Observable market lifecycle transitions.
@@ -52,6 +59,13 @@ pub enum MarketEvent {
     Initialized(MarketInitializedEvent),
     StatusChanged(MarketStatusChangedEvent),
     Closed(MarketClosedEvent),
+}
+
+/// Observable order lifecycle transitions outside trade execution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OrderEvent {
+    Placed(OrderPlacedEvent),
+    Canceled(OrderCanceledEvent),
 }
 
 /// Failures are separated by decoding stage so operators can distinguish
@@ -136,6 +150,15 @@ pub fn decode_event(raw_event: &RawEventLog) -> Result<DecodedEventLog, EventDec
         MARKET_CLOSED_DISCRIMINATOR => TidebookEvent::Market(MarketEvent::Closed(decode_body(
             &envelope.body,
             "MarketClosedEvent",
+        )?)),
+        ORDER_PLACED_DISCRIMINATOR => TidebookEvent::Order(OrderEvent::Placed(decode_body(
+            &envelope.body,
+            "OrderPlacedEvent",
+        )?)),
+
+        ORDER_CANCELED_DISCRIMINATOR => TidebookEvent::Order(OrderEvent::Canceled(decode_body(
+            &envelope.body,
+            "OrderCanceledEvent",
         )?)),
 
         discriminator => {
