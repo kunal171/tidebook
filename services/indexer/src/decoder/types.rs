@@ -88,3 +88,25 @@ pub struct OrderCanceledEvent {
     pub price_level: Pubkey,
     pub price_level_closed: bool,
 }
+
+
+/// Records one maker-price execution between a resting maker and an incoming
+/// taker.
+///
+/// Field order must remain identical to the on-chain `FillEvent`. Borsh uses
+/// positional encoding, so reordering fields would silently corrupt decoding.
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+pub struct FillEvent {
+    pub market: Pubkey,
+    pub maker_order: Pubkey,
+    pub maker_order_id: u64,
+    pub maker: Pubkey,
+    pub taker: Pubkey,
+    pub maker_side: OrderSide,
+    pub execution_price: u64,
+    pub base_quantity: u64,
+    pub quote_quantity: u64,
+    pub taker_fee_quote: u64,
+    pub maker_remaining_quantity: u64,
+    pub taker_remaining_quantity: u64,
+}
