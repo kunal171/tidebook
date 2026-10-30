@@ -7,8 +7,8 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use borsh::BorshDeserialize;
 use thiserror::Error;
 pub use types::{
-    FillEvent, MarketClosedEvent, MarketInitializedEvent, MarketStatusChangedEvent,
-    OrderCanceledEvent, OrderPlacedEvent,
+    DepositEvent, FillEvent, MarketClosedEvent, MarketInitializedEvent, MarketStatusChangedEvent,
+    OrderCanceledEvent, OrderPlacedEvent, TraderBalanceInitializedEvent, WithdrawalEvent,
 };
 
 /// Anchor prefixes every serialized event body with an eight-byte
@@ -24,6 +24,9 @@ const MARKET_CLOSED_DISCRIMINATOR: [u8; 8] = [64, 193, 117, 138, 19, 11, 84, 44]
 const ORDER_PLACED_DISCRIMINATOR: [u8; 8] = [245, 198, 202, 247, 110, 231, 254, 156];
 const ORDER_CANCELED_DISCRIMINATOR: [u8; 8] = [10, 31, 133, 147, 181, 32, 34, 30];
 const FILL_EVENT_DISCRIMINATOR: [u8; 8] = [13, 89, 41, 228, 105, 178, 45, 112];
+const TRADER_BALANCE_INITIALIZED_DISCRIMINATOR: [u8; 8] = [37, 85, 211, 33, 106, 44, 35, 255];
+const DEPOSIT_EVENT_DISCRIMINATOR: [u8; 8] = [120, 248, 61, 83, 31, 142, 107, 144];
+const WITHDRAWAL_EVENT_DISCRIMINATOR: [u8; 8] = [161, 53, 185, 18, 98, 254, 54, 165];
 
 /// Valid Base64 split into its Anchor discriminator and still-untyped body.
 ///
@@ -52,6 +55,7 @@ pub enum TidebookEvent {
     Market(MarketEvent),
     Order(OrderEvent),
     Fill(FillEvent),
+    Balance(BalanceEvent),
 }
 
 /// Observable market lifecycle transitions.
@@ -67,6 +71,14 @@ pub enum MarketEvent {
 pub enum OrderEvent {
     Placed(OrderPlacedEvent),
     Canceled(OrderCanceledEvent),
+}
+
+/// Observable changes to a trader's internal market ledger and token custody.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BalanceEvent {
+    Initialized(TraderBalanceInitializedEvent),
+    Deposited(DepositEvent),
+    Withdrawn(WithdrawalEvent),
 }
 
 /// Failures are separated by decoding stage so operators can distinguish
@@ -161,7 +173,23 @@ pub fn decode_event(raw_event: &RawEventLog) -> Result<DecodedEventLog, EventDec
             &envelope.body,
             "OrderCanceledEvent",
         )?)),
+
         FILL_EVENT_DISCRIMINATOR => TidebookEvent::Fill(decode_body(&envelope.body, "FillEvent")?),
+
+        TRADER_BALANCE_INITIALIZED_DISCRIMINATOR => {
+            TidebookEvent::Balance(BalanceEvent::Initialized(decode_body(
+                &envelope.body,
+                "TraderBalanceInitializedEvent",
+            )?))
+        }
+
+        DEPOSIT_EVENT_DISCRIMINATOR => TidebookEvent::Balance(BalanceEvent::Deposited(
+            decode_body(&envelope.body, "DepositEvent")?,
+        )),
+
+        WITHDRAWAL_EVENT_DISCRIMINATOR => TidebookEvent::Balance(BalanceEvent::Withdrawn(
+            decode_body(&envelope.body, "WithdrawalEvent")?,
+        )),
 
         discriminator => {
             return Err(EventDecodeError::UnknownDiscriminator(discriminator));
@@ -365,6 +393,129 @@ mod tests {
             released_collateral,
             price_level,
             price_level_closed,
+        };
+
+        (body, expected)
+    }
+
+    fn fill_fixture(side_variant: u8, maker_side: OrderSide) -> (Vec<u8>, FillEvent) {
+        let market = Pubkey::new_from_array([51; 32]);
+        let maker_order = Pubkey::new_from_array([52; 32]);
+        let maker = Pubkey::new_from_array([53; 32]);
+        let taker = Pubkey::new_from_array([54; 32]);
+        let maker_order_id: u64 = 91;
+        let execution_price: u64 = 250_000;
+        let base_quantity: u64 = 4_000;
+        let quote_quantity: u64 = 1_000_000;
+        let taker_fee_quote: u64 = 2_500;
+        let maker_remaining_quantity: u64 = 6_000;
+        let taker_remaining_quantity: u64 = 1_000;
+
+        // 4 Pubkeys + 7 u64 values + one OrderSide enum byte.
+        let mut body = Vec::with_capacity(185);
+        body.extend_from_slice(market.as_ref());
+        body.extend_from_slice(maker_order.as_ref());
+        body.extend_from_slice(&maker_order_id.to_le_bytes());
+        body.extend_from_slice(maker.as_ref());
+        body.extend_from_slice(taker.as_ref());
+        body.push(side_variant);
+        body.extend_from_slice(&execution_price.to_le_bytes());
+        body.extend_from_slice(&base_quantity.to_le_bytes());
+        body.extend_from_slice(&quote_quantity.to_le_bytes());
+        body.extend_from_slice(&taker_fee_quote.to_le_bytes());
+        body.extend_from_slice(&maker_remaining_quantity.to_le_bytes());
+        body.extend_from_slice(&taker_remaining_quantity.to_le_bytes());
+
+        let expected = FillEvent {
+            market,
+            maker_order,
+            maker_order_id,
+            maker,
+            taker,
+            maker_side,
+            execution_price,
+            base_quantity,
+            quote_quantity,
+            taker_fee_quote,
+            maker_remaining_quantity,
+            taker_remaining_quantity,
+        };
+
+        (body, expected)
+    }
+
+    fn trader_balance_initialized_fixture() -> (Vec<u8>, TraderBalanceInitializedEvent) {
+        let market = Pubkey::new_from_array([61; 32]);
+        let owner = Pubkey::new_from_array([62; 32]);
+        let trader_balance = Pubkey::new_from_array([63; 32]);
+
+        let mut body = Vec::with_capacity(96);
+        body.extend_from_slice(market.as_ref());
+        body.extend_from_slice(owner.as_ref());
+        body.extend_from_slice(trader_balance.as_ref());
+
+        let expected = TraderBalanceInitializedEvent {
+            market,
+            owner,
+            trader_balance,
+        };
+
+        (body, expected)
+    }
+
+    fn deposit_fixture() -> (Vec<u8>, DepositEvent) {
+        let market = Pubkey::new_from_array([71; 32]);
+        let owner = Pubkey::new_from_array([72; 32]);
+        let trader_balance = Pubkey::new_from_array([73; 32]);
+        let mint = Pubkey::new_from_array([74; 32]);
+        let market_vault = Pubkey::new_from_array([75; 32]);
+        let amount: u64 = 25_000;
+        let free_balance: u64 = 80_000;
+
+        let mut body = Vec::with_capacity(176);
+        for pubkey in [&market, &owner, &trader_balance, &mint, &market_vault] {
+            body.extend_from_slice(pubkey.as_ref());
+        }
+        body.extend_from_slice(&amount.to_le_bytes());
+        body.extend_from_slice(&free_balance.to_le_bytes());
+
+        let expected = DepositEvent {
+            market,
+            owner,
+            trader_balance,
+            mint,
+            market_vault,
+            amount,
+            free_balance,
+        };
+
+        (body, expected)
+    }
+
+    fn withdrawal_fixture() -> (Vec<u8>, WithdrawalEvent) {
+        let market = Pubkey::new_from_array([81; 32]);
+        let owner = Pubkey::new_from_array([82; 32]);
+        let trader_balance = Pubkey::new_from_array([83; 32]);
+        let mint = Pubkey::new_from_array([84; 32]);
+        let market_vault = Pubkey::new_from_array([85; 32]);
+        let amount: u64 = 15_000;
+        let free_balance: u64 = 40_000;
+
+        let mut body = Vec::with_capacity(176);
+        for pubkey in [&market, &owner, &trader_balance, &mint, &market_vault] {
+            body.extend_from_slice(pubkey.as_ref());
+        }
+        body.extend_from_slice(&amount.to_le_bytes());
+        body.extend_from_slice(&free_balance.to_le_bytes());
+
+        let expected = WithdrawalEvent {
+            market,
+            owner,
+            trader_balance,
+            mint,
+            market_vault,
+            amount,
+            free_balance,
         };
 
         (body, expected)
@@ -603,5 +754,93 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn decodes_fill_event_for_both_maker_sides() {
+        for (variant, maker_side) in [(0, OrderSide::Bid), (1, OrderSide::Ask)] {
+            let (body, expected) = fill_fixture(variant, maker_side);
+            let payload = encoded_event(FILL_EVENT_DISCRIMINATOR, &body);
+            let raw = raw_event(&payload, 60 + usize::from(variant));
+
+            let decoded = decode_event(&raw).expect("valid FillEvent should decode");
+
+            assert_eq!(decoded.event, TidebookEvent::Fill(expected));
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_fill_maker_side() {
+        let (body, _) = fill_fixture(2, OrderSide::Bid);
+        let payload = encoded_event(FILL_EVENT_DISCRIMINATOR, &body);
+        let raw = raw_event(&payload, 62);
+
+        assert!(matches!(
+            decode_event(&raw),
+            Err(EventDecodeError::InvalidEventBody {
+                event_name: "FillEvent",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_truncated_fill_body() {
+        let (mut body, _) = fill_fixture(0, OrderSide::Bid);
+        body.pop();
+
+        let payload = encoded_event(FILL_EVENT_DISCRIMINATOR, &body);
+        let raw = raw_event(&payload, 63);
+
+        assert!(matches!(
+            decode_event(&raw),
+            Err(EventDecodeError::InvalidEventBody {
+                event_name: "FillEvent",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn decodes_trader_balance_initialized_event() {
+        let (body, expected) = trader_balance_initialized_fixture();
+        let payload = encoded_event(TRADER_BALANCE_INITIALIZED_DISCRIMINATOR, &body);
+        let raw = raw_event(&payload, 70);
+
+        let decoded =
+            decode_event(&raw).expect("valid TraderBalanceInitializedEvent should decode");
+
+        assert_eq!(
+            decoded.event,
+            TidebookEvent::Balance(BalanceEvent::Initialized(expected))
+        );
+    }
+
+    #[test]
+    fn decodes_deposit_event() {
+        let (body, expected) = deposit_fixture();
+        let payload = encoded_event(DEPOSIT_EVENT_DISCRIMINATOR, &body);
+        let raw = raw_event(&payload, 71);
+
+        let decoded = decode_event(&raw).expect("valid DepositEvent should decode");
+
+        assert_eq!(
+            decoded.event,
+            TidebookEvent::Balance(BalanceEvent::Deposited(expected))
+        );
+    }
+
+    #[test]
+    fn decodes_withdrawal_event() {
+        let (body, expected) = withdrawal_fixture();
+        let payload = encoded_event(WITHDRAWAL_EVENT_DISCRIMINATOR, &body);
+        let raw = raw_event(&payload, 72);
+
+        let decoded = decode_event(&raw).expect("valid WithdrawalEvent should decode");
+
+        assert_eq!(
+            decoded.event,
+            TidebookEvent::Balance(BalanceEvent::Withdrawn(expected))
+        );
     }
 }

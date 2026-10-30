@@ -11,7 +11,7 @@ mod events;
 mod rpc;
 
 use config::Config;
-use decoder::{decode_event, MarketEvent, OrderEvent, TidebookEvent};
+use decoder::{decode_event, BalanceEvent, MarketEvent, OrderEvent, TidebookEvent};
 use events::extract_program_data;
 use rpc::{fetch_recent_successful_signatures, fetch_transaction};
 use solana_commitment_config::CommitmentConfig;
@@ -161,6 +161,44 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                         event.taker_remaining_quantity,
                     );
                 }
+
+                TidebookEvent::Balance(event) => match event {
+                    BalanceEvent::Initialized(event) => {
+                        println!(
+                            "    TraderBalanceInitialized market={} owner={} \
+                            trader_balance={}",
+                            event.market, event.owner, event.trader_balance,
+                        );
+                    }
+
+                    BalanceEvent::Deposited(event) => {
+                        println!(
+                            "    Deposit market={} owner={} trader_balance={} \
+                            mint={} market_vault={} amount={} free_balance={}",
+                            event.market,
+                            event.owner,
+                            event.trader_balance,
+                            event.mint,
+                            event.market_vault,
+                            event.amount,
+                            event.free_balance,
+                        );
+                    }
+
+                    BalanceEvent::Withdrawn(event) => {
+                        println!(
+                            "    Withdrawal market={} owner={} trader_balance={} \
+                            mint={} market_vault={} amount={} free_balance={}",
+                            event.market,
+                            event.owner,
+                            event.trader_balance,
+                            event.mint,
+                            event.market_vault,
+                            event.amount,
+                            event.free_balance,
+                        );
+                    }
+                },
             }
         }
     }

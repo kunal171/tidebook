@@ -109,3 +109,41 @@ pub struct FillEvent {
     pub maker_remaining_quantity: u64,
     pub taker_remaining_quantity: u64,
 }
+
+/// Records creation of a trader's canonical per-market internal ledger.
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+pub struct TraderBalanceInitializedEvent {
+    pub market: Pubkey,
+    pub owner: Pubkey,
+    pub trader_balance: Pubkey,
+}
+
+/// Records tokens entering market custody and the corresponding internal
+/// free-balance credit.
+///
+/// `free_balance` is the selected asset's balance after the deposit.
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+pub struct DepositEvent {
+    pub market: Pubkey,
+    pub owner: Pubkey,
+    pub trader_balance: Pubkey,
+    pub mint: Pubkey,
+    pub market_vault: Pubkey,
+    pub amount: u64,
+    pub free_balance: u64,
+}
+
+/// Records an internal free-balance debit and the atomic token transfer out of
+/// market custody.
+///
+/// `free_balance` is the selected asset's balance after the withdrawal.
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+pub struct WithdrawalEvent {
+    pub market: Pubkey,
+    pub owner: Pubkey,
+    pub trader_balance: Pubkey,
+    pub mint: Pubkey,
+    pub market_vault: Pubkey,
+    pub amount: u64,
+    pub free_balance: u64,
+}
