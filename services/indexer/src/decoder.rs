@@ -7,8 +7,11 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use borsh::BorshDeserialize;
 use thiserror::Error;
 pub use types::{
-    DepositEvent, FillEvent, MarketClosedEvent, MarketInitializedEvent, MarketStatusChangedEvent,
-    OrderCanceledEvent, OrderPlacedEvent, TraderBalanceInitializedEvent, WithdrawalEvent,
+    AdminAddedEvent, AdminRemovedEvent, AdminStatusChangedEvent, DepositEvent, FillEvent,
+    MarketClosedEvent, MarketInitializedEvent, MarketStatusChangedEvent, OrderCanceledEvent,
+    OrderPlacedEvent, ProtocolFeesWithdrawnEvent, ProtocolInitializedEvent, TakerFeeUpdatedEvent,
+    TestFaucetClaimedEvent, TestFaucetClosedEvent, TestFaucetInitializedEvent,
+    TraderBalanceInitializedEvent, WithdrawalEvent,
 };
 
 /// Anchor prefixes every serialized event body with an eight-byte
@@ -27,6 +30,15 @@ const FILL_EVENT_DISCRIMINATOR: [u8; 8] = [13, 89, 41, 228, 105, 178, 45, 112];
 const TRADER_BALANCE_INITIALIZED_DISCRIMINATOR: [u8; 8] = [37, 85, 211, 33, 106, 44, 35, 255];
 const DEPOSIT_EVENT_DISCRIMINATOR: [u8; 8] = [120, 248, 61, 83, 31, 142, 107, 144];
 const WITHDRAWAL_EVENT_DISCRIMINATOR: [u8; 8] = [161, 53, 185, 18, 98, 254, 54, 165];
+const PROTOCOL_INITIALIZED_DISCRIMINATOR: [u8; 8] = [225, 159, 165, 209, 78, 191, 125, 73];
+const ADMIN_ADDED_DISCRIMINATOR: [u8; 8] = [68, 183, 187, 200, 190, 214, 20, 77];
+const ADMIN_STATUS_CHANGED_DISCRIMINATOR: [u8; 8] = [103, 168, 116, 72, 83, 249, 142, 91];
+const ADMIN_REMOVED_DISCRIMINATOR: [u8; 8] = [226, 5, 12, 53, 69, 56, 172, 132];
+const TAKER_FEE_UPDATED_DISCRIMINATOR: [u8; 8] = [99, 217, 115, 77, 244, 244, 75, 248];
+const PROTOCOL_FEES_WITHDRAWN_DISCRIMINATOR: [u8; 8] = [142, 109, 101, 78, 169, 208, 188, 216];
+const TEST_FAUCET_INITIALIZED_DISCRIMINATOR: [u8; 8] = [247, 38, 39, 17, 66, 174, 194, 81];
+const TEST_FAUCET_CLAIMED_DISCRIMINATOR: [u8; 8] = [149, 47, 203, 239, 92, 155, 247, 96];
+const TEST_FAUCET_CLOSED_DISCRIMINATOR: [u8; 8] = [169, 116, 71, 236, 191, 44, 241, 40];
 
 /// Valid Base64 split into its Anchor discriminator and still-untyped body.
 ///
@@ -52,10 +64,23 @@ pub struct DecodedEventLog {
 /// event names into one growing enum.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TidebookEvent {
+    Governance(GovernanceEvent),
     Market(MarketEvent),
     Order(OrderEvent),
     Fill(FillEvent),
     Balance(BalanceEvent),
+    Fee(FeeEvent),
+    Faucet(FaucetEvent),
+}
+
+/// Observable protocol and administrator governance transitions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GovernanceEvent {
+    ProtocolInitialized(ProtocolInitializedEvent),
+    AdminAdded(AdminAddedEvent),
+    AdminStatusChanged(AdminStatusChangedEvent),
+    AdminRemoved(AdminRemovedEvent),
+    TakerFeeUpdated(TakerFeeUpdatedEvent),
 }
 
 /// Observable market lifecycle transitions.
@@ -79,6 +104,20 @@ pub enum BalanceEvent {
     Initialized(TraderBalanceInitializedEvent),
     Deposited(DepositEvent),
     Withdrawn(WithdrawalEvent),
+}
+
+/// Observable protocol-treasury transitions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FeeEvent {
+    ProtocolFeesWithdrawn(ProtocolFeesWithdrawnEvent),
+}
+
+/// Observable lifecycle and claim operations for devnet test faucets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FaucetEvent {
+    Initialized(TestFaucetInitializedEvent),
+    Claimed(TestFaucetClaimedEvent),
+    Closed(TestFaucetClosedEvent),
 }
 
 /// Failures are separated by decoding stage so operators can distinguish
@@ -191,6 +230,51 @@ pub fn decode_event(raw_event: &RawEventLog) -> Result<DecodedEventLog, EventDec
             decode_body(&envelope.body, "WithdrawalEvent")?,
         )),
 
+        PROTOCOL_INITIALIZED_DISCRIMINATOR => {
+            TidebookEvent::Governance(GovernanceEvent::ProtocolInitialized(decode_body(
+                &envelope.body,
+                "ProtocolInitializedEvent",
+            )?))
+        }
+
+        ADMIN_ADDED_DISCRIMINATOR => TidebookEvent::Governance(GovernanceEvent::AdminAdded(
+            decode_body(&envelope.body, "AdminAddedEvent")?,
+        )),
+
+        ADMIN_STATUS_CHANGED_DISCRIMINATOR => {
+            TidebookEvent::Governance(GovernanceEvent::AdminStatusChanged(decode_body(
+                &envelope.body,
+                "AdminStatusChangedEvent",
+            )?))
+        }
+
+        ADMIN_REMOVED_DISCRIMINATOR => TidebookEvent::Governance(GovernanceEvent::AdminRemoved(
+            decode_body(&envelope.body, "AdminRemovedEvent")?,
+        )),
+
+        TAKER_FEE_UPDATED_DISCRIMINATOR => TidebookEvent::Governance(
+            GovernanceEvent::TakerFeeUpdated(decode_body(&envelope.body, "TakerFeeUpdatedEvent")?),
+        ),
+
+        PROTOCOL_FEES_WITHDRAWN_DISCRIMINATOR => {
+            TidebookEvent::Fee(FeeEvent::ProtocolFeesWithdrawn(decode_body(
+                &envelope.body,
+                "ProtocolFeesWithdrawnEvent",
+            )?))
+        }
+
+        TEST_FAUCET_INITIALIZED_DISCRIMINATOR => TidebookEvent::Faucet(FaucetEvent::Initialized(
+            decode_body(&envelope.body, "TestFaucetInitializedEvent")?,
+        )),
+
+        TEST_FAUCET_CLAIMED_DISCRIMINATOR => TidebookEvent::Faucet(FaucetEvent::Claimed(
+            decode_body(&envelope.body, "TestFaucetClaimedEvent")?,
+        )),
+
+        TEST_FAUCET_CLOSED_DISCRIMINATOR => TidebookEvent::Faucet(FaucetEvent::Closed(
+            decode_body(&envelope.body, "TestFaucetClosedEvent")?,
+        )),
+
         discriminator => {
             return Err(EventDecodeError::UnknownDiscriminator(discriminator));
         }
@@ -206,7 +290,7 @@ pub fn decode_event(raw_event: &RawEventLog) -> Result<DecodedEventLog, EventDec
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::decoder::types::{MarketStatus, OrderSide};
+    use crate::decoder::types::{AdminStatus, MarketStatus, OrderSide};
     use solana_pubkey::Pubkey;
 
     // Fixtures are assembled byte by byte instead of serializing the same
@@ -519,6 +603,239 @@ mod tests {
         };
 
         (body, expected)
+    }
+
+    fn protocol_initialized_fixture() -> (Vec<u8>, ProtocolInitializedEvent) {
+        let protocol_config = Pubkey::new_from_array([91; 32]);
+        let super_admin = Pubkey::new_from_array([92; 32]);
+        let admin_record = Pubkey::new_from_array([93; 32]);
+
+        let mut body = Vec::with_capacity(96);
+        for pubkey in [&protocol_config, &super_admin, &admin_record] {
+            body.extend_from_slice(pubkey.as_ref());
+        }
+
+        (
+            body,
+            ProtocolInitializedEvent {
+                protocol_config,
+                super_admin,
+                admin_record,
+            },
+        )
+    }
+
+    fn admin_added_fixture() -> (Vec<u8>, AdminAddedEvent) {
+        let admin_record = Pubkey::new_from_array([94; 32]);
+        let authority = Pubkey::new_from_array([95; 32]);
+        let added_by = Pubkey::new_from_array([96; 32]);
+
+        let mut body = Vec::with_capacity(96);
+        for pubkey in [&admin_record, &authority, &added_by] {
+            body.extend_from_slice(pubkey.as_ref());
+        }
+
+        (
+            body,
+            AdminAddedEvent {
+                admin_record,
+                authority,
+                added_by,
+            },
+        )
+    }
+
+    fn admin_status_changed_fixture(
+        status_variant: u8,
+        status: AdminStatus,
+    ) -> (Vec<u8>, AdminStatusChangedEvent) {
+        let admin_record = Pubkey::new_from_array([97; 32]);
+        let authority = Pubkey::new_from_array([98; 32]);
+        let changed_by = Pubkey::new_from_array([99; 32]);
+
+        let mut body = Vec::with_capacity(97);
+        for pubkey in [&admin_record, &authority, &changed_by] {
+            body.extend_from_slice(pubkey.as_ref());
+        }
+        body.push(status_variant);
+
+        (
+            body,
+            AdminStatusChangedEvent {
+                admin_record,
+                authority,
+                changed_by,
+                status,
+            },
+        )
+    }
+
+    fn admin_removed_fixture() -> (Vec<u8>, AdminRemovedEvent) {
+        let admin_record = Pubkey::new_from_array([100; 32]);
+        let authority = Pubkey::new_from_array([101; 32]);
+        let removed_by = Pubkey::new_from_array([102; 32]);
+
+        let mut body = Vec::with_capacity(96);
+        for pubkey in [&admin_record, &authority, &removed_by] {
+            body.extend_from_slice(pubkey.as_ref());
+        }
+
+        (
+            body,
+            AdminRemovedEvent {
+                admin_record,
+                authority,
+                removed_by,
+            },
+        )
+    }
+
+    fn taker_fee_updated_fixture() -> (Vec<u8>, TakerFeeUpdatedEvent) {
+        let protocol_config = Pubkey::new_from_array([103; 32]);
+        let super_admin = Pubkey::new_from_array([104; 32]);
+        let previous_taker_fee_bps: u16 = 15;
+        let new_taker_fee_bps: u16 = 25;
+
+        let mut body = Vec::with_capacity(68);
+        body.extend_from_slice(protocol_config.as_ref());
+        body.extend_from_slice(super_admin.as_ref());
+        body.extend_from_slice(&previous_taker_fee_bps.to_le_bytes());
+        body.extend_from_slice(&new_taker_fee_bps.to_le_bytes());
+
+        (
+            body,
+            TakerFeeUpdatedEvent {
+                protocol_config,
+                super_admin,
+                previous_taker_fee_bps,
+                new_taker_fee_bps,
+            },
+        )
+    }
+
+    fn protocol_fees_withdrawn_fixture() -> (Vec<u8>, ProtocolFeesWithdrawnEvent) {
+        let market = Pubkey::new_from_array([105; 32]);
+        let market_fees = Pubkey::new_from_array([106; 32]);
+        let super_admin = Pubkey::new_from_array([107; 32]);
+        let quote_mint = Pubkey::new_from_array([108; 32]);
+        let quote_vault = Pubkey::new_from_array([109; 32]);
+        let destination_quote_account = Pubkey::new_from_array([110; 32]);
+        let amount: u64 = 50_000;
+        let remaining_accrued_quote_fees: u64 = 125_000;
+
+        let mut body = Vec::with_capacity(208);
+        for pubkey in [
+            &market,
+            &market_fees,
+            &super_admin,
+            &quote_mint,
+            &quote_vault,
+            &destination_quote_account,
+        ] {
+            body.extend_from_slice(pubkey.as_ref());
+        }
+        body.extend_from_slice(&amount.to_le_bytes());
+        body.extend_from_slice(&remaining_accrued_quote_fees.to_le_bytes());
+
+        (
+            body,
+            ProtocolFeesWithdrawnEvent {
+                market,
+                market_fees,
+                super_admin,
+                quote_mint,
+                quote_vault,
+                destination_quote_account,
+                amount,
+                remaining_accrued_quote_fees,
+            },
+        )
+    }
+
+    fn test_faucet_initialized_fixture() -> (Vec<u8>, TestFaucetInitializedEvent) {
+        let market = Pubkey::new_from_array([111; 32]);
+        let test_faucet = Pubkey::new_from_array([112; 32]);
+        let faucet_authority = Pubkey::new_from_array([113; 32]);
+        let base_mint = Pubkey::new_from_array([114; 32]);
+        let quote_mint = Pubkey::new_from_array([115; 32]);
+        let base_claim_amount: u64 = 10_000;
+        let quote_claim_amount: u64 = 20_000;
+
+        let mut body = Vec::with_capacity(176);
+        for pubkey in [
+            &market,
+            &test_faucet,
+            &faucet_authority,
+            &base_mint,
+            &quote_mint,
+        ] {
+            body.extend_from_slice(pubkey.as_ref());
+        }
+        body.extend_from_slice(&base_claim_amount.to_le_bytes());
+        body.extend_from_slice(&quote_claim_amount.to_le_bytes());
+
+        (
+            body,
+            TestFaucetInitializedEvent {
+                market,
+                test_faucet,
+                faucet_authority,
+                base_mint,
+                quote_mint,
+                base_claim_amount,
+                quote_claim_amount,
+            },
+        )
+    }
+
+    fn test_faucet_claimed_fixture() -> (Vec<u8>, TestFaucetClaimedEvent) {
+        let market = Pubkey::new_from_array([116; 32]);
+        let test_faucet = Pubkey::new_from_array([117; 32]);
+        let claimant = Pubkey::new_from_array([118; 32]);
+        let base_amount: u64 = 10_000;
+        let quote_amount: u64 = 20_000;
+
+        let mut body = Vec::with_capacity(112);
+        for pubkey in [&market, &test_faucet, &claimant] {
+            body.extend_from_slice(pubkey.as_ref());
+        }
+        body.extend_from_slice(&base_amount.to_le_bytes());
+        body.extend_from_slice(&quote_amount.to_le_bytes());
+
+        (
+            body,
+            TestFaucetClaimedEvent {
+                market,
+                test_faucet,
+                claimant,
+                base_amount,
+                quote_amount,
+            },
+        )
+    }
+
+    fn test_faucet_closed_fixture() -> (Vec<u8>, TestFaucetClosedEvent) {
+        let market = Pubkey::new_from_array([119; 32]);
+        let test_faucet = Pubkey::new_from_array([120; 32]);
+        let authority = Pubkey::new_from_array([121; 32]);
+        let base_mint = Pubkey::new_from_array([122; 32]);
+        let quote_mint = Pubkey::new_from_array([123; 32]);
+
+        let mut body = Vec::with_capacity(160);
+        for pubkey in [&market, &test_faucet, &authority, &base_mint, &quote_mint] {
+            body.extend_from_slice(pubkey.as_ref());
+        }
+
+        (
+            body,
+            TestFaucetClosedEvent {
+                market,
+                test_faucet,
+                authority,
+                base_mint,
+                quote_mint,
+            },
+        )
     }
 
     #[test]
@@ -842,5 +1159,261 @@ mod tests {
             decoded.event,
             TidebookEvent::Balance(BalanceEvent::Withdrawn(expected))
         );
+    }
+
+    #[test]
+    fn decodes_protocol_initialized_event() {
+        let (body, expected) = protocol_initialized_fixture();
+        let payload = encoded_event(PROTOCOL_INITIALIZED_DISCRIMINATOR, &body);
+        let raw = raw_event(&payload, 80);
+
+        let decoded = decode_event(&raw).expect("valid ProtocolInitializedEvent should decode");
+
+        assert_eq!(
+            decoded.event,
+            TidebookEvent::Governance(GovernanceEvent::ProtocolInitialized(expected))
+        );
+    }
+
+    #[test]
+    fn decodes_admin_added_event() {
+        let (body, expected) = admin_added_fixture();
+        let payload = encoded_event(ADMIN_ADDED_DISCRIMINATOR, &body);
+        let raw = raw_event(&payload, 81);
+
+        let decoded = decode_event(&raw).expect("valid AdminAddedEvent should decode");
+
+        assert_eq!(
+            decoded.event,
+            TidebookEvent::Governance(GovernanceEvent::AdminAdded(expected))
+        );
+    }
+
+    #[test]
+    fn decodes_both_admin_status_variants() {
+        for (variant, status) in [(0, AdminStatus::Active), (1, AdminStatus::Disabled)] {
+            let (body, expected) = admin_status_changed_fixture(variant, status);
+            let payload = encoded_event(ADMIN_STATUS_CHANGED_DISCRIMINATOR, &body);
+            let raw = raw_event(&payload, 82 + usize::from(variant));
+
+            let decoded = decode_event(&raw).expect("valid AdminStatusChangedEvent should decode");
+
+            assert_eq!(
+                decoded.event,
+                TidebookEvent::Governance(GovernanceEvent::AdminStatusChanged(expected))
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_admin_status_variant() {
+        let (body, _) = admin_status_changed_fixture(2, AdminStatus::Active);
+        let payload = encoded_event(ADMIN_STATUS_CHANGED_DISCRIMINATOR, &body);
+        let raw = raw_event(&payload, 84);
+
+        assert!(matches!(
+            decode_event(&raw),
+            Err(EventDecodeError::InvalidEventBody {
+                event_name: "AdminStatusChangedEvent",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn decodes_admin_removed_event() {
+        let (body, expected) = admin_removed_fixture();
+        let payload = encoded_event(ADMIN_REMOVED_DISCRIMINATOR, &body);
+        let raw = raw_event(&payload, 85);
+
+        let decoded = decode_event(&raw).expect("valid AdminRemovedEvent should decode");
+
+        assert_eq!(
+            decoded.event,
+            TidebookEvent::Governance(GovernanceEvent::AdminRemoved(expected))
+        );
+    }
+
+    #[test]
+    fn decodes_taker_fee_updated_event() {
+        let (body, expected) = taker_fee_updated_fixture();
+        let payload = encoded_event(TAKER_FEE_UPDATED_DISCRIMINATOR, &body);
+        let raw = raw_event(&payload, 86);
+
+        let decoded = decode_event(&raw).expect("valid TakerFeeUpdatedEvent should decode");
+
+        assert_eq!(
+            decoded.event,
+            TidebookEvent::Governance(GovernanceEvent::TakerFeeUpdated(expected))
+        );
+    }
+
+    #[test]
+    fn decodes_protocol_fees_withdrawn_event() {
+        let (body, expected) = protocol_fees_withdrawn_fixture();
+        let payload = encoded_event(PROTOCOL_FEES_WITHDRAWN_DISCRIMINATOR, &body);
+        let raw = raw_event(&payload, 87);
+
+        let decoded = decode_event(&raw).expect("valid ProtocolFeesWithdrawnEvent should decode");
+
+        assert_eq!(
+            decoded.event,
+            TidebookEvent::Fee(FeeEvent::ProtocolFeesWithdrawn(expected))
+        );
+    }
+
+    #[test]
+    fn decodes_test_faucet_initialized_event() {
+        let (body, expected) = test_faucet_initialized_fixture();
+        let payload = encoded_event(TEST_FAUCET_INITIALIZED_DISCRIMINATOR, &body);
+        let raw = raw_event(&payload, 88);
+
+        let decoded = decode_event(&raw).expect("valid TestFaucetInitializedEvent should decode");
+
+        assert_eq!(
+            decoded.event,
+            TidebookEvent::Faucet(FaucetEvent::Initialized(expected))
+        );
+    }
+
+    #[test]
+    fn decodes_test_faucet_claimed_event() {
+        let (body, expected) = test_faucet_claimed_fixture();
+        let payload = encoded_event(TEST_FAUCET_CLAIMED_DISCRIMINATOR, &body);
+        let raw = raw_event(&payload, 89);
+
+        let decoded = decode_event(&raw).expect("valid TestFaucetClaimedEvent should decode");
+
+        assert_eq!(
+            decoded.event,
+            TidebookEvent::Faucet(FaucetEvent::Claimed(expected))
+        );
+    }
+
+    #[test]
+    fn decodes_test_faucet_closed_event() {
+        let (body, expected) = test_faucet_closed_fixture();
+        let payload = encoded_event(TEST_FAUCET_CLOSED_DISCRIMINATOR, &body);
+        let raw = raw_event(&payload, 90);
+
+        let decoded = decode_event(&raw).expect("valid TestFaucetClosedEvent should decode");
+
+        assert_eq!(
+            decoded.event,
+            TidebookEvent::Faucet(FaucetEvent::Closed(expected))
+        );
+    }
+
+    #[test]
+    fn rejects_trailing_bytes_for_every_supported_event() {
+        let (market_initialized, _) = market_initialized_fixture();
+        let (market_status_changed, _, _) = market_status_changed_body(0);
+        let (market_closed, _) = market_closed_fixture();
+        let (order_placed, _) = order_placed_fixture(0, OrderSide::Bid);
+        let (order_canceled, _) = order_canceled_fixture(false);
+        let (fill, _) = fill_fixture(0, OrderSide::Bid);
+        let (trader_balance_initialized, _) = trader_balance_initialized_fixture();
+        let (deposit, _) = deposit_fixture();
+        let (withdrawal, _) = withdrawal_fixture();
+        let (protocol_initialized, _) = protocol_initialized_fixture();
+        let (admin_added, _) = admin_added_fixture();
+        let (admin_status_changed, _) = admin_status_changed_fixture(0, AdminStatus::Active);
+        let (admin_removed, _) = admin_removed_fixture();
+        let (taker_fee_updated, _) = taker_fee_updated_fixture();
+        let (protocol_fees_withdrawn, _) = protocol_fees_withdrawn_fixture();
+        let (test_faucet_initialized, _) = test_faucet_initialized_fixture();
+        let (test_faucet_claimed, _) = test_faucet_claimed_fixture();
+        let (test_faucet_closed, _) = test_faucet_closed_fixture();
+
+        let fixtures = [
+            (
+                MARKET_INITIALIZED_DISCRIMINATOR,
+                market_initialized,
+                "MarketInitializedEvent",
+            ),
+            (
+                MARKET_STATUS_CHANGED_DISCRIMINATOR,
+                market_status_changed,
+                "MarketStatusChangedEvent",
+            ),
+            (
+                MARKET_CLOSED_DISCRIMINATOR,
+                market_closed,
+                "MarketClosedEvent",
+            ),
+            (ORDER_PLACED_DISCRIMINATOR, order_placed, "OrderPlacedEvent"),
+            (
+                ORDER_CANCELED_DISCRIMINATOR,
+                order_canceled,
+                "OrderCanceledEvent",
+            ),
+            (FILL_EVENT_DISCRIMINATOR, fill, "FillEvent"),
+            (
+                TRADER_BALANCE_INITIALIZED_DISCRIMINATOR,
+                trader_balance_initialized,
+                "TraderBalanceInitializedEvent",
+            ),
+            (DEPOSIT_EVENT_DISCRIMINATOR, deposit, "DepositEvent"),
+            (
+                WITHDRAWAL_EVENT_DISCRIMINATOR,
+                withdrawal,
+                "WithdrawalEvent",
+            ),
+            (
+                PROTOCOL_INITIALIZED_DISCRIMINATOR,
+                protocol_initialized,
+                "ProtocolInitializedEvent",
+            ),
+            (ADMIN_ADDED_DISCRIMINATOR, admin_added, "AdminAddedEvent"),
+            (
+                ADMIN_STATUS_CHANGED_DISCRIMINATOR,
+                admin_status_changed,
+                "AdminStatusChangedEvent",
+            ),
+            (
+                ADMIN_REMOVED_DISCRIMINATOR,
+                admin_removed,
+                "AdminRemovedEvent",
+            ),
+            (
+                TAKER_FEE_UPDATED_DISCRIMINATOR,
+                taker_fee_updated,
+                "TakerFeeUpdatedEvent",
+            ),
+            (
+                PROTOCOL_FEES_WITHDRAWN_DISCRIMINATOR,
+                protocol_fees_withdrawn,
+                "ProtocolFeesWithdrawnEvent",
+            ),
+            (
+                TEST_FAUCET_INITIALIZED_DISCRIMINATOR,
+                test_faucet_initialized,
+                "TestFaucetInitializedEvent",
+            ),
+            (
+                TEST_FAUCET_CLAIMED_DISCRIMINATOR,
+                test_faucet_claimed,
+                "TestFaucetClaimedEvent",
+            ),
+            (
+                TEST_FAUCET_CLOSED_DISCRIMINATOR,
+                test_faucet_closed,
+                "TestFaucetClosedEvent",
+            ),
+        ];
+
+        for (log_index, (discriminator, mut body, event_name)) in fixtures.into_iter().enumerate() {
+            body.push(0);
+            let payload = encoded_event(discriminator, &body);
+            let raw = raw_event(&payload, 100 + log_index);
+
+            assert!(matches!(
+                decode_event(&raw),
+                Err(EventDecodeError::InvalidEventBody {
+                    event_name: actual_event_name,
+                    ..
+                }) if actual_event_name == event_name
+            ));
+        }
     }
 }

@@ -147,3 +147,101 @@ pub struct WithdrawalEvent {
     pub amount: u64,
     pub free_balance: u64,
 }
+
+/// On-chain administrator lifecycle state.
+///
+/// Borsh encodes `Active` as `0` and `Disabled` as `1`. Variant order must
+/// remain identical to the on-chain `AdminStatus` declaration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshDeserialize)]
+pub enum AdminStatus {
+    Active,
+    Disabled,
+}
+
+/// Records creation of protocol governance and the deployer's administrator
+/// record.
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+pub struct ProtocolInitializedEvent {
+    pub protocol_config: Pubkey,
+    pub super_admin: Pubkey,
+    pub admin_record: Pubkey,
+}
+
+/// Records creation of an independently addressable administrator record.
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+pub struct AdminAddedEvent {
+    pub admin_record: Pubkey,
+    pub authority: Pubkey,
+    pub added_by: Pubkey,
+}
+
+/// Records a reversible administrator enable or disable transition.
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+pub struct AdminStatusChangedEvent {
+    pub admin_record: Pubkey,
+    pub authority: Pubkey,
+    pub changed_by: Pubkey,
+    pub status: AdminStatus,
+}
+
+/// Records permanent closure of a disabled administrator record.
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+pub struct AdminRemovedEvent {
+    pub admin_record: Pubkey,
+    pub authority: Pubkey,
+    pub removed_by: Pubkey,
+}
+
+/// Records a global taker-fee policy change.
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+pub struct TakerFeeUpdatedEvent {
+    pub protocol_config: Pubkey,
+    pub super_admin: Pubkey,
+    pub previous_taker_fee_bps: u16,
+    pub new_taker_fee_bps: u16,
+}
+
+/// Records quote-denominated protocol revenue leaving market custody.
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+pub struct ProtocolFeesWithdrawnEvent {
+    pub market: Pubkey,
+    pub market_fees: Pubkey,
+    pub super_admin: Pubkey,
+    pub quote_mint: Pubkey,
+    pub quote_vault: Pubkey,
+    pub destination_quote_account: Pubkey,
+    pub amount: u64,
+    pub remaining_accrued_quote_fees: u64,
+}
+
+/// Records creation of a market-specific devnet test faucet.
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+pub struct TestFaucetInitializedEvent {
+    pub market: Pubkey,
+    pub test_faucet: Pubkey,
+    pub faucet_authority: Pubkey,
+    pub base_mint: Pubkey,
+    pub quote_mint: Pubkey,
+    pub base_claim_amount: u64,
+    pub quote_claim_amount: u64,
+}
+
+/// Records a claimant receiving both configured test assets.
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+pub struct TestFaucetClaimedEvent {
+    pub market: Pubkey,
+    pub test_faucet: Pubkey,
+    pub claimant: Pubkey,
+    pub base_amount: u64,
+    pub quote_amount: u64,
+}
+
+/// Records closure of a market-specific test faucet.
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+pub struct TestFaucetClosedEvent {
+    pub market: Pubkey,
+    pub test_faucet: Pubkey,
+    pub authority: Pubkey,
+    pub base_mint: Pubkey,
+    pub quote_mint: Pubkey,
+}
