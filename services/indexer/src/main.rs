@@ -1,9 +1,9 @@
 //! Tidebook off-chain indexing service.
 //!
-//! The foundation milestone fetches a recent finalized transaction batch and
-//! extracts raw Tidebook-owned event payloads from its execution logs. Anchor
-//! event decoding, paginated backfill, storage, and live subscriptions are
-//! intentionally deferred to focused follow-up milestones.
+//! The current diagnostic batch fetches recent finalized transactions,
+//! extracts Tidebook-owned event payloads, and strictly decodes the complete
+//! on-chain event catalog. Paginated backfill, storage, and live subscriptions
+//! remain focused follow-up milestones.
 
 mod config;
 mod decoder;
@@ -11,7 +11,10 @@ mod events;
 mod rpc;
 
 use config::Config;
-use decoder::{decode_event, MarketEvent, OrderEvent, TidebookEvent};
+use decoder::{
+    decode_event, BalanceEvent, FaucetEvent, FeeEvent, GovernanceEvent, MarketEvent, OrderEvent,
+    TidebookEvent,
+};
 use events::extract_program_data;
 use rpc::{fetch_recent_successful_signatures, fetch_transaction};
 use solana_commitment_config::CommitmentConfig;
@@ -74,6 +77,44 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             );
 
             match &decoded.event {
+                TidebookEvent::Governance(event) => match event {
+                    GovernanceEvent::ProtocolInitialized(event) => {
+                        println!(
+                            "    ProtocolInitialized protocol_config={} super_admin={} \
+                            admin_record={}",
+                            event.protocol_config, event.super_admin, event.admin_record,
+                        );
+                    }
+                    GovernanceEvent::AdminAdded(event) => {
+                        println!(
+                            "    AdminAdded admin_record={} authority={} added_by={}",
+                            event.admin_record, event.authority, event.added_by,
+                        );
+                    }
+                    GovernanceEvent::AdminStatusChanged(event) => {
+                        println!(
+                            "    AdminStatusChanged admin_record={} authority={} \
+                            changed_by={} status={:?}",
+                            event.admin_record, event.authority, event.changed_by, event.status,
+                        );
+                    }
+                    GovernanceEvent::AdminRemoved(event) => {
+                        println!(
+                            "    AdminRemoved admin_record={} authority={} removed_by={}",
+                            event.admin_record, event.authority, event.removed_by,
+                        );
+                    }
+                    GovernanceEvent::TakerFeeUpdated(event) => {
+                        println!(
+                            "    TakerFeeUpdated protocol_config={} super_admin={} \
+                            previous_taker_fee_bps={} new_taker_fee_bps={}",
+                            event.protocol_config,
+                            event.super_admin,
+                            event.previous_taker_fee_bps,
+                            event.new_taker_fee_bps,
+                        );
+                    }
+                },
                 TidebookEvent::Market(event) => match event {
                     MarketEvent::Initialized(event) => {
                         println!(
@@ -138,6 +179,120 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                             event.released_collateral,
                             event.price_level,
                             event.price_level_closed,
+                        );
+                    }
+                },
+                TidebookEvent::Fill(event) => {
+                    println!(
+                        "    Fill market={} maker_order={} maker_order_id={} \
+                        maker={} taker={} maker_side={:?} execution_price={} \
+                        base_quantity={} quote_quantity={} taker_fee_quote={} \
+                        maker_remaining_quantity={} taker_remaining_quantity={}",
+                        event.market,
+                        event.maker_order,
+                        event.maker_order_id,
+                        event.maker,
+                        event.taker,
+                        event.maker_side,
+                        event.execution_price,
+                        event.base_quantity,
+                        event.quote_quantity,
+                        event.taker_fee_quote,
+                        event.maker_remaining_quantity,
+                        event.taker_remaining_quantity,
+                    );
+                }
+
+                TidebookEvent::Balance(event) => match event {
+                    BalanceEvent::Initialized(event) => {
+                        println!(
+                            "    TraderBalanceInitialized market={} owner={} \
+                            trader_balance={}",
+                            event.market, event.owner, event.trader_balance,
+                        );
+                    }
+
+                    BalanceEvent::Deposited(event) => {
+                        println!(
+                            "    Deposit market={} owner={} trader_balance={} \
+                            mint={} market_vault={} amount={} free_balance={}",
+                            event.market,
+                            event.owner,
+                            event.trader_balance,
+                            event.mint,
+                            event.market_vault,
+                            event.amount,
+                            event.free_balance,
+                        );
+                    }
+
+                    BalanceEvent::Withdrawn(event) => {
+                        println!(
+                            "    Withdrawal market={} owner={} trader_balance={} \
+                            mint={} market_vault={} amount={} free_balance={}",
+                            event.market,
+                            event.owner,
+                            event.trader_balance,
+                            event.mint,
+                            event.market_vault,
+                            event.amount,
+                            event.free_balance,
+                        );
+                    }
+                },
+                TidebookEvent::Fee(event) => match event {
+                    FeeEvent::ProtocolFeesWithdrawn(event) => {
+                        println!(
+                            "    ProtocolFeesWithdrawn market={} market_fees={} \
+                            super_admin={} quote_mint={} quote_vault={} \
+                            destination_quote_account={} amount={} \
+                            remaining_accrued_quote_fees={}",
+                            event.market,
+                            event.market_fees,
+                            event.super_admin,
+                            event.quote_mint,
+                            event.quote_vault,
+                            event.destination_quote_account,
+                            event.amount,
+                            event.remaining_accrued_quote_fees,
+                        );
+                    }
+                },
+                TidebookEvent::Faucet(event) => match event {
+                    FaucetEvent::Initialized(event) => {
+                        println!(
+                            "    TestFaucetInitialized market={} test_faucet={} \
+                            faucet_authority={} base_mint={} quote_mint={} \
+                            base_claim_amount={} quote_claim_amount={}",
+                            event.market,
+                            event.test_faucet,
+                            event.faucet_authority,
+                            event.base_mint,
+                            event.quote_mint,
+                            event.base_claim_amount,
+                            event.quote_claim_amount,
+                        );
+                    }
+                    FaucetEvent::Claimed(event) => {
+                        println!(
+                            "    TestFaucetClaimed market={} test_faucet={} claimant={} \
+                            base_amount={} quote_amount={}",
+                            event.market,
+                            event.test_faucet,
+                            event.claimant,
+                            event.base_amount,
+                            event.quote_amount,
+                        );
+                    }
+                    FaucetEvent::Closed(event) => {
+                        println!(
+                            "    TestFaucetClosed market={} test_faucet={} authority={} \
+                            base_mint={} quote_mint={}",
+                            event.market,
+                            event.test_faucet,
+                            event.authority,
+                            event.base_mint,
+                            event.quote_mint,
                         );
                     }
                 },

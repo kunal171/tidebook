@@ -127,8 +127,8 @@ decoding, persistence, and recovery can each be reviewed independently.
 2. `feature/indexer-event-decoding` establishes strict Base64, discriminator,
    and Borsh decoding; preserves raw source data; and implements the market and
    order event families.
-3. `feature/indexer-event-catalog` adds the remaining admin, balance, faucet,
-   fee, and fill families so all 18 currently emitted event types are decoded.
+3. `feature/indexer-event-catalog` adds the admin, balance, faucet, fee, and
+   fill families so all 18 currently emitted event types are decoded.
 4. `feature/indexer-storage` introduces append-only PostgreSQL transaction and
    event tables plus idempotent writes.
 5. `feature/indexer-backfill` adds signature pagination and durable finalized
@@ -438,12 +438,13 @@ mainnet liquidity acquisition.
 
 ## Recommended next milestone
 
-Start `feature/indexer-event-catalog`. Reuse the strict decoder established for
-market and order events to add the remaining admin, balance, faucet, fee, and
-fill event families. Every type must mirror the on-chain field order, reject
-invalid enum tags and trailing bytes, and preserve the raw Base64 source.
-Persistence, frontend migration, and Yellowstone remain out of scope until all
-18 current event types decode deterministically.
+Start `feature/indexer-storage`. The event catalog now deterministically decodes
+all 18 current event types while preserving the raw Base64 source and rejecting
+invalid enum tags, truncated payloads, and trailing bytes. The storage slice
+should add append-only PostgreSQL transaction and event tables, idempotent
+writes keyed by transaction identity and log index, and schema-version metadata.
+Frontend migration and Yellowstone remain out of scope until durable replay and
+checkpoint semantics are established.
 
 ## References
 
