@@ -89,7 +89,6 @@ pub struct OrderCanceledEvent {
     pub price_level_closed: bool,
 }
 
-
 /// Records one maker-price execution between a resting maker and an incoming
 /// taker.
 ///

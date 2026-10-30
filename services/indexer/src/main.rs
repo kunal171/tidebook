@@ -141,6 +141,26 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                         );
                     }
                 },
+                TidebookEvent::Fill(event) => {
+                    println!(
+                        "    Fill market={} maker_order={} maker_order_id={} \
+                        maker={} taker={} maker_side={:?} execution_price={} \
+                        base_quantity={} quote_quantity={} taker_fee_quote={} \
+                        maker_remaining_quantity={} taker_remaining_quantity={}",
+                        event.market,
+                        event.maker_order,
+                        event.maker_order_id,
+                        event.maker,
+                        event.taker,
+                        event.maker_side,
+                        event.execution_price,
+                        event.base_quantity,
+                        event.quote_quantity,
+                        event.taker_fee_quote,
+                        event.maker_remaining_quantity,
+                        event.taker_remaining_quantity,
+                    );
+                }
             }
         }
     }

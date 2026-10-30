@@ -7,8 +7,8 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use borsh::BorshDeserialize;
 use thiserror::Error;
 pub use types::{
-    FillEvent, MarketClosedEvent, MarketInitializedEvent, MarketStatusChangedEvent, OrderCanceledEvent,
-    OrderPlacedEvent,
+    FillEvent, MarketClosedEvent, MarketInitializedEvent, MarketStatusChangedEvent,
+    OrderCanceledEvent, OrderPlacedEvent,
 };
 
 /// Anchor prefixes every serialized event body with an eight-byte
@@ -23,8 +23,7 @@ const MARKET_STATUS_CHANGED_DISCRIMINATOR: [u8; 8] = [189, 57, 199, 130, 179, 34
 const MARKET_CLOSED_DISCRIMINATOR: [u8; 8] = [64, 193, 117, 138, 19, 11, 84, 44];
 const ORDER_PLACED_DISCRIMINATOR: [u8; 8] = [245, 198, 202, 247, 110, 231, 254, 156];
 const ORDER_CANCELED_DISCRIMINATOR: [u8; 8] = [10, 31, 133, 147, 181, 32, 34, 30];
-const FILL_EVENT_DISCRIMINATOR: [u8; 8] =
-    [13, 89, 41, 228, 105, 178, 45, 112];
+const FILL_EVENT_DISCRIMINATOR: [u8; 8] = [13, 89, 41, 228, 105, 178, 45, 112];
 
 /// Valid Base64 split into its Anchor discriminator and still-untyped body.
 ///
@@ -162,10 +161,7 @@ pub fn decode_event(raw_event: &RawEventLog) -> Result<DecodedEventLog, EventDec
             &envelope.body,
             "OrderCanceledEvent",
         )?)),
-        FILL_EVENT_DISCRIMINATOR => TidebookEvent::Fill(decode_body(
-            &envelope.body,
-            "FillEvent",
-        )?),
+        FILL_EVENT_DISCRIMINATOR => TidebookEvent::Fill(decode_body(&envelope.body, "FillEvent")?),
 
         discriminator => {
             return Err(EventDecodeError::UnknownDiscriminator(discriminator));
