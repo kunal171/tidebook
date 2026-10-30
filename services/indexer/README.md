@@ -18,7 +18,8 @@ The service currently:
 - extracts `Program data:` payloads only while Tidebook is the active program;
 - preserves each raw Base64 payload and original transaction-log index;
 - validates Anchor's eight-byte event discriminator;
-- strictly Borsh-decodes market and order lifecycle events; and
+- strictly Borsh-decodes all 18 currently emitted governance, market, balance,
+  order, fill, fee, and faucet events; and
 - stops on malformed or unsupported events instead of silently producing a
   partial projection.
 
@@ -58,7 +59,7 @@ cargo run --manifest-path services/indexer/Cargo.toml
 
 The current executable inspects at most 20 recent finalized transactions,
 prints the raw Base64 event payload with its original transaction-log index,
-and prints typed fields for supported market and order events. It is a
+and prints typed fields for every currently emitted Tidebook event. It is a
 diagnostic ingestion batch, not yet a continuous indexer.
 
 ## Verify
@@ -76,18 +77,15 @@ cargo clippy --manifest-path services/indexer/Cargo.toml --all-targets -- -D war
 - Transport and parsing failures remain errors so a future checkpoint must not
   advance past data that was never processed.
 - Raw event order is preserved using the original `log_index`.
-- Market initialization, market status, market closure, order placement, and
-  order cancellation are decoded. The other 13 emitted event types remain
-  unsupported and deliberately stop the batch as unknown discriminators.
+- All 18 event schemas in the current Anchor IDL are decoded. Unknown future
+  discriminators and malformed known payloads deliberately stop the batch.
 - Signature pagination, durable checkpoints, PostgreSQL persistence, replay,
   WebSocket subscriptions, projections, and APIs are not implemented yet.
 
 ## Follow-up milestones
 
-1. `feature/indexer-event-catalog`: add the remaining admin, balance, faucet,
-   fee, and fill event families to the deterministic decoder.
-2. `feature/indexer-storage`: append-only PostgreSQL source tables and
+1. `feature/indexer-storage`: append-only PostgreSQL source tables and
    idempotent event writes.
-3. `feature/indexer-backfill`: pagination and durable finalized checkpoints.
-4. `feature/indexer-live-sync`: WebSocket ingestion with checkpoint-based gap
+2. `feature/indexer-backfill`: pagination and durable finalized checkpoints.
+3. `feature/indexer-live-sync`: WebSocket ingestion with checkpoint-based gap
    recovery.
