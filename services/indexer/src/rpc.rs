@@ -5,7 +5,9 @@ use std::error::Error;
 use solana_commitment_config::CommitmentConfig;
 use solana_pubkey::Pubkey;
 use solana_rpc_client::rpc_client::{GetConfirmedSignaturesForAddress2Config, RpcClient};
-use solana_rpc_client_api::config::RpcTransactionConfig;
+use solana_rpc_client_api::{
+    config::RpcTransactionConfig, response::RpcConfirmedTransactionStatusWithSignature,
+};
 use solana_signature::Signature;
 use solana_transaction_status_client_types::{
     option_serializer::OptionSerializer, UiTransactionEncoding,
@@ -35,40 +37,71 @@ pub struct TransactionRecord {
     pub logs: Vec<String>,
 }
 
-/// Returns the newest successful finalized signatures involving `program_id`.
+/// One deterministic page of finalized transaction signatures.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignaturePage {
+    /// Successful transactions ordered from oldest to newest.
+    pub records: Vec<SignatureRecord>,
+
+    /// Cursor used to request the next, older page.
+    pub next_before: Option<Signature>,
+}
+
+/// Fetches one page of finalized signatures involving `program_id`.
 ///
-/// Failed transactions are discarded because their logs describe execution
-/// attempts whose account mutations were rolled back by the runtime.
-pub fn fetch_recent_successful_signatures(
+/// Solana returns signatures newest-first. The indexer reverses successful
+/// records so state is replayed chronologically.
+pub fn fetch_signature_page(
     client: &RpcClient,
     program_id: &Pubkey,
+    before: Option<&Signature>,
     limit: usize,
-) -> Result<Vec<SignatureRecord>, Box<dyn Error + Send + Sync>> {
-    let commitment = CommitmentConfig::finalized();
-
+) -> Result<SignaturePage, Box<dyn Error + Send + Sync>> {
     let entries = client.get_signatures_for_address_with_config(
         program_id,
         GetConfirmedSignaturesForAddress2Config {
-            before: None,
+            before: before.cloned(),
             until: None,
             limit: Some(limit),
-            commitment: Some(commitment),
+            commitment: Some(CommitmentConfig::finalized()),
         },
     )?;
 
-    let successful = entries
+    build_signature_page(entries)
+}
+
+/// Normalizes one newest-first RPC response into an oldest-first work page.
+///
+/// Keeping this transformation independent from network access makes the
+/// boundary-cursor rules directly testable without a live Solana endpoint.
+fn build_signature_page(
+    entries: Vec<RpcConfirmedTransactionStatusWithSignature>,
+) -> Result<SignaturePage, Box<dyn Error + Send + Sync>> {
+    // Derive this before filtering failed transactions. The cursor describes
+    // the RPC page boundary, not merely the successful subset.
+    let next_before = entries
+        .last()
+        .map(|entry| entry.signature.parse::<Signature>())
+        .transpose()?;
+
+    let mut records = entries
         .into_iter()
-        // Failed transactions can contain logs even though all state changes
-        // were rolled back, so they cannot enter our projection pipeline.
         .filter(|entry| entry.err.is_none())
         .map(|entry| SignatureRecord {
             signature: entry.signature,
             slot: entry.slot,
             block_time: entry.block_time,
         })
-        .collect();
+        .collect::<Vec<_>>();
 
-    Ok(successful)
+    // RPC returns newest-to-oldest. Indexing oldest-to-newest gives
+    // deterministic event and projection ordering.
+    records.reverse();
+
+    Ok(SignaturePage {
+        records,
+        next_before,
+    })
 }
 
 /// Fetches a successful finalized transaction and preserves its raw logs.
@@ -136,6 +169,86 @@ fn normalize_logs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use solana_transaction_status_client_types::UiTransactionError;
+
+    fn signature(byte: u8) -> Signature {
+        Signature::from([byte; 64])
+    }
+
+    fn signature_entry(
+        signature: Signature,
+        slot: u64,
+        failed: bool,
+    ) -> RpcConfirmedTransactionStatusWithSignature {
+        let err = failed.then(|| {
+            serde_json::from_str::<UiTransactionError>(r#""AccountNotFound""#)
+                .expect("test transaction error must deserialize")
+        });
+
+        RpcConfirmedTransactionStatusWithSignature {
+            signature: signature.to_string(),
+            slot,
+            err,
+            memo: None,
+            block_time: Some(slot as i64),
+            confirmation_status: None,
+            transaction_index: None,
+        }
+    }
+
+    #[test]
+    fn signature_page_reverses_successful_records_to_oldest_first() {
+        let newest = signature(3);
+        let middle = signature(2);
+        let oldest = signature(1);
+
+        let page = build_signature_page(vec![
+            signature_entry(newest, 30, false),
+            signature_entry(middle, 20, false),
+            signature_entry(oldest, 10, false),
+        ])
+        .expect("valid signature page must normalize");
+
+        assert_eq!(page.next_before, Some(oldest));
+        assert_eq!(
+            page.records
+                .iter()
+                .map(|record| record.slot)
+                .collect::<Vec<_>>(),
+            vec![10, 20, 30]
+        );
+    }
+
+    #[test]
+    fn signature_page_uses_failed_boundary_as_next_cursor() {
+        let newest = signature(3);
+        let successful_oldest = signature(2);
+        let failed_boundary = signature(1);
+
+        let page = build_signature_page(vec![
+            signature_entry(newest, 30, false),
+            signature_entry(successful_oldest, 20, false),
+            signature_entry(failed_boundary, 10, true),
+        ])
+        .expect("valid signature page must normalize");
+
+        assert_eq!(page.next_before, Some(failed_boundary));
+        assert_eq!(
+            page.records
+                .iter()
+                .map(|record| record.slot)
+                .collect::<Vec<_>>(),
+            vec![20, 30]
+        );
+    }
+
+    #[test]
+    fn empty_signature_page_marks_end_of_history() {
+        let page = build_signature_page(Vec::new()).expect("empty RPC page must be valid");
+
+        assert!(page.records.is_empty());
+        assert_eq!(page.next_before, None);
+    }
 
     #[test]
     fn successful_transaction_preserves_log_order() {

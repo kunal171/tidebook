@@ -121,6 +121,43 @@ The client keeps network and program identity in `app/lib/solana.ts`.
 The program address must remain synchronized with `declare_id!`, `Anchor.toml`,
 and the deployment keypair.
 
+### Companion indexer service
+
+`services/indexer/` is an independent Rust workspace whose dependency graph can
+advance without changing the Anchor program and LiteSVM test stack. It reads
+only successful finalized transactions, scopes Anchor `Program data:` to the
+active Tidebook invocation, strictly decodes all emitted event families, and
+stores replayable source records in PostgreSQL.
+
+```text
+Solana finalized RPC
+        |
+        v
+bounded backfill -> transaction processor -> strict event decoder
+        |                    |                       |
+        v                    +-----------------------+
+durable cursor                       |
+                                     v
+                       chain_transactions + chain_events
+```
+
+Solana returns each signature page newest-first. The RPC layer takes the final
+raw entry as the next `before` cursor before discarding failed transactions,
+then reverses successful records for oldest-first processing within that page.
+Source tables are append-only and order-independent; future projections must
+replay stored history explicitly in their required deterministic order.
+
+Every transaction and its decoded events commit atomically. Exact replay is a
+no-op success, while conflicting source data rolls back. A page checkpoint is
+updated only after all successful records commit. If RPC, decoding, or storage
+fails, the old cursor remains durable and the incomplete page is retried. A
+terminal empty page marks the historical backfill complete while preserving
+the final cursor for auditability.
+
+The current checkpoint walks backward through historical pages. Live sync will
+need a separate newest-signature or finalized-slot high-water mark so reconnect
+recovery cannot confuse historical progress with forward ingestion.
+
 The editable system diagram is available at
 [`diagrams/tidebook-architecture.drawio`](diagrams/tidebook-architecture.drawio).
 

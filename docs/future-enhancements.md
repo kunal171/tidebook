@@ -132,7 +132,7 @@ decoding, persistence, and recovery can each be reviewed independently.
 4. `feature/indexer-storage` introduces append-only PostgreSQL transaction and
    event tables plus atomic, idempotent writes. This slice is complete.
 5. `feature/indexer-backfill` adds signature pagination and durable finalized
-   checkpoints for complete historical replay.
+   checkpoints for complete historical replay. This slice is complete.
 6. `feature/indexer-live-sync` adds WebSocket log ingestion and resumes from the
    durable checkpoint after every disconnect so gaps are backfilled.
 
@@ -438,13 +438,13 @@ mainnet liquidity acquisition.
 
 ## Recommended next milestone
 
-Start `feature/indexer-backfill`. PostgreSQL now retains finalized transactions,
-raw logs, decoded events, and schema versions through atomic, idempotent writes.
-The backfill slice should paginate `getSignaturesForAddress` in deterministic
-oldest-to-newest processing order and advance a durable finalized checkpoint
-only after every source record in the page commits. Frontend migration,
-WebSocket live sync, and Yellowstone remain out of scope until replay and
-checkpoint recovery semantics are established.
+Start `feature/indexer-live-sync`. Historical RPC pagination now resumes from a
+durable backward cursor, stores source records idempotently, preserves the
+terminal cursor, and stops safely at a configured page cap. Live ingestion
+should add a separate newest finalized signature or slot high-water mark,
+subscribe through standard Solana WebSocket RPC, and backfill every reconnect
+gap before accepting the stream as current. Yellowstone remains a later scaling
+option after standard RPC recovery semantics are proven.
 
 ## References
 
