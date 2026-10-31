@@ -6,11 +6,14 @@ mod live_checkpoint;
 mod models;
 mod writer;
 
-pub use live_checkpoint::{
-    load_live_checkpoint,
-    save_live_checkpoint,
-    LiveCheckpoint,
-};
+pub use checkpoint::{load_backfill_checkpoint, save_backfill_checkpoint};
 pub use connection::connect;
-pub use live_checkpoint::{load_live_checkpoint, LiveCheckpoint};
+// The write API is intentionally exposed with the read API before the live
+// consumer is wired in the next milestone. Remove this narrow allowance once
+// runtime ingestion calls `save_live_checkpoint`.
+#[allow(
+    unused_imports,
+    reason = "save_live_checkpoint is consumed by the next live-sync milestone"
+)]
+pub use live_checkpoint::{load_live_checkpoint, save_live_checkpoint, LiveCheckpoint};
 pub use writer::persist_transaction;
