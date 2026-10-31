@@ -9,6 +9,7 @@ mod config;
 mod decoder;
 mod events;
 mod rpc;
+mod storage;
 
 use config::Config;
 use decoder::{
@@ -21,16 +22,20 @@ use solana_commitment_config::CommitmentConfig;
 use solana_pubkey::Pubkey;
 use solana_rpc_client::rpc_client::RpcClient;
 use std::{error::Error, str::FromStr};
+use storage::{connect, persist_transaction};
 
 const INITIAL_SIGNATURE_LIMIT: usize = 20;
 
-fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let config = Config::from_env();
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+    let config = Config::from_env()?;
     let program_id = Pubkey::from_str(&config.program_id)?;
+    let pool = connect(&config.database_url).await?;
 
     println!("Tidebook indexer");
     println!("RPC endpoint: {}", config.rpc_url);
     println!("Program: {program_id}");
+    println!("PostgreSQL connected; pool size={}", pool.size());
 
     // Reuse one blocking client for the signature page and every transaction
     // fetch. Besides avoiding repeated client construction, this preserves the
@@ -65,15 +70,22 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             raw_events.len(),
         );
 
-        for raw_event in raw_events {
-            // Decoding is deliberately fail-closed. Once durable checkpoints
-            // exist, returning here prevents a checkpoint from moving beyond
-            // an unknown or malformed event and creating a partial projection.
-            let decoded = decode_event(&raw_event)?;
+        // Decoding is deliberately fail-closed. Once durable checkpoints
+        // exist, returning here prevents a checkpoint from moving beyond
+        // an unknown or malformed event and creating a partial projection.
+        let decoded_events = raw_events
+            .iter()
+            .map(decode_event)
+            .collect::<Result<Vec<_>, _>>()?;
 
+        persist_transaction(&pool, &transaction, &decoded_events).await?;
+
+        for decoded in &decoded_events {
             println!(
-                "  event_log_index={} payload={}",
-                decoded.log_index, decoded.payload_base64,
+                "  event_log_index={} event_type={} payload={}",
+                decoded.log_index,
+                decoded.event.event_type(),
+                decoded.payload_base64,
             );
 
             match &decoded.event {

@@ -1,66 +1,50 @@
 # Tidebook Indexer
 
-The Tidebook indexer is an off-chain Rust service for turning finalized Solana
-transactions into reliable, replayable source records. It is intentionally a
-separate Cargo workspace so its RPC dependencies can evolve independently from
-the Anchor and LiteSVM versions used by the on-chain program.
+Rust service that reads finalized Tidebook transactions, decodes all 18 Anchor
+event types, and stores replayable source records in PostgreSQL. It is a
+separate Cargo workspace so its RPC and database dependencies can evolve
+independently from the on-chain program.
 
 ## Current scope
 
-The service currently:
+- Fetches the latest 20 successful finalized transactions from Solana RPC.
+- Accepts `Program data:` only while Tidebook is the active invocation.
+- Preserves raw logs, Base64 payloads, log indexes, decoded JSON, and schema
+  versions.
+- Writes each transaction and its events atomically.
+- Treats exact replay as success and rejects conflicting source data.
 
-- reads its RPC URL and Tidebook program address from the environment;
-- requests the latest successful finalized signatures involving Tidebook;
-- fetches full transaction metadata and execution logs;
-- rejects failed transactions because their state changes were rolled back;
-- preserves raw logs in their original order;
-- tracks nested Solana program invocations; and
-- extracts `Program data:` payloads only while Tidebook is the active program;
-- preserves each raw Base64 payload and original transaction-log index;
-- validates Anchor's eight-byte event discriminator;
-- strictly Borsh-decodes all 18 currently emitted governance, market, balance,
-  order, fill, fee, and faucet events; and
-- stops on malformed or unsupported events instead of silently producing a
-  partial projection.
+This is a diagnostic ingestion batch. Pagination, durable checkpoints, live
+subscriptions, projections, and APIs are not implemented yet.
 
-Program scoping matters because a Tidebook instruction can invoke other
-programs through CPI. A nested program's data log must never be decoded as a
-Tidebook event.
-
-## Configuration
-
-Copy the example environment file or export the variables in your shell:
-
-```bash
-cp services/indexer/.env.example services/indexer/.env
-```
-
-```text
-SOLANA_RPC_URL=https://api.devnet.solana.com
-TIDEBOOK_PROGRAM_ID=AG4ztZvcZjzFKjoXLzH8M6U3if9CwVFTXH2FHjqg7SdL
-```
-
-The current configuration loader reads process environment variables directly;
-it does not load `.env` files automatically. Export the file before running:
-
-```bash
-set -a
-source services/indexer/.env
-set +a
-```
-
-## Run
+## Run locally
 
 From the repository root:
 
 ```bash
+cp services/indexer/.env.example services/indexer/.env
+docker compose -f services/indexer/compose.yaml up -d
+
+set -a
+source services/indexer/.env
+set +a
+
 cargo run --manifest-path services/indexer/Cargo.toml
 ```
 
-The current executable inspects at most 20 recent finalized transactions,
-prints the raw Base64 event payload with its original transaction-log index,
-and prints typed fields for every currently emitted Tidebook event. It is a
-diagnostic ingestion batch, not yet a continuous indexer.
+The local database uses `127.0.0.1:5433` because port `5432` is already used by
+the host PostgreSQL service. `DATABASE_URL` is required, and pending migrations
+run automatically before RPC ingestion.
+
+Useful database commands:
+
+```bash
+cd services/indexer
+sqlx migrate info
+sqlx migrate run
+
+docker compose -f compose.yaml stop
+```
 
 ## Verify
 
@@ -70,22 +54,25 @@ cargo test --manifest-path services/indexer/Cargo.toml
 cargo clippy --manifest-path services/indexer/Cargo.toml --all-targets -- -D warnings
 ```
 
-## Guarantees and limitations
+Run the isolated PostgreSQL integration test with:
 
-- Only successful finalized transactions become source records.
-- Missing log fields normalize to an empty log collection.
-- Transport and parsing failures remain errors so a future checkpoint must not
-  advance past data that was never processed.
-- Raw event order is preserved using the original `log_index`.
-- All 18 event schemas in the current Anchor IDL are decoded. Unknown future
-  discriminators and malformed known payloads deliberately stop the batch.
-- Signature pagination, durable checkpoints, PostgreSQL persistence, replay,
-  WebSocket subscriptions, projections, and APIs are not implemented yet.
+```bash
+DATABASE_URL=postgres://tidebook:tidebook_dev@127.0.0.1:5433/postgres \
+  cargo test --manifest-path services/indexer/Cargo.toml \
+  storage::writer::tests::exact_replay_is_idempotent_and_conflicts_roll_back \
+  -- --ignored --exact
+```
 
-## Follow-up milestones
+## Safety guarantees
 
-1. `feature/indexer-storage`: append-only PostgreSQL source tables and
-   idempotent event writes.
-2. `feature/indexer-backfill`: pagination and durable finalized checkpoints.
-3. `feature/indexer-live-sync`: WebSocket ingestion with checkpoint-based gap
-   recovery.
+- Failed or non-finalized transactions are never persisted.
+- Unknown, malformed, truncated, and trailing event data fails closed.
+- Nested CPI data cannot be misclassified as a Tidebook event.
+- Integer conversions are checked before opening a database transaction.
+- Conflicts roll back the complete transaction and event batch.
+
+## Next
+
+1. Paginated finalized backfill with durable checkpoints.
+2. WebSocket live sync with checkpoint-based gap recovery.
+3. Read-optimized projections and an API.

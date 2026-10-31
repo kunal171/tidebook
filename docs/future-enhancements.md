@@ -130,7 +130,7 @@ decoding, persistence, and recovery can each be reviewed independently.
 3. `feature/indexer-event-catalog` adds the admin, balance, faucet, fee, and
    fill families so all 18 currently emitted event types are decoded.
 4. `feature/indexer-storage` introduces append-only PostgreSQL transaction and
-   event tables plus idempotent writes.
+   event tables plus atomic, idempotent writes. This slice is complete.
 5. `feature/indexer-backfill` adds signature pagination and durable finalized
    checkpoints for complete historical replay.
 6. `feature/indexer-live-sync` adds WebSocket log ingestion and resumes from the
@@ -438,13 +438,13 @@ mainnet liquidity acquisition.
 
 ## Recommended next milestone
 
-Start `feature/indexer-storage`. The event catalog now deterministically decodes
-all 18 current event types while preserving the raw Base64 source and rejecting
-invalid enum tags, truncated payloads, and trailing bytes. The storage slice
-should add append-only PostgreSQL transaction and event tables, idempotent
-writes keyed by transaction identity and log index, and schema-version metadata.
-Frontend migration and Yellowstone remain out of scope until durable replay and
-checkpoint semantics are established.
+Start `feature/indexer-backfill`. PostgreSQL now retains finalized transactions,
+raw logs, decoded events, and schema versions through atomic, idempotent writes.
+The backfill slice should paginate `getSignaturesForAddress` in deterministic
+oldest-to-newest processing order and advance a durable finalized checkpoint
+only after every source record in the page commits. Frontend migration,
+WebSocket live sync, and Yellowstone remain out of scope until replay and
+checkpoint recovery semantics are established.
 
 ## References
 

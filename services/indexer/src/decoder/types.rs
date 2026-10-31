@@ -4,10 +4,11 @@
 //! event declarations. Borsh is positional and does not encode field names.
 
 use borsh::BorshDeserialize;
+use serde::Serialize;
 use solana_pubkey::Pubkey;
 
 /// Off-chain mirror of the market-creation event emitted by the program.
-#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize, Serialize)]
 pub struct MarketInitializedEvent {
     pub market: Pubkey,
     pub market_fees: Pubkey,
@@ -24,14 +25,14 @@ pub struct MarketInitializedEvent {
 ///
 /// Borsh stores fieldless enum variants by their zero-based position. Do not
 /// reorder these variants: `Active` is encoded as `0` and `Paused` as `1`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshDeserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshDeserialize, Serialize)]
 pub enum MarketStatus {
     Active,
     Paused,
 }
 
 /// Records an authorized pause or unpause transition.
-#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize, Serialize)]
 pub struct MarketStatusChangedEvent {
     pub market: Pubkey,
     pub authority: Pubkey,
@@ -39,7 +40,7 @@ pub struct MarketStatusChangedEvent {
 }
 
 /// Records successful closure of the market, fee state, and custody vaults.
-#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize, Serialize)]
 pub struct MarketClosedEvent {
     pub market: Pubkey,
     pub market_fees: Pubkey,
@@ -54,14 +55,14 @@ pub struct MarketClosedEvent {
 ///
 /// Borsh encodes `Bid` as `0` and `Ask` as `1`. Variant order must remain
 /// identical to the on-chain `OrderSide`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshDeserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshDeserialize, Serialize)]
 pub enum OrderSide {
     Bid,
     Ask,
 }
 
 /// Records an order entering a price-level FIFO queue.
-#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize, Serialize)]
 pub struct OrderPlacedEvent {
     pub market: Pubkey,
     pub order: Pubkey,
@@ -75,7 +76,7 @@ pub struct OrderPlacedEvent {
 }
 
 /// Records owner-authorized cancellation of an open order.
-#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize, Serialize)]
 pub struct OrderCanceledEvent {
     pub market: Pubkey,
     pub order: Pubkey,
@@ -94,7 +95,7 @@ pub struct OrderCanceledEvent {
 ///
 /// Field order must remain identical to the on-chain `FillEvent`. Borsh uses
 /// positional encoding, so reordering fields would silently corrupt decoding.
-#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize, Serialize)]
 pub struct FillEvent {
     pub market: Pubkey,
     pub maker_order: Pubkey,
@@ -111,7 +112,7 @@ pub struct FillEvent {
 }
 
 /// Records creation of a trader's canonical per-market internal ledger.
-#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize, Serialize)]
 pub struct TraderBalanceInitializedEvent {
     pub market: Pubkey,
     pub owner: Pubkey,
@@ -122,7 +123,7 @@ pub struct TraderBalanceInitializedEvent {
 /// free-balance credit.
 ///
 /// `free_balance` is the selected asset's balance after the deposit.
-#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize, Serialize)]
 pub struct DepositEvent {
     pub market: Pubkey,
     pub owner: Pubkey,
@@ -137,7 +138,7 @@ pub struct DepositEvent {
 /// market custody.
 ///
 /// `free_balance` is the selected asset's balance after the withdrawal.
-#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize, Serialize)]
 pub struct WithdrawalEvent {
     pub market: Pubkey,
     pub owner: Pubkey,
@@ -152,7 +153,7 @@ pub struct WithdrawalEvent {
 ///
 /// Borsh encodes `Active` as `0` and `Disabled` as `1`. Variant order must
 /// remain identical to the on-chain `AdminStatus` declaration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshDeserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshDeserialize, Serialize)]
 pub enum AdminStatus {
     Active,
     Disabled,
@@ -160,7 +161,7 @@ pub enum AdminStatus {
 
 /// Records creation of protocol governance and the deployer's administrator
 /// record.
-#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize, Serialize)]
 pub struct ProtocolInitializedEvent {
     pub protocol_config: Pubkey,
     pub super_admin: Pubkey,
@@ -168,7 +169,7 @@ pub struct ProtocolInitializedEvent {
 }
 
 /// Records creation of an independently addressable administrator record.
-#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize, Serialize)]
 pub struct AdminAddedEvent {
     pub admin_record: Pubkey,
     pub authority: Pubkey,
@@ -176,7 +177,7 @@ pub struct AdminAddedEvent {
 }
 
 /// Records a reversible administrator enable or disable transition.
-#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize, Serialize)]
 pub struct AdminStatusChangedEvent {
     pub admin_record: Pubkey,
     pub authority: Pubkey,
@@ -185,7 +186,7 @@ pub struct AdminStatusChangedEvent {
 }
 
 /// Records permanent closure of a disabled administrator record.
-#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize, Serialize)]
 pub struct AdminRemovedEvent {
     pub admin_record: Pubkey,
     pub authority: Pubkey,
@@ -193,7 +194,7 @@ pub struct AdminRemovedEvent {
 }
 
 /// Records a global taker-fee policy change.
-#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize, Serialize)]
 pub struct TakerFeeUpdatedEvent {
     pub protocol_config: Pubkey,
     pub super_admin: Pubkey,
@@ -202,7 +203,7 @@ pub struct TakerFeeUpdatedEvent {
 }
 
 /// Records quote-denominated protocol revenue leaving market custody.
-#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize, Serialize)]
 pub struct ProtocolFeesWithdrawnEvent {
     pub market: Pubkey,
     pub market_fees: Pubkey,
@@ -215,7 +216,7 @@ pub struct ProtocolFeesWithdrawnEvent {
 }
 
 /// Records creation of a market-specific devnet test faucet.
-#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize, Serialize)]
 pub struct TestFaucetInitializedEvent {
     pub market: Pubkey,
     pub test_faucet: Pubkey,
@@ -227,7 +228,7 @@ pub struct TestFaucetInitializedEvent {
 }
 
 /// Records a claimant receiving both configured test assets.
-#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize, Serialize)]
 pub struct TestFaucetClaimedEvent {
     pub market: Pubkey,
     pub test_faucet: Pubkey,
@@ -237,7 +238,7 @@ pub struct TestFaucetClaimedEvent {
 }
 
 /// Records closure of a market-specific test faucet.
-#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshDeserialize, Serialize)]
 pub struct TestFaucetClosedEvent {
     pub market: Pubkey,
     pub test_faucet: Pubkey,
