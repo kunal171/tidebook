@@ -26,7 +26,8 @@ use storage::connect;
 
 const INITIAL_SIGNATURE_LIMIT: usize = 20;
 
-fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let config = Config::from_env()?;
     let program_id = Pubkey::from_str(&config.program_id)?;
     let pool = connect(&config.database_url).await?;
