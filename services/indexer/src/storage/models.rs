@@ -69,3 +69,82 @@ impl TryFrom<&DecodedEventLog> for EventInsert {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::decoder::{MarketEvent, MarketInitializedEvent};
+    use solana_pubkey::Pubkey;
+
+    fn transaction(slot: u64) -> TransactionRecord {
+        TransactionRecord {
+            signature: "test-signature".to_owned(),
+            slot,
+            block_time: Some(1_700_000_000),
+            logs: vec!["Program data: payload".to_owned()],
+        }
+    }
+
+    fn decoded_event(log_index: usize) -> DecodedEventLog {
+        DecodedEventLog {
+            log_index,
+            payload_base64: "payload".to_owned(),
+            event: TidebookEvent::Market(MarketEvent::Initialized(MarketInitializedEvent {
+                market: Pubkey::new_from_array([1; 32]),
+                market_fees: Pubkey::new_from_array([2; 32]),
+                authority: Pubkey::new_from_array([3; 32]),
+                base_mint: Pubkey::new_from_array([4; 32]),
+                quote_mint: Pubkey::new_from_array([5; 32]),
+                base_vault: Pubkey::new_from_array([6; 32]),
+                quote_vault: Pubkey::new_from_array([7; 32]),
+                price_tick_size: 10_000,
+                quantity_lot_size: 100_000,
+            })),
+        }
+    }
+
+    #[test]
+    fn converts_maximum_postgres_slot_without_truncation() {
+        let record = transaction(i64::MAX as u64);
+
+        let insert = TransactionInsert::try_from(&record).expect("i64::MAX must fit BIGINT");
+
+        assert_eq!(insert.slot, i64::MAX);
+        assert_eq!(insert.signature, record.signature);
+        assert_eq!(insert.raw_logs.0, record.logs);
+    }
+
+    #[test]
+    fn rejects_slot_above_postgres_bigint_range() {
+        let record = transaction((i64::MAX as u64) + 1);
+
+        assert_eq!(
+            TransactionInsert::try_from(&record).expect_err("overflowing slot must fail"),
+            StorageModelError::SlotOutOfRange { slot: record.slot }
+        );
+    }
+
+    #[test]
+    fn converts_event_with_stable_type_and_json() {
+        let event = decoded_event(i32::MAX as usize);
+
+        let insert = EventInsert::try_from(&event).expect("i32::MAX must fit INTEGER");
+
+        assert_eq!(insert.log_index, i32::MAX);
+        assert_eq!(insert.event_type, "MarketInitializedEvent");
+        assert_eq!(insert.payload_base64, event.payload_base64);
+        assert_eq!(insert.decoded_event.0, event.event);
+    }
+
+    #[test]
+    fn rejects_log_index_above_postgres_integer_range() {
+        let event = decoded_event((i32::MAX as usize) + 1);
+
+        assert_eq!(
+            EventInsert::try_from(&event).expect_err("overflowing log index must fail"),
+            StorageModelError::LogIndexOutOfRange {
+                log_index: event.log_index,
+            }
+        );
+    }
+}

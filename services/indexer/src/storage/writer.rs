@@ -118,3 +118,116 @@ pub async fn persist_transaction(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::decoder::{MarketEvent, MarketInitializedEvent, TidebookEvent};
+    use solana_pubkey::Pubkey;
+
+    fn transaction(signature: &str, slot: u64) -> TransactionRecord {
+        TransactionRecord {
+            signature: signature.to_owned(),
+            slot,
+            block_time: Some(1_700_000_000),
+            logs: vec!["Program data: payload".to_owned()],
+        }
+    }
+
+    fn event(log_index: usize, payload_base64: &str) -> DecodedEventLog {
+        DecodedEventLog {
+            log_index,
+            payload_base64: payload_base64.to_owned(),
+            event: TidebookEvent::Market(MarketEvent::Initialized(MarketInitializedEvent {
+                market: Pubkey::new_from_array([11; 32]),
+                market_fees: Pubkey::new_from_array([12; 32]),
+                authority: Pubkey::new_from_array([13; 32]),
+                base_mint: Pubkey::new_from_array([14; 32]),
+                quote_mint: Pubkey::new_from_array([15; 32]),
+                base_vault: Pubkey::new_from_array([16; 32]),
+                quote_vault: Pubkey::new_from_array([17; 32]),
+                price_tick_size: 10_000,
+                quantity_lot_size: 100_000,
+            })),
+        }
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    #[ignore = "requires a PostgreSQL server supplied through DATABASE_URL"]
+    async fn exact_replay_is_idempotent_and_conflicts_roll_back(pool: PgPool) {
+        let source_transaction = transaction("signature-one", 42);
+        let source_event = event(7, "payload-one");
+
+        persist_transaction(
+            &pool,
+            &source_transaction,
+            std::slice::from_ref(&source_event),
+        )
+        .await
+        .expect("first ingestion must succeed");
+        persist_transaction(
+            &pool,
+            &source_transaction,
+            std::slice::from_ref(&source_event),
+        )
+        .await
+        .expect("exact replay must succeed");
+
+        let transaction_count: i64 = sqlx::query_scalar("SELECT count(*) FROM chain_transactions")
+            .fetch_one(&pool)
+            .await
+            .expect("transaction count query must succeed");
+        let event_count: i64 = sqlx::query_scalar("SELECT count(*) FROM chain_events")
+            .fetch_one(&pool)
+            .await
+            .expect("event count query must succeed");
+
+        assert_eq!(transaction_count, 1);
+        assert_eq!(event_count, 1);
+
+        let conflicting_transaction = transaction("signature-one", 43);
+        assert!(matches!(
+            persist_transaction(
+                &pool,
+                &conflicting_transaction,
+                std::slice::from_ref(&source_event),
+            )
+            .await,
+            Err(StorageError::TransactionConflict { .. })
+        ));
+
+        let conflicting_event = event(7, "different-payload");
+        assert!(matches!(
+            persist_transaction(
+                &pool,
+                &source_transaction,
+                std::slice::from_ref(&conflicting_event),
+            )
+            .await,
+            Err(StorageError::EventConflict { .. })
+        ));
+
+        let atomic_transaction = transaction("signature-two", 44);
+        let duplicate_identity_events = [event(8, "first"), event(8, "second")];
+        assert!(matches!(
+            persist_transaction(&pool, &atomic_transaction, &duplicate_identity_events).await,
+            Err(StorageError::EventConflict { .. })
+        ));
+
+        let atomic_transaction_count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM chain_transactions WHERE signature = $1")
+                .bind(&atomic_transaction.signature)
+                .fetch_one(&pool)
+                .await
+                .expect("atomic rollback transaction query must succeed");
+        let atomic_event_count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM chain_events WHERE signature = $1")
+                .bind(&atomic_transaction.signature)
+                .fetch_one(&pool)
+                .await
+                .expect("atomic rollback event query must succeed");
+
+        assert_eq!(atomic_transaction_count, 0);
+        assert_eq!(atomic_event_count, 0);
+    }
+}
