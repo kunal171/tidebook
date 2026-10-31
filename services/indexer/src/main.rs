@@ -22,7 +22,7 @@ use solana_commitment_config::CommitmentConfig;
 use solana_pubkey::Pubkey;
 use solana_rpc_client::rpc_client::RpcClient;
 use std::{error::Error, str::FromStr};
-use storage::connect;
+use storage::{connect, persist_transaction};
 
 const INITIAL_SIGNATURE_LIMIT: usize = 20;
 
@@ -70,12 +70,17 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             raw_events.len(),
         );
 
-        for raw_event in raw_events {
-            // Decoding is deliberately fail-closed. Once durable checkpoints
-            // exist, returning here prevents a checkpoint from moving beyond
-            // an unknown or malformed event and creating a partial projection.
-            let decoded = decode_event(&raw_event)?;
+        // Decoding is deliberately fail-closed. Once durable checkpoints
+        // exist, returning here prevents a checkpoint from moving beyond
+        // an unknown or malformed event and creating a partial projection.
+        let decoded_events = raw_events
+            .iter()
+            .map(decode_event)
+            .collect::<Result<Vec<_>, _>>()?;
 
+        persist_transaction(&pool, &transaction, &decoded_events).await?;
+
+        for decoded in &decoded_events {
             println!(
                 "  event_log_index={} event_type={} payload={}",
                 decoded.log_index,
