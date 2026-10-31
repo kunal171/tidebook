@@ -8,6 +8,7 @@ mod backfill;
 mod config;
 mod decoder;
 mod events;
+mod live;
 mod processor;
 mod reporter;
 mod rpc;
