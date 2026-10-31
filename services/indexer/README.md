@@ -19,7 +19,10 @@ The service currently:
 - preserves each raw Base64 payload and original transaction-log index;
 - validates Anchor's eight-byte event discriminator;
 - strictly Borsh-decodes all 18 currently emitted governance, market, balance,
-  order, fill, fee, and faucet events; and
+  order, fill, fee, and faucet events;
+- connects to PostgreSQL and applies embedded migrations before ingestion;
+- atomically stores each finalized transaction with all its decoded events;
+- accepts exact source-record replays without creating duplicates; and
 - stops on malformed or unsupported events instead of silently producing a
   partial projection.
 
@@ -38,6 +41,7 @@ cp services/indexer/.env.example services/indexer/.env
 ```text
 SOLANA_RPC_URL=https://api.devnet.solana.com
 TIDEBOOK_PROGRAM_ID=AG4ztZvcZjzFKjoXLzH8M6U3if9CwVFTXH2FHjqg7SdL
+DATABASE_URL=postgres://tidebook:tidebook_dev@127.0.0.1:5433/tidebook_indexer
 ```
 
 The current configuration loader reads process environment variables directly;
@@ -47,6 +51,35 @@ it does not load `.env` files automatically. Export the file before running:
 set -a
 source services/indexer/.env
 set +a
+```
+
+`DATABASE_URL` is required. The indexer exits before RPC ingestion when the
+database is unavailable or its migrations cannot be applied.
+
+## Local PostgreSQL
+
+The development database binds to `127.0.0.1:5433` because this workstation's
+host PostgreSQL service already occupies port `5432`.
+
+Start PostgreSQL and wait for its health check:
+
+```bash
+docker compose -f services/indexer/compose.yaml up -d
+docker compose -f services/indexer/compose.yaml ps
+```
+
+Apply or inspect migrations manually when needed:
+
+```bash
+cd services/indexer
+sqlx migrate info
+sqlx migrate run
+```
+
+Stop PostgreSQL without deleting its named data volume:
+
+```bash
+docker compose -f services/indexer/compose.yaml stop
 ```
 
 ## Run
@@ -70,6 +103,17 @@ cargo test --manifest-path services/indexer/Cargo.toml
 cargo clippy --manifest-path services/indexer/Cargo.toml --all-targets -- -D warnings
 ```
 
+The PostgreSQL integration test is ignored by the default suite so contributors
+without a database can still run unit tests. Run it against an isolated SQLx
+test database with:
+
+```bash
+DATABASE_URL=postgres://tidebook:tidebook_dev@127.0.0.1:5433/postgres \
+  cargo test --manifest-path services/indexer/Cargo.toml \
+  storage::writer::tests::exact_replay_is_idempotent_and_conflicts_roll_back \
+  -- --ignored --exact
+```
+
 ## Guarantees and limitations
 
 - Only successful finalized transactions become source records.
@@ -79,13 +123,17 @@ cargo clippy --manifest-path services/indexer/Cargo.toml --all-targets -- -D war
 - Raw event order is preserved using the original `log_index`.
 - All 18 event schemas in the current Anchor IDL are decoded. Unknown future
   discriminators and malformed known payloads deliberately stop the batch.
-- Signature pagination, durable checkpoints, PostgreSQL persistence, replay,
-  WebSocket subscriptions, projections, and APIs are not implemented yet.
+- A source transaction and all its decoded events commit atomically.
+- Exact replay is idempotent; conflicting source data for an existing identity
+  is rejected and rolled back.
+- Raw logs, Base64 event payloads, decoded JSON, and schema versions are kept
+  together for future replay and schema evolution.
+- Signature pagination, durable checkpoints, WebSocket subscriptions,
+  projection tables, and APIs are not implemented yet.
 
 ## Follow-up milestones
 
-1. `feature/indexer-storage`: append-only PostgreSQL source tables and
-   idempotent event writes.
-2. `feature/indexer-backfill`: pagination and durable finalized checkpoints.
-3. `feature/indexer-live-sync`: WebSocket ingestion with checkpoint-based gap
+1. `feature/indexer-backfill`: pagination and durable finalized checkpoints.
+2. `feature/indexer-live-sync`: WebSocket ingestion with checkpoint-based gap
    recovery.
+3. Projection tables and an API for frontend and monitoring queries.
