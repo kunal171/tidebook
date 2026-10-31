@@ -155,6 +155,7 @@ mod tests {
             signature: signature(byte).to_string(),
             slot,
             block_time: Some(slot as i64),
+            transaction_index: None,
         }
     }
 

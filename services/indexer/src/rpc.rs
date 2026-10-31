@@ -27,6 +27,12 @@ pub struct SignatureRecord {
 
     /// Validator-estimated Unix timestamp, when the RPC node supplies one.
     pub block_time: Option<i64>,
+
+    /// Execution position within the slot, when supplied by the RPC node.
+    ///
+    /// This disambiguates finalized transactions that share a slot and lets
+    /// live synchronization advance its high-water mark deterministically.
+    pub transaction_index: Option<u32>,
 }
 
 /// Immutable source data retained for a successfully finalized transaction.
@@ -105,6 +111,7 @@ fn build_signature_page(
             signature: entry.signature,
             slot: entry.slot,
             block_time: entry.block_time,
+            transaction_index: entry.transaction_index,
         })
         .collect::<Vec<_>>();
 
@@ -192,6 +199,7 @@ mod tests {
     fn signature_entry(
         signature: Signature,
         slot: u64,
+        transaction_index: Option<u32>,
         failed: bool,
     ) -> RpcConfirmedTransactionStatusWithSignature {
         let err = failed.then(|| {
@@ -206,7 +214,7 @@ mod tests {
             memo: None,
             block_time: Some(slot as i64),
             confirmation_status: None,
-            transaction_index: None,
+            transaction_index,
         }
     }
 
@@ -217,9 +225,9 @@ mod tests {
         let oldest = signature(1);
 
         let page = build_signature_page(vec![
-            signature_entry(newest, 30, false),
-            signature_entry(middle, 20, false),
-            signature_entry(oldest, 10, false),
+            signature_entry(newest, 30, Some(2), false),
+            signature_entry(middle, 20, Some(1), false),
+            signature_entry(oldest, 10, Some(0), false),
         ])
         .expect("valid signature page must normalize");
 
@@ -231,6 +239,13 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![10, 20, 30]
         );
+        assert_eq!(
+            page.records
+                .iter()
+                .map(|record| record.transaction_index)
+                .collect::<Vec<_>>(),
+            vec![Some(0), Some(1), Some(2)]
+        );
     }
 
     #[test]
@@ -240,9 +255,9 @@ mod tests {
         let failed_boundary = signature(1);
 
         let page = build_signature_page(vec![
-            signature_entry(newest, 30, false),
-            signature_entry(successful_oldest, 20, false),
-            signature_entry(failed_boundary, 10, true),
+            signature_entry(newest, 30, Some(2), false),
+            signature_entry(successful_oldest, 20, Some(1), false),
+            signature_entry(failed_boundary, 10, Some(0), true),
         ])
         .expect("valid signature page must normalize");
 
