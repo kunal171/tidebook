@@ -54,7 +54,7 @@ pub struct TransactionRecord {
     /// Complete runtime log sequence retained for audit and future re-decoding.
     pub logs: Vec<String>,
 
-    ///
+    /// Execution position within the finalized slot, when supplied by RPC.
     pub transaction_index: Option<u32>,
 }
 

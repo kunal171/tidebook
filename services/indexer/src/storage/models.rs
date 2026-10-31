@@ -17,14 +17,14 @@ pub struct TransactionInsert {
     /// Checked signed representation required by PostgreSQL `BIGINT`.
     pub slot: i64,
 
+    /// Checked execution position used for deterministic same-slot ordering.
+    pub transaction_index: Option<i32>,
+
     /// Optional Unix timestamp; Solana RPC may legitimately omit it.
     pub block_time: Option<i64>,
 
     /// Ordered, lossless transaction logs stored as JSONB.
     pub raw_logs: Json<Vec<String>>,
-
-    ///
-    pub transaction_index: Option<i32>,
 }
 
 /// One decoded Tidebook event converted to PostgreSQL-compatible types.
@@ -47,15 +47,13 @@ pub struct EventInsert {
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum StorageModelError {
     #[error("Solana slot {slot} exceeds PostgreSQL BIGINT range")]
-    SlotOutOfRange { slot: u64 },
+    SlotExceedsBigInt { slot: u64 },
 
     #[error("event log index {log_index} exceeds PostgreSQL INTEGER range")]
-    LogIndexOutOfRange { log_index: usize },
+    LogIndexExceedsInteger { log_index: usize },
 
-    #[error(
-        "transaction index {transaction_index} exceeds PostgreSQL INTEGER range"
-    )]
-    TransactionIndexOutOfRange { transaction_index: u32 },
+    #[error("transaction index {transaction_index} exceeds PostgreSQL INTEGER range")]
+    TransactionIndexExceedsInteger { transaction_index: u32 },
 }
 
 impl TryFrom<&TransactionRecord> for TransactionInsert {
@@ -63,13 +61,13 @@ impl TryFrom<&TransactionRecord> for TransactionInsert {
 
     fn try_from(record: &TransactionRecord) -> Result<Self, Self::Error> {
         let slot = i64::try_from(record.slot)
-            .map_err(|_| StorageModelError::SlotOutOfRange { slot: record.slot })?;
+            .map_err(|_| StorageModelError::SlotExceedsBigInt { slot: record.slot })?;
 
         let transaction_index = record
             .transaction_index
             .map(|index| {
                 i32::try_from(index).map_err(|_| {
-                    StorageModelError::TransactionIndexOutOfRange {
+                    StorageModelError::TransactionIndexExceedsInteger {
                         transaction_index: index,
                     }
                 })
@@ -79,9 +77,9 @@ impl TryFrom<&TransactionRecord> for TransactionInsert {
         Ok(Self {
             signature: record.signature.clone(),
             slot,
+            transaction_index,
             block_time: record.block_time,
             raw_logs: Json(record.logs.clone()),
-            transaction_index
         })
     }
 }
@@ -90,10 +88,11 @@ impl TryFrom<&DecodedEventLog> for EventInsert {
     type Error = StorageModelError;
 
     fn try_from(event: &DecodedEventLog) -> Result<Self, Self::Error> {
-        let log_index =
-            i32::try_from(event.log_index).map_err(|_| StorageModelError::LogIndexOutOfRange {
+        let log_index = i32::try_from(event.log_index).map_err(|_| {
+            StorageModelError::LogIndexExceedsInteger {
                 log_index: event.log_index,
-            })?;
+            }
+        })?;
 
         Ok(Self {
             log_index,
@@ -116,6 +115,7 @@ mod tests {
             slot,
             block_time: Some(1_700_000_000),
             logs: vec!["Program data: payload".to_owned()],
+            transaction_index: Some(7),
         }
     }
 
@@ -144,6 +144,7 @@ mod tests {
         let insert = TransactionInsert::try_from(&record).expect("i64::MAX must fit BIGINT");
 
         assert_eq!(insert.slot, i64::MAX);
+        assert_eq!(insert.transaction_index, Some(7));
         assert_eq!(insert.signature, record.signature);
         assert_eq!(insert.raw_logs.0, record.logs);
     }
@@ -154,7 +155,21 @@ mod tests {
 
         assert_eq!(
             TransactionInsert::try_from(&record).expect_err("overflowing slot must fail"),
-            StorageModelError::SlotOutOfRange { slot: record.slot }
+            StorageModelError::SlotExceedsBigInt { slot: record.slot }
+        );
+    }
+
+    #[test]
+    fn rejects_transaction_index_above_postgres_integer_range() {
+        let mut record = transaction(42);
+        record.transaction_index = Some((i32::MAX as u32) + 1);
+
+        assert_eq!(
+            TransactionInsert::try_from(&record)
+                .expect_err("overflowing transaction index must fail"),
+            StorageModelError::TransactionIndexExceedsInteger {
+                transaction_index: (i32::MAX as u32) + 1,
+            }
         );
     }
 
@@ -176,7 +191,7 @@ mod tests {
 
         assert_eq!(
             EventInsert::try_from(&event).expect_err("overflowing log index must fail"),
-            StorageModelError::LogIndexOutOfRange {
+            StorageModelError::LogIndexExceedsInteger {
                 log_index: event.log_index,
             }
         );

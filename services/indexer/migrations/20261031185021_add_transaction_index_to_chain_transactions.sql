@@ -1,3 +1,5 @@
+-- Retains the transaction's execution position within its finalized slot so
+-- live checkpoint bootstrap can select and compare an unambiguous position.
 ALTER TABLE chain_transactions
 ADD COLUMN transaction_index INTEGER
 CHECK (

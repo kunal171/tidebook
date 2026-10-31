@@ -62,7 +62,7 @@ pub async fn persist_transaction(
             raw_logs,
             schema_version
         )
-        VALUES ($1, $2, $3, $4, $5. $6)
+        VALUES ($1, $2, $3, $4, $5, $6)
         ON CONFLICT (signature) DO UPDATE
         SET signature = EXCLUDED.signature
         WHERE chain_transactions.slot = EXCLUDED.slot
@@ -76,6 +76,7 @@ pub async fn persist_transaction(
     )
     .bind(&transaction_insert.signature)
     .bind(transaction_insert.slot)
+    .bind(transaction_insert.transaction_index)
     .bind(transaction_insert.block_time)
     .bind(&transaction_insert.raw_logs)
     .bind(SOURCE_SCHEMA_VERSION)
@@ -146,6 +147,7 @@ mod tests {
             slot,
             block_time: Some(1_700_000_000),
             logs: vec!["Program data: payload".to_owned()],
+            transaction_index: Some(0),
         }
     }
 
@@ -205,6 +207,20 @@ mod tests {
             persist_transaction(
                 &pool,
                 &conflicting_transaction,
+                std::slice::from_ref(&source_event),
+            )
+            .await,
+            Err(StorageError::TransactionConflict { .. })
+        ));
+
+        let conflicting_transaction_index = TransactionRecord {
+            transaction_index: Some(1),
+            ..source_transaction.clone()
+        };
+        assert!(matches!(
+            persist_transaction(
+                &pool,
+                &conflicting_transaction_index,
                 std::slice::from_ref(&source_event),
             )
             .await,
