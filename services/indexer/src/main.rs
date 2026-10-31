@@ -15,12 +15,12 @@ mod storage;
 
 use std::{error::Error, str::FromStr};
 
-use backfill::{run_backfill, BackfillConfig};
+use backfill::{run_backfill, BackfillConfig, BackfillOutcome};
 use config::Config;
 use solana_commitment_config::CommitmentConfig;
 use solana_pubkey::Pubkey;
 use solana_rpc_client::rpc_client::RpcClient;
-use storage::connect;
+use storage::{connect, load_live_checkpoint, LiveCheckpoint};
 
 // Conservative development defaults bound both RPC pressure per request and
 // total work per process invocation. Durable cursors make stopping at the cap
@@ -53,6 +53,25 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         },
     )
     .await?;
+
+    if backfill_outcome == BackfillOutcome::PageLimitReached {
+        println!("Historical backfill remains incomplete; live sync will not start.");
+        return Ok(());
+    }
+
+    let live_checkpoint: Option<LiveCheckpoint> = load_live_checkpoint(&pool, &program_id).await?;
+
+    match live_checkpoint {
+        Some(checkpoint) => {
+            println!(
+                "Live checkpoint: slot={} signature={} transaction_index={:?}",
+                checkpoint.slot, checkpoint.signature, checkpoint.transaction_index,
+            );
+        }
+        None => {
+            println!("Live checkpoint is not initialized; startup catch-up must establish it.");
+        }
+    }
 
     println!("Historical backfill status: {backfill_outcome:?}");
 
