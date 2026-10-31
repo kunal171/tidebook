@@ -288,6 +288,47 @@ pub fn decode_event(raw_event: &RawEventLog) -> Result<DecodedEventLog, EventDec
     })
 }
 
+impl TidebookEvent {
+    /// Stable on-chain event type stored beside the decoded JSON document.
+    ///
+    /// This explicit mapping avoids using Debug output or Serde's JSON shape as
+    /// a database identifier, either of which could change during refactoring.
+    pub fn event_type(&self) -> &'static str {
+        match self {
+            Self::Governance(event) => match event {
+                GovernanceEvent::ProtocolInitialized(_) => "ProtocolInitializedEvent",
+                GovernanceEvent::AdminAdded(_) => "AdminAddedEvent",
+                GovernanceEvent::AdminStatusChanged(_) => "AdminStatusChangedEvent",
+                GovernanceEvent::AdminRemoved(_) => "AdminRemovedEvent",
+                GovernanceEvent::TakerFeeUpdated(_) => "TakerFeeUpdatedEvent",
+            },
+            Self::Market(event) => match event {
+                MarketEvent::Initialized(_) => "MarketInitializedEvent",
+                MarketEvent::StatusChanged(_) => "MarketStatusChangedEvent",
+                MarketEvent::Closed(_) => "MarketClosedEvent",
+            },
+            Self::Order(event) => match event {
+                OrderEvent::Placed(_) => "OrderPlacedEvent",
+                OrderEvent::Canceled(_) => "OrderCanceledEvent",
+            },
+            Self::Fill(_) => "FillEvent",
+            Self::Balance(event) => match event {
+                BalanceEvent::Initialized(_) => "TraderBalanceInitializedEvent",
+                BalanceEvent::Deposited(_) => "DepositEvent",
+                BalanceEvent::Withdrawn(_) => "WithdrawalEvent",
+            },
+            Self::Fee(event) => match event {
+                FeeEvent::ProtocolFeesWithdrawn(_) => "ProtocolFeesWithdrawnEvent",
+            },
+            Self::Faucet(event) => match event {
+                FaucetEvent::Initialized(_) => "TestFaucetInitializedEvent",
+                FaucetEvent::Claimed(_) => "TestFaucetClaimedEvent",
+                FaucetEvent::Closed(_) => "TestFaucetClosedEvent",
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

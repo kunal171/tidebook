@@ -9,6 +9,7 @@ mod config;
 mod decoder;
 mod events;
 mod rpc;
+mod storage;
 
 use config::Config;
 use decoder::{
@@ -21,16 +22,19 @@ use solana_commitment_config::CommitmentConfig;
 use solana_pubkey::Pubkey;
 use solana_rpc_client::rpc_client::RpcClient;
 use std::{error::Error, str::FromStr};
+use storage::connect;
 
 const INITIAL_SIGNATURE_LIMIT: usize = 20;
 
 fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let config = Config::from_env();
+    let config = Config::from_env()?;
     let program_id = Pubkey::from_str(&config.program_id)?;
+    let pool = connect(&config.database_url).await?;
 
     println!("Tidebook indexer");
     println!("RPC endpoint: {}", config.rpc_url);
     println!("Program: {program_id}");
+    println!("PostgreSQL connected; pool size={}", pool.size());
 
     // Reuse one blocking client for the signature page and every transaction
     // fetch. Besides avoiding repeated client construction, this preserves the
