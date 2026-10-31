@@ -22,6 +22,9 @@ pub struct TransactionInsert {
 
     /// Ordered, lossless transaction logs stored as JSONB.
     pub raw_logs: Json<Vec<String>>,
+
+    ///
+    pub transaction_index: Option<i32>,
 }
 
 /// One decoded Tidebook event converted to PostgreSQL-compatible types.
@@ -48,6 +51,11 @@ pub enum StorageModelError {
 
     #[error("event log index {log_index} exceeds PostgreSQL INTEGER range")]
     LogIndexOutOfRange { log_index: usize },
+
+    #[error(
+        "transaction index {transaction_index} exceeds PostgreSQL INTEGER range"
+    )]
+    TransactionIndexOutOfRange { transaction_index: u32 },
 }
 
 impl TryFrom<&TransactionRecord> for TransactionInsert {
@@ -57,11 +65,23 @@ impl TryFrom<&TransactionRecord> for TransactionInsert {
         let slot = i64::try_from(record.slot)
             .map_err(|_| StorageModelError::SlotOutOfRange { slot: record.slot })?;
 
+        let transaction_index = record
+            .transaction_index
+            .map(|index| {
+                i32::try_from(index).map_err(|_| {
+                    StorageModelError::TransactionIndexOutOfRange {
+                        transaction_index: index,
+                    }
+                })
+            })
+            .transpose()?;
+
         Ok(Self {
             signature: record.signature.clone(),
             slot,
             block_time: record.block_time,
             raw_logs: Json(record.logs.clone()),
+            transaction_index
         })
     }
 }

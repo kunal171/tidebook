@@ -53,6 +53,9 @@ pub struct TransactionRecord {
 
     /// Complete runtime log sequence retained for audit and future re-decoding.
     pub logs: Vec<String>,
+
+    ///
+    pub transaction_index: Option<u32>,
 }
 
 /// One deterministic page of finalized transaction signatures.
@@ -199,6 +202,7 @@ pub fn fetch_transaction(
         slot: transaction.slot,
         block_time: transaction.block_time,
         logs,
+        transaction_index: signature_record.transaction_index,
     }))
 }
 

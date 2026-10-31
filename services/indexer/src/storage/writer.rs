@@ -57,11 +57,12 @@ pub async fn persist_transaction(
         INSERT INTO chain_transactions (
             signature,
             slot,
+            transaction_index,
             block_time,
             raw_logs,
             schema_version
         )
-        VALUES ($1, $2, $3, $4, $5)
+        VALUES ($1, $2, $3, $4, $5. $6)
         ON CONFLICT (signature) DO UPDATE
         SET signature = EXCLUDED.signature
         WHERE chain_transactions.slot = EXCLUDED.slot
@@ -69,6 +70,8 @@ pub async fn persist_transaction(
               IS NOT DISTINCT FROM EXCLUDED.block_time
           AND chain_transactions.raw_logs = EXCLUDED.raw_logs
           AND chain_transactions.schema_version = EXCLUDED.schema_version
+          AND chain_transactions.transaction_index
+            IS NOT DISTINCT FROM EXCLUDED.transaction_index
         "#,
     )
     .bind(&transaction_insert.signature)
