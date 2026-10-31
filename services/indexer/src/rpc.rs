@@ -35,40 +35,61 @@ pub struct TransactionRecord {
     pub logs: Vec<String>,
 }
 
-/// Returns the newest successful finalized signatures involving `program_id`.
+/// One deterministic page of finalized transaction signatures.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignaturePage {
+    /// Successful transactions ordered from oldest to newest.
+    pub records: Vec<SignatureRecord>,
+
+    /// Cursor used to request the next, older page.
+    pub next_before: Option<Signature>,
+}
+
+/// Fetches one page of finalized signatures involving `program_id`.
 ///
-/// Failed transactions are discarded because their logs describe execution
-/// attempts whose account mutations were rolled back by the runtime.
-pub fn fetch_recent_successful_signatures(
+/// Solana returns signatures newest-first. The indexer reverses successful
+/// records so state is replayed chronologically.
+pub fn fetch_signature_page(
     client: &RpcClient,
     program_id: &Pubkey,
+    before: Option<&Signature>,
     limit: usize,
-) -> Result<Vec<SignatureRecord>, Box<dyn Error + Send + Sync>> {
-    let commitment = CommitmentConfig::finalized();
-
+) -> Result<SignaturePage, Box<dyn Error + Send + Sync>> {
     let entries = client.get_signatures_for_address_with_config(
         program_id,
         GetConfirmedSignaturesForAddress2Config {
-            before: None,
+            before: before.cloned(),
             until: None,
             limit: Some(limit),
-            commitment: Some(commitment),
+            commitment: Some(CommitmentConfig::finalized()),
         },
     )?;
 
-    let successful = entries
+    // Derive this before filtering failed transactions. The cursor describes
+    // the RPC page boundary, not merely the successful subset.
+    let next_before = entries
+        .last()
+        .map(|entry| entry.signature.parse::<Signature>())
+        .transpose()?;
+
+    let mut records = entries
         .into_iter()
-        // Failed transactions can contain logs even though all state changes
-        // were rolled back, so they cannot enter our projection pipeline.
         .filter(|entry| entry.err.is_none())
         .map(|entry| SignatureRecord {
             signature: entry.signature,
             slot: entry.slot,
             block_time: entry.block_time,
         })
-        .collect();
+        .collect::<Vec<_>>();
 
-    Ok(successful)
+    // RPC returns newest-to-oldest. Indexing oldest-to-newest gives
+    // deterministic event and projection ordering.
+    records.reverse();
+
+    Ok(SignaturePage {
+        records,
+        next_before,
+    })
 }
 
 /// Fetches a successful finalized transaction and preserves its raw logs.

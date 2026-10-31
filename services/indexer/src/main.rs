@@ -17,7 +17,7 @@ use decoder::{
     TidebookEvent,
 };
 use events::extract_program_data;
-use rpc::{fetch_recent_successful_signatures, fetch_transaction};
+use rpc::{fetch_signature_page, fetch_transaction};
 use solana_commitment_config::CommitmentConfig;
 use solana_pubkey::Pubkey;
 use solana_rpc_client::rpc_client::RpcClient;
@@ -43,15 +43,14 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let client =
         RpcClient::new_with_commitment(config.rpc_url.clone(), CommitmentConfig::finalized());
 
-    let signatures =
-        fetch_recent_successful_signatures(&client, &program_id, INITIAL_SIGNATURE_LIMIT)?;
+    let page = fetch_signature_page(&client, &program_id, None, INITIAL_SIGNATURE_LIMIT)?;
 
     println!(
         "Found {} successful finalized transactions:",
-        signatures.len()
+        page.records.len()
     );
 
-    for signature in signatures {
+    for signature in page.records {
         let Some(transaction) = fetch_transaction(&client, &signature)? else {
             println!(
                 "Skipped transaction without successful metadata: {}",
