@@ -15,6 +15,7 @@ pub struct BackfillCheckpoint {
     pub completed: bool,
 }
 
+/// Historical-checkpoint decoding and database failures.
 #[derive(Debug, Error)]
 pub enum CheckpointError {
     #[error(transparent)]
@@ -31,6 +32,9 @@ struct CheckpointRow {
 }
 
 /// Loads existing progress or returns the initial, not-started state.
+///
+/// A missing row is not an error: it means the first request must begin at the
+/// newest finalized signature with no `before` cursor.
 pub async fn load_backfill_checkpoint(
     pool: &PgPool,
     program_id: &Pubkey,
@@ -68,7 +72,8 @@ pub async fn load_backfill_checkpoint(
 ///
 /// Calling this before page processing finishes would risk permanently
 /// skipping source history. The caller therefore invokes it only after the
-/// complete page succeeds.
+/// complete page succeeds. Exact page replay overwrites the same cursor and is
+/// intentionally harmless.
 pub async fn save_backfill_checkpoint(
     pool: &PgPool,
     program_id: &Pubkey,

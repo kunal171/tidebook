@@ -1,4 +1,4 @@
-//! Extraction and decoding of Tidebook events from Solana execution logs.
+//! Ownership-aware extraction of Tidebook event payloads from execution logs.
 
 use solana_pubkey::Pubkey;
 
@@ -8,6 +8,7 @@ const SUCCESS_SUFFIX: &str = " success";
 const FAILED_MARKER: &str = " failed: ";
 const PROGRAM_DATA_PREFIX: &str = "Program data: ";
 
+/// Raw program-data payload proven to have been emitted by Tidebook itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawEventLog {
     /// Original position in the transaction's complete log list.
@@ -21,7 +22,9 @@ pub struct RawEventLog {
 ///
 /// Solana transactions can invoke multiple nested programs. We therefore track
 /// the active invocation stack and accept `Program data:` only when Tidebook is
-/// at the top of that stack.
+/// at the top of that stack. This prevents a nested CPI program from emitting
+/// bytes that the Tidebook decoder would otherwise misclassify as protocol
+/// state. The function preserves original log indexes for stable event keys.
 pub fn extract_program_data(logs: &[String], program_id: &Pubkey) -> Vec<RawEventLog> {
     let target_program = program_id.to_string();
     let mut invocation_stack: Vec<&str> = Vec::new();

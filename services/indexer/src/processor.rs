@@ -18,6 +18,8 @@ use crate::{
 ///
 /// Failures propagate to the page controller so it cannot advance beyond an
 /// unavailable transaction, malformed event, or rejected database write.
+/// Persistence precedes reporting: console output is observational, whereas
+/// PostgreSQL is the durable source used for replay and later projections.
 pub async fn process_signature(
     client: &RpcClient,
     pool: &PgPool,

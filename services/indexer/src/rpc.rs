@@ -19,8 +19,13 @@ use solana_transaction_status_client_types::{
 /// execution data must still be loaded through `getTransaction`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignatureRecord {
+    /// Base58 transaction signature used to fetch complete execution metadata.
     pub signature: String,
+
+    /// Finalized slot reported by the signature-list RPC response.
     pub slot: u64,
+
+    /// Validator-estimated Unix timestamp, when the RPC node supplies one.
     pub block_time: Option<i64>,
 }
 
@@ -28,12 +33,19 @@ pub struct SignatureRecord {
 ///
 /// Keeping logs in their original order is essential: multiple Anchor events
 /// may be emitted by one transaction and their position becomes the stable
-/// `event_index` used for idempotent database writes.
+/// `log_index` used for idempotent database writes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransactionRecord {
+    /// Stable transaction identity and parent key for decoded events.
     pub signature: String,
+
+    /// Authoritative slot returned with the complete transaction response.
     pub slot: u64,
+
+    /// Optional finalized block timestamp supplied by RPC.
     pub block_time: Option<i64>,
+
+    /// Complete runtime log sequence retained for audit and future re-decoding.
     pub logs: Vec<String>,
 }
 
@@ -50,7 +62,9 @@ pub struct SignaturePage {
 /// Fetches one page of finalized signatures involving `program_id`.
 ///
 /// Solana returns signatures newest-first. The indexer reverses successful
-/// records so state is replayed chronologically.
+/// records only within this page. Successive `before` pages still move toward
+/// older history, so global chronological projection replay is a later,
+/// explicit source-storage operation.
 pub fn fetch_signature_page(
     client: &RpcClient,
     program_id: &Pubkey,

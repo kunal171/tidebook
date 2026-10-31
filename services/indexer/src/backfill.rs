@@ -15,8 +15,24 @@ use crate::{
 /// Operational bounds for one historical ingestion run.
 #[derive(Debug, Clone, Copy)]
 pub struct BackfillConfig {
+    /// Maximum signatures requested from one RPC page.
     pub signature_page_limit: usize,
+
+    /// Maximum pages committed before yielding to the next process run.
     pub max_pages_per_run: usize,
+}
+
+/// Reason the bounded historical run returned successfully.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackfillOutcome {
+    /// The durable checkpoint was already marked complete.
+    AlreadyComplete,
+
+    /// This run reached the terminal empty RPC page.
+    Completed,
+
+    /// More historical pages remain after reaching the configured cap.
+    PageLimitReached,
 }
 
 type BoxError = Box<dyn Error + Send + Sync>;
@@ -26,17 +42,22 @@ type BoxError = Box<dyn Error + Send + Sync>;
 /// A transaction, decoding, or storage failure returns before the checkpoint
 /// update. The next run therefore retries the incomplete page, relying on the
 /// source tables' idempotent writes for already committed transactions.
+///
+/// Pages are discovered from newest to oldest because Solana's `before` cursor
+/// walks backward. Records are oldest-first only inside each page; append-only
+/// source storage does not depend on global processing order. Future derived
+/// projections must explicitly replay source rows in their required order.
 pub async fn run_backfill(
     client: &RpcClient,
     pool: &PgPool,
     program_id: &Pubkey,
     config: BackfillConfig,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+) -> Result<BackfillOutcome, Box<dyn Error + Send + Sync>> {
     let checkpoint = load_backfill_checkpoint(pool, program_id).await?;
 
     if checkpoint.completed {
         println!("Historical backfill is already complete.");
-        return Ok(());
+        return Ok(BackfillOutcome::AlreadyComplete);
     }
 
     run_pages(
@@ -64,7 +85,7 @@ async fn run_pages<Fetch, Process, ProcessFuture, Save, SaveFuture>(
     mut fetch_page: Fetch,
     mut process_signature: Process,
     mut save_checkpoint: Save,
-) -> Result<(), BoxError>
+) -> Result<BackfillOutcome, BoxError>
 where
     Fetch: FnMut(Option<solana_signature::Signature>, usize) -> Result<SignaturePage, BoxError>,
     Process: FnMut(SignatureRecord) -> ProcessFuture,
@@ -87,8 +108,8 @@ where
 
         let completed = next_before.is_none();
 
-        // A terminal empty page has no new cursor. Preserve the previous page's
-        // boundary so the completed checkpoint remains auditable.
+        // A terminal empty page has no new cursor. Preserve the previous raw
+        // RPC page boundary so a completed checkpoint remains auditable.
         let checkpoint_before = next_before.or(before_signature);
 
         // This is deliberately the final mutation for a page. If any record
@@ -97,7 +118,7 @@ where
 
         if completed {
             println!("Historical backfill reached the end of available history.");
-            return Ok(());
+            return Ok(BackfillOutcome::Completed);
         }
 
         println!("Backfill page {page_number} committed; checkpoint advanced.");
@@ -109,7 +130,7 @@ where
         config.max_pages_per_run
     );
 
-    Ok(())
+    Ok(BackfillOutcome::PageLimitReached)
 }
 
 #[cfg(test)]

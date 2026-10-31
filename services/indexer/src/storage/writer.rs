@@ -7,8 +7,12 @@ use crate::{decoder::DecodedEventLog, rpc::TransactionRecord};
 
 use super::models::{EventInsert, StorageModelError, TransactionInsert};
 
+// Version the stored interpretation independently from SQL migrations. A
+// future decoder can write a new version while retaining original logs and
+// Base64 payloads for controlled replay.
 const SOURCE_SCHEMA_VERSION: i32 = 1;
 
+/// Source conversion, database, and replay-consistency failures.
 #[derive(Debug, Error)]
 pub enum StorageError {
     #[error(transparent)]
@@ -44,6 +48,10 @@ pub async fn persist_transaction(
 
     let mut database_transaction = pool.begin().await?;
 
+    // The no-op UPDATE is deliberate. PostgreSQL reports one affected row for
+    // both a new insert and an exact replay, while the WHERE clause reports
+    // zero for the same signature carrying different immutable source data.
+    // That turns a uniqueness conflict into an explicit consistency check.
     let transaction_result = sqlx::query(
         r#"
         INSERT INTO chain_transactions (
@@ -78,6 +86,10 @@ pub async fn persist_transaction(
     }
 
     for event in event_inserts {
+        // Event replay follows the same pattern using (signature, log_index)
+        // as identity. Any payload, type, schema, or decoded-JSON difference
+        // aborts the surrounding database transaction, including its parent
+        // transaction insert and all preceding event rows.
         let event_result = sqlx::query(
             r#"
             INSERT INTO chain_events (

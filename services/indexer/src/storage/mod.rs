@@ -1,4 +1,4 @@
-//! Durable PostgreSQL storage for finalized Tidebook source records.
+//! Durable PostgreSQL storage for finalized source records and sync progress.
 
 mod checkpoint;
 mod connection;

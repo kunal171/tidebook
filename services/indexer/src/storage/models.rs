@@ -11,18 +11,32 @@ use crate::{
 /// A finalized Solana transaction converted to PostgreSQL-compatible types.
 #[derive(Debug, Clone)]
 pub struct TransactionInsert {
+    /// Base58 identity used as the source table primary key.
     pub signature: String,
+
+    /// Checked signed representation required by PostgreSQL `BIGINT`.
     pub slot: i64,
+
+    /// Optional Unix timestamp; Solana RPC may legitimately omit it.
     pub block_time: Option<i64>,
+
+    /// Ordered, lossless transaction logs stored as JSONB.
     pub raw_logs: Json<Vec<String>>,
 }
 
 /// One decoded Tidebook event converted to PostgreSQL-compatible types.
 #[derive(Debug, Clone)]
 pub struct EventInsert {
+    /// Checked source-log position and per-transaction event identity.
     pub log_index: i32,
+
+    /// Stable Anchor event name, independent of Rust debug formatting.
     pub event_type: &'static str,
+
+    /// Original Base64 emitted by the program for future re-decoding.
     pub payload_base64: String,
+
+    /// Current typed schema serialized as queryable JSONB.
     pub decoded_event: Json<TidebookEvent>,
 }
 

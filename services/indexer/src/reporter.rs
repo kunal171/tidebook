@@ -1,4 +1,4 @@
-//! Human-readable diagnostics for decoded Tidebook events.
+//! Human-readable, non-authoritative diagnostics for decoded Tidebook events.
 
 use crate::decoder::{
     BalanceEvent, DecodedEventLog, FaucetEvent, FeeEvent, GovernanceEvent, MarketEvent, OrderEvent,
@@ -6,6 +6,10 @@ use crate::decoder::{
 };
 
 /// Prints one decoded event without coupling display policy to ingestion.
+///
+/// These lines are intended for development and operations only. Durable event
+/// identity and payloads live in PostgreSQL, so changing formatting must never
+/// affect checkpoint progression or indexed state.
 pub fn report_event(decoded: &DecodedEventLog) {
     println!(
         "  event_log_index={} event_type={} payload={}",

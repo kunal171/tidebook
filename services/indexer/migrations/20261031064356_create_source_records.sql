@@ -1,3 +1,6 @@
+-- Append-only finalized source data. These tables retain enough raw material
+-- to re-decode events after schema changes; derived projections must be built
+-- separately and remain disposable.
 CREATE TABLE chain_transactions (
     signature TEXT PRIMARY KEY,
     slot BIGINT NOT NULL CHECK (slot >= 0),
@@ -18,6 +21,8 @@ CREATE TABLE chain_events (
     schema_version INTEGER NOT NULL DEFAULT 1,
     indexed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
+    -- Runtime log position is stable inside one immutable transaction and
+    -- avoids inventing an indexer-local sequence for event identity.
     PRIMARY KEY (signature, log_index)
 );
 

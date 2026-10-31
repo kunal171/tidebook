@@ -22,6 +22,9 @@ use solana_pubkey::Pubkey;
 use solana_rpc_client::rpc_client::RpcClient;
 use storage::connect;
 
+// Conservative development defaults bound both RPC pressure per request and
+// total work per process invocation. Durable cursors make stopping at the cap
+// safe; production configuration can replace these constants later.
 const SIGNATURE_PAGE_LIMIT: usize = 20;
 const MAX_PAGES_PER_RUN: usize = 10;
 
@@ -40,7 +43,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // connection pool survives for the complete bounded backfill run.
     let client = RpcClient::new_with_commitment(config.rpc_url, CommitmentConfig::finalized());
 
-    run_backfill(
+    let backfill_outcome = run_backfill(
         &client,
         &pool,
         &program_id,
@@ -49,5 +52,9 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             max_pages_per_run: MAX_PAGES_PER_RUN,
         },
     )
-    .await
+    .await?;
+
+    println!("Historical backfill status: {backfill_outcome:?}");
+
+    Ok(())
 }

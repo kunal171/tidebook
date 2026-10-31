@@ -47,17 +47,29 @@ const TEST_FAUCET_CLOSED_DISCRIMINATOR: [u8; 8] = [169, 116, 71, 236, 191, 44, 2
 /// can retain auditable source data alongside the typed projection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DecodedEventEnvelope {
+    /// Position in the transaction's complete runtime log sequence.
     pub log_index: usize,
+
+    /// Original transport representation retained for audit and replay.
     pub payload_base64: String,
+
+    /// Anchor event discriminator used for exact type routing.
     pub discriminator: [u8; EVENT_DISCRIMINATOR_BYTES],
+
+    /// Still-untyped Borsh bytes following the discriminator.
     pub body: Vec<u8>,
 }
 
 /// A successfully identified and Borsh-decoded Tidebook event.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DecodedEventLog {
+    /// Position in the original transaction logs and stable event identity.
     pub log_index: usize,
+
+    /// Original payload stored beside the typed representation.
     pub payload_base64: String,
+
+    /// Strictly decoded event from the current supported schema catalog.
     pub event: TidebookEvent,
 }
 
