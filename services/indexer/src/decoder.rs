@@ -5,6 +5,7 @@ mod types;
 use crate::events::RawEventLog;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use borsh::BorshDeserialize;
+use serde::Serialize;
 use thiserror::Error;
 pub use types::{
     AdminAddedEvent, AdminRemovedEvent, AdminStatusChangedEvent, DepositEvent, FillEvent,
@@ -44,7 +45,7 @@ const TEST_FAUCET_CLOSED_DISCRIMINATOR: [u8; 8] = [169, 116, 71, 236, 191, 44, 2
 ///
 /// The raw Base64 and original log position remain attached so later storage
 /// can retain auditable source data alongside the typed projection.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DecodedEventEnvelope {
     pub log_index: usize,
     pub payload_base64: String,
@@ -53,7 +54,7 @@ pub struct DecodedEventEnvelope {
 }
 
 /// A successfully identified and Borsh-decoded Tidebook event.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DecodedEventLog {
     pub log_index: usize,
     pub payload_base64: String,
@@ -62,7 +63,7 @@ pub struct DecodedEventLog {
 
 /// Top-level event families mirror protocol domains rather than flattening all
 /// event names into one growing enum.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum TidebookEvent {
     Governance(GovernanceEvent),
     Market(MarketEvent),
@@ -74,7 +75,7 @@ pub enum TidebookEvent {
 }
 
 /// Observable protocol and administrator governance transitions.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum GovernanceEvent {
     ProtocolInitialized(ProtocolInitializedEvent),
     AdminAdded(AdminAddedEvent),
@@ -84,7 +85,7 @@ pub enum GovernanceEvent {
 }
 
 /// Observable market lifecycle transitions.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum MarketEvent {
     Initialized(MarketInitializedEvent),
     StatusChanged(MarketStatusChangedEvent),
@@ -92,14 +93,14 @@ pub enum MarketEvent {
 }
 
 /// Observable order lifecycle transitions outside trade execution.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum OrderEvent {
     Placed(OrderPlacedEvent),
     Canceled(OrderCanceledEvent),
 }
 
 /// Observable changes to a trader's internal market ledger and token custody.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum BalanceEvent {
     Initialized(TraderBalanceInitializedEvent),
     Deposited(DepositEvent),
@@ -107,13 +108,13 @@ pub enum BalanceEvent {
 }
 
 /// Observable protocol-treasury transitions.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum FeeEvent {
     ProtocolFeesWithdrawn(ProtocolFeesWithdrawnEvent),
 }
 
 /// Observable lifecycle and claim operations for devnet test faucets.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum FaucetEvent {
     Initialized(TestFaucetInitializedEvent),
     Claimed(TestFaucetClaimedEvent),
