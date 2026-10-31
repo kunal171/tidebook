@@ -99,3 +99,49 @@ pub async fn save_backfill_checkpoint(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[sqlx::test(migrations = "./migrations")]
+    #[ignore = "requires a PostgreSQL server supplied through DATABASE_URL"]
+    async fn checkpoint_round_trip_preserves_completed_cursor(pool: PgPool) {
+        let program_id = Pubkey::new_from_array([9; 32]);
+        let cursor = Signature::from([7; 64]);
+
+        let initial = load_backfill_checkpoint(&pool, &program_id)
+            .await
+            .expect("initial checkpoint load must succeed");
+
+        assert_eq!(
+            initial,
+            BackfillCheckpoint {
+                before_signature: None,
+                completed: false,
+            }
+        );
+
+        save_backfill_checkpoint(&pool, &program_id, Some(&cursor), false)
+            .await
+            .expect("active checkpoint save must succeed");
+
+        let active = load_backfill_checkpoint(&pool, &program_id)
+            .await
+            .expect("active checkpoint load must succeed");
+
+        assert_eq!(active.before_signature, Some(cursor));
+        assert!(!active.completed);
+
+        save_backfill_checkpoint(&pool, &program_id, Some(&cursor), true)
+            .await
+            .expect("completed checkpoint save must succeed");
+
+        let completed = load_backfill_checkpoint(&pool, &program_id)
+            .await
+            .expect("completed checkpoint load must succeed");
+
+        assert_eq!(completed.before_signature, Some(cursor));
+        assert!(completed.completed);
+    }
+}

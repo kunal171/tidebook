@@ -7,15 +7,33 @@ independently from the on-chain program.
 
 ## Current scope
 
-- Fetches the latest 20 successful finalized transactions from Solana RPC.
+- Paginates finalized program history in bounded batches and resumes from a
+  durable PostgreSQL cursor.
+- Processes successful records oldest-first within each RPC page while using
+  the raw page boundary, including failed entries, as the next cursor.
 - Accepts `Program data:` only while Tidebook is the active invocation.
 - Preserves raw logs, Base64 payloads, log indexes, decoded JSON, and schema
   versions.
 - Writes each transaction and its events atomically.
 - Treats exact replay as success and rejects conflicting source data.
+- Advances the checkpoint only after every successful record in a page commits.
 
-This is a diagnostic ingestion batch. Pagination, durable checkpoints, live
-subscriptions, projections, and APIs are not implemented yet.
+The service currently performs historical backfill. Live subscriptions,
+read-optimized projections, reconciliation, and APIs remain separate phases.
+
+## Runtime structure
+
+```text
+main -> backfill -> processor -> reporter
+          |            |
+          |            `-> strict event decoder -> source storage
+          `-> Solana RPC pages -> durable checkpoint
+```
+
+`main` only constructs configuration, RPC, and database dependencies.
+`backfill` owns bounded pagination and checkpoint order. `processor` fetches,
+decodes, and persists one transaction. `reporter` keeps human-readable event
+output outside ingestion control flow.
 
 ## Run locally
 
@@ -54,13 +72,11 @@ cargo test --manifest-path services/indexer/Cargo.toml
 cargo clippy --manifest-path services/indexer/Cargo.toml --all-targets -- -D warnings
 ```
 
-Run the isolated PostgreSQL integration test with:
+Run the isolated PostgreSQL integration tests with:
 
 ```bash
 DATABASE_URL=postgres://tidebook:tidebook_dev@127.0.0.1:5433/postgres \
-  cargo test --manifest-path services/indexer/Cargo.toml \
-  storage::writer::tests::exact_replay_is_idempotent_and_conflicts_roll_back \
-  -- --ignored --exact
+  cargo test --manifest-path services/indexer/Cargo.toml -- --ignored
 ```
 
 ## Safety guarantees
@@ -70,9 +86,13 @@ DATABASE_URL=postgres://tidebook:tidebook_dev@127.0.0.1:5433/postgres \
 - Nested CPI data cannot be misclassified as a Tidebook event.
 - Integer conversions are checked before opening a database transaction.
 - Conflicts roll back the complete transaction and event batch.
+- A transaction, decoder, or storage error leaves the page checkpoint unchanged.
+- A terminal empty page retains the last historical cursor for auditing.
+- Each run stops after a configured page cap and can resume safely.
 
 ## Next
 
-1. Paginated finalized backfill with durable checkpoints.
-2. WebSocket live sync with checkpoint-based gap recovery.
-3. Read-optimized projections and an API.
+1. WebSocket live sync with a separate newest-signature high-water mark and
+   checkpoint-based gap recovery.
+2. Read-optimized projections and an API.
+3. Account reconciliation and operational monitoring.
