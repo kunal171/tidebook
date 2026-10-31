@@ -18,3 +18,4 @@ COMMENT ON COLUMN backfill_checkpoints.before_signature IS
 
 COMMENT ON COLUMN backfill_checkpoints.completed IS
     'True after RPC returns no more historical signatures';
+    

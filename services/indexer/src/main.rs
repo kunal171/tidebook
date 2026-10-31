@@ -21,8 +21,8 @@ use rpc::{fetch_signature_page, fetch_transaction};
 use solana_commitment_config::CommitmentConfig;
 use solana_pubkey::Pubkey;
 use solana_rpc_client::rpc_client::RpcClient;
-use std::{error::Error, str::FromStr};
-use storage::{connect, persist_transaction};
+use std::{error::Error, io, str::FromStr};
+use storage::{connect, load_backfill_checkpoint, persist_transaction, save_backfill_checkpoint};
 
 const INITIAL_SIGNATURE_LIMIT: usize = 20;
 
@@ -43,21 +43,35 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let client =
         RpcClient::new_with_commitment(config.rpc_url.clone(), CommitmentConfig::finalized());
 
-    let page = fetch_signature_page(&client, &program_id, None, INITIAL_SIGNATURE_LIMIT)?;
+    let checkpoint = load_backfill_checkpoint(&pool, &program_id).await?;
+
+    if checkpoint.completed {
+        println!("Historical backfill is already complete.");
+        return Ok(());
+    }
+
+    let page = fetch_signature_page(
+        &client,
+        &program_id,
+        checkpoint.before_signature.as_ref(),
+        INITIAL_SIGNATURE_LIMIT,
+    )?;
 
     println!(
         "Found {} successful finalized transactions:",
         page.records.len()
     );
 
+    // Preserve the page boundary before consuming the records.
+    let next_before = page.next_before;
+
     for signature in page.records {
-        let Some(transaction) = fetch_transaction(&client, &signature)? else {
-            println!(
-                "Skipped transaction without successful metadata: {}",
+        let transaction = fetch_transaction(&client, &signature)?.ok_or_else(|| {
+            io::Error::other(format!(
+                "finalized transaction {} returned unusable metadata",
                 signature.signature
-            );
-            continue;
-        };
+            ))
+        })?;
         let raw_events = extract_program_data(&transaction.logs, &program_id);
 
         println!(
@@ -309,6 +323,16 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 },
             }
         }
+    }
+
+    let completed = next_before.is_none();
+
+    save_backfill_checkpoint(&pool, &program_id, next_before.as_ref(), completed).await?;
+
+    if completed {
+        println!("Historical backfill reached the end of available history.");
+    } else {
+        println!("Backfill page committed; checkpoint advanced.");
     }
 
     Ok(())
