@@ -77,11 +77,45 @@ pub fn fetch_signature_page(
     before: Option<&Signature>,
     limit: usize,
 ) -> Result<SignaturePage, Box<dyn Error + Send + Sync>> {
+    fetch_signature_page_with_bounds(client, program_id, before, None, limit)
+}
+
+/// Fetches one live-recovery page newer than `until`.
+///
+/// `before` continues a gap that spans multiple RPC pages. Callers must gather
+/// every page before processing them in reverse page order because pagination
+/// discovers the newest chunk first.
+#[expect(
+    dead_code,
+    reason = "the next live-sync milestone consumes this RPC boundary"
+)]
+pub fn fetch_live_signature_page(
+    client: &RpcClient,
+    program_id: &Pubkey,
+    before: Option<&Signature>,
+    until: &Signature,
+    limit: usize,
+) -> Result<SignaturePage, Box<dyn Error + Send + Sync>> {
+    fetch_signature_page_with_bounds(client, program_id, before, Some(until), limit)
+}
+
+/// Fetches one finalized signature page between optional pagination bounds.
+///
+/// Historical ingestion supplies only `before` and walks toward genesis. Live
+/// recovery additionally supplies `until`, preventing the RPC node from
+/// returning transactions already covered by the durable high-water mark.
+fn fetch_signature_page_with_bounds(
+    client: &RpcClient,
+    program_id: &Pubkey,
+    before: Option<&Signature>,
+    until: Option<&Signature>,
+    limit: usize,
+) -> Result<SignaturePage, Box<dyn Error + Send + Sync>> {
     let entries = client.get_signatures_for_address_with_config(
         program_id,
         GetConfirmedSignaturesForAddress2Config {
             before: before.cloned(),
-            until: None,
+            until: until.cloned(),
             limit: Some(limit),
             commitment: Some(CommitmentConfig::finalized()),
         },
