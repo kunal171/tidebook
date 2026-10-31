@@ -77,8 +77,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             let decoded = decode_event(&raw_event)?;
 
             println!(
-                "  event_log_index={} payload={}",
-                decoded.log_index, decoded.payload_base64,
+                "  event_log_index={} event_type={} payload={}",
+                decoded.log_index,
+                decoded.event.event_type(),
+                decoded.payload_base64,
             );
 
             match &decoded.event {
